@@ -1,0 +1,29 @@
+[package]
+name = "korero-native"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+cxx = { version = "1.0", optional = true }
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-manual-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+rustls-pemfile = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time", "io-util", "io-std", "signal"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+
+[features]
+default = []
+media = ["dep:cxx"]
+
+[build-dependencies]
+cxx-build = "1.0"
+
+[[bin]]
+name = "voice-probe"
+path = "src/bin/voice-probe.rs"
+required-features = ["media"]

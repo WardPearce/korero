@@ -1,0 +1,3 @@
+-keep class app.korero.audio.VoicePlugin { *; }
+-keep class org.webrtc.** { *; }
+-keep class org.jni_zero.** { *; }

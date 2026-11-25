@@ -21,4 +21,4 @@ const spec = {
       properties: { version: { const: 1 }, type: { type: "string", pattern: "^[a-z]+\\.[a-zA-Z]+$" }, payload: {} } },
     ...httpBodies },
 };
-await Bun.write(new URL("../docs/protocol-v1.schema.json", import.meta.url).pathname, JSON.stringify(spec, null, 2) + "\n");
+await Bun.write(new URL("../../docs/protocol-v1.schema.json", import.meta.url).pathname, JSON.stringify(spec, null, 2) + "\n");

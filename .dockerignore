@@ -5,3 +5,9 @@ data
 dist
 .env
 .env.*
+
+frontend
+backend/node_modules
+backend/data
+backend/dist
+backend/.env*

@@ -22,6 +22,9 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v6
         with:
@@ -34,9 +37,9 @@ jobs:
       - run: bun run check
       - run: bunx --bun playwright install --with-deps chromium
       - name: Build and run unit and integration tests on the native architecture
-        run: docker build --target checks .
+        run: docker build -f Dockerfile --target checks ..
       - name: Compile the native Docker image and standalone executable
-        run: docker build -t voice-server:ci .
+        run: docker build -f Dockerfile -t voice-server:ci ..
       - name: Run standalone without external network, credentials or installed language runtime
         run: bash scripts/docker-smoke.sh voice-server:ci
       - name: Authenticate and transfer Opus through the standalone and published ports
@@ -57,7 +60,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: voice-server-linux-${{ matrix.arch }}
-          path: artifacts/
+          path: backend/artifacts/
           if-no-files-found: error
 
   release:

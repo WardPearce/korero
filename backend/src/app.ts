@@ -131,3 +131,5 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
       close: (ws) => realtime.closed(ws.id),
     });
 }
+
+export type App = ReturnType<typeof createApp>;

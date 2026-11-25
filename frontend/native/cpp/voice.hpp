@@ -1,0 +1,31 @@
+#pragma once
+
+#include "rust/cxx.h"
+#include <cstddef>
+#include <memory>
+
+namespace korero {
+struct Rpc;
+
+class Voice {
+public:
+  struct Impl;
+
+  explicit Voice(std::unique_ptr<Impl> impl);
+  ~Voice();
+
+  rust::String capabilities() const;
+  void set_send(rust::Str transport);
+  void set_receive(rust::Str transport);
+  void consume(rust::Str parameters);
+  void close_consumer(rust::Str producer_id);
+  double peak() const;
+
+private:
+  std::unique_ptr<Impl> impl_;
+};
+
+std::unique_ptr<Voice> make_voice(rust::Box<Rpc> rpc, rust::Str capabilities,
+                                 rust::Str ice_servers, bool synthetic);
+bool initialize_android(size_t env, size_t context) noexcept;
+}  // namespace korero

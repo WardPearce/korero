@@ -47,7 +47,7 @@ an authenticated caller. The client implements ICE server use.
 
 ## Configuration and TLS
 
-Start with [server.example.toml](../server.example.toml). Precedence is the explicit
+Start with [server.example.toml](../backend/server.example.toml). Precedence is the explicit
 CLI path or data directory, then `VOICE_CONFIG` or `VOICE_DATA_DIR`, then
 `[storage].directory` if specified in the selected TOML, then `./data`.
 Otherwise the server reads `server.toml` from the selected data directory if it exists.
@@ -121,6 +121,7 @@ and ARM64. See [Compatibility](compatibility.md) for results and measured requir
 sudo apt-get install build-essential ca-certificates libssl-dev meson ninja-build pkg-config
 bun install --frozen-lockfile --ignore-scripts
 bun run build
+cd backend
 bun scripts/notices.ts
 ```
 

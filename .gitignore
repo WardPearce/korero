@@ -43,3 +43,16 @@ package-lock.json
 /data/
 /dist/
 /.env
+
+/backend/node_modules/
+/backend/data/
+/backend/dist/
+/backend/.env
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.env
+/frontend/src-tauri/target/
+/frontend/.native/
+
+/frontend/native/target/
+/frontend/src-tauri/gen/schemas/

@@ -1,9 +1,15 @@
-# Voice server
+# Kōrero
 
 A self-hosted, voice-first server with direct-IP HTTPS and WebSocket signalling, an Opus SFU,
 recovery-code accounts, persistent device sessions, hierarchical channels, moderation, and basic text.
-The [v1 protocol](docs/protocol.md) is open to independent clients. The repository includes a browser
-test harness for actual WebRTC audio. It provides no production client.
+The [v1 protocol](docs/protocol.md) is open to independent clients. The Bun/Elysia server lives in
+[`backend/`](backend/). The Svelte and Tauri desktop client lives in [`frontend/`](frontend/).
+
+## Develop the desktop client
+
+Prepare the native media SDK and launch Tauri on Linux x86_64. See the
+[client build guide](docs/frontend-architecture.md) for prerequisites, certificate setup,
+and the native audio test.
 
 ## Run a standalone build
 
@@ -44,6 +50,7 @@ Use Bun 1.4.5 and a Linux native build toolchain. On Debian 13 the worker build 
 `build-essential ca-certificates libssl-dev meson ninja-build pkg-config`.
 
 ```sh
+cd backend
 bun install --frozen-lockfile --ignore-scripts
 bun run prepare:worker
 bun run check
@@ -69,4 +76,5 @@ migrations from the project or from the compiled executable.
 - [Deployment and backups](docs/deployment.md)
 - [Security](docs/security.md)
 - [Compatibility and measurements](docs/compatibility.md)
-- [Third-party notices](THIRD_PARTY_NOTICES.md)
+- [Client architecture and build](docs/frontend-architecture.md)
+- [Server third-party notices](backend/THIRD_PARTY_NOTICES.md)

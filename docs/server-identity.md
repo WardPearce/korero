@@ -64,9 +64,11 @@ Pass the config into `reqwest` through its preconfigured rustls API and into
 `tokio-tungstenite` through its Rustls connector. Keep the dependency versions
 compatible across both transports. Store refresh credentials with the platform
 credential manager and send only the application state the webview needs.
-Bridge mediasoup-client's transport, produce and consume signalling calls through the
-native connection. The webview can use its normal WebRTC peer connections for audio;
-it needs no HTTP/WSS certificate bypass.
+The Tauri client uses the OS trust store by default. The connect dialog also accepts an
+operator-provided PEM certificate for that server. Both native HTTP and WSS verify the
+certificate chain and hostname. The current client keeps session credentials in Rust
+memory for the lifetime of the process. The webview never handles the access or refresh
+token. Native WebRTC and its signaling live outside the webview.
 
 - [rustls verifier contract](https://docs.rs/rustls/latest/rustls/client/danger/trait.ServerCertVerifier.html)
 - [reqwest ClientBuilder](https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html)

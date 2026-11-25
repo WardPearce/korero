@@ -1,7 +1,9 @@
 services:
   voice-server:
     image: voice-server:local
-    build: .
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     ports:
       - "8443:8443/tcp"

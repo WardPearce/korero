@@ -3,20 +3,20 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential ca-certificates libssl-dev meson ninja-build pkg-config \
     && rm -rf /var/lib/apt/lists/*
-COPY package.json bun.lock ./
+COPY backend/package.json backend/bun.lock ./
 RUN bun install --frozen-lockfile --production --ignore-scripts
-COPY src/security/files.ts ./src/security/files.ts
-COPY scripts/worker.ts ./scripts/worker.ts
+COPY backend/src/security/files.ts ./src/security/files.ts
+COPY backend/scripts/worker.ts ./scripts/worker.ts
 RUN bun run prepare:worker
-COPY src ./src
-COPY scripts ./scripts
-COPY licenses ./licenses
+COPY backend/src ./src
+COPY backend/scripts ./scripts
+COPY backend/licenses ./licenses
 RUN bun run build /out/voice-server \
     && bun scripts/notices.ts /out/licenses
 
 FROM build AS checks
-COPY tsconfig.json drizzle.config.ts ./
-COPY tests ./tests
+COPY backend/tsconfig.json backend/drizzle.config.ts ./
+COPY backend/tests ./tests
 RUN bun install --frozen-lockfile --ignore-scripts \
     && bun run check \
     && bun audit \
@@ -31,7 +31,7 @@ RUN apt-get update \
     && install -d -m 0700 -o voice-server -g voice-server /data
 COPY --from=build /out/voice-server /usr/local/bin/voice-server
 COPY --from=build /out/licenses /usr/share/doc/voice-server/licenses/
-COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/voice-server/
+COPY LICENSE backend/THIRD_PARTY_NOTICES.md /usr/share/doc/voice-server/
 ENV VOICE_DATA_DIR=/data
 WORKDIR /data
 VOLUME ["/data"]

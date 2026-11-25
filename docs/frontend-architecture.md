@@ -1,34 +1,100 @@
-# Frontend architecture
+# Kōrero client
 
-## Recommendation
+The client uses Svelte 5, Vite, Tailwind CSS, and Bits UI. Tauri 2 serves the
+same responsive UI on desktop and Android. Kōrero connects to a separately
+deployed Bun/Elysia and mediasoup server using the [v1 protocol](protocol.md).
 
-Build a Svelte and TypeScript SPA with Vite first. Run it in Chromium against the existing Bun/Elysia server, with Eden Treaty for HTTP, one WebSocket client for the application protocol, and `mediasoup-client` for voice. The same static build can run in a desktop shell. If a production desktop release needs bundled Chromium now, use Electron. If Tauri is the preferred shell, test Tauri 3 with CEF alongside browser development. [Vite Svelte template](https://vite.dev/guide/#scaffolding-your-first-vite-project) · [Electron security guidance](https://www.electronjs.org/docs/latest/tutorial/security) · [Tauri 3 migration guide](https://v3.tauri.app/start/migrate/from-tauri-2/)
+Eden Treaty type-checks discovery, registration, recovery, and account requests
+against the Elysia app. A scoped Tauri command sends those HTTP requests through
+native Rust. The Rust session coordinates refresh-token rotation, authenticated
+WebSocket requests, heartbeat, reconnect, and channel state. It sends client
+state and errors to Svelte over Tauri IPC.
 
-## Desktop runtime
+A dedicated worker calls the C++ bridge to libmediasoupclient and libwebrtc.
+Rust continues to handle signaling while C++ waits for transport negotiation.
+Each joined room can have a send and a receive transport. The client resumes
+server consumers after creating the corresponding native consumers. It closes
+native audio and server transports on leave. Mute and deafen close the affected
+directions and recreate resources when voice is enabled again.
 
-| Runtime | Fit for Kōrero |
-| --- | --- |
-| Tauri 3 with CEF | As of 25 November 2026, Tauri documents 3.0 as alpha and recommends 2.x for production Tauri apps. The `tauri-runtime-cef` option bundles Chromium Embedded Framework on Windows, macOS, and Linux. It lets you choose a consistent Chromium version across those platforms and adds substantial size to the bundle. Its permission hook handles microphone requests. [Tauri 3 migration guide](https://v3.tauri.app/start/migrate/from-tauri-2/) · [Tauri CEF runtime](https://v3.tauri.app/develop/cef/) |
-| Tauri 2 | Uses WebView2 on Windows, WKWebView on macOS, and WebKitGTK on Linux. A Windows installer can bundle a fixed version of Microsoft's WebView2 runtime. Choose 2.x if those platform webviews pass the voice tests and a shared Chromium version is optional. [Tauri webview versions](https://v2.tauri.app/reference/webview-versions/) · [Fixed WebView2 runtime](https://v2.tauri.app/distribute/windows-installer/#fixed-version) |
-| Electron | Ships Chromium and Node.js. Use a sandboxed Svelte renderer with context isolation and keep native features in the main process behind a narrow bridge. Configure microphone permission for the app's renderer and provide `NSMicrophoneUsageDescription` in the macOS bundle. [Electron process model](https://www.electronjs.org/docs/latest/tutorial/process-model) · [Electron security guidance](https://www.electronjs.org/docs/latest/tutorial/security) · [Electron media permissions](https://www.electronjs.org/docs/latest/api/system-preferences#systempreferencesaskformediaaccessmediatype-macos) |
+The native client uses the platform certificate store for HTTPS and WSS. For a
+self-signed server, export the public certificate with the server's
+`identity export` command and select it in the connect dialog. Obtain and
+verify the certificate through a trusted channel. Refresh credentials stay in
+native memory. Recover the account to sign in after the desktop process exits.
 
-Tauri can launch a Node.js executable as a sidecar via `bundle.externalBin`, with an executable for each target. The current server uses `bun:sqlite`, Bun TOML and password APIs, and Bun-specific server and build options. Elysia's Node adapter covers the HTTP runtime. A port would also have to replace those Bun dependencies and verify WebSocket behavior and the mediasoup worker on each target. The existing standalone build supports native Linux AMD64 and ARM64 and embeds a platform-specific worker. Start with a separately deployed voice server. If local hosting becomes a product feature, try the existing Bun executable as a sidecar on Linux, then validate build, startup, shutdown, and worker packaging on any further targets. [Tauri sidecars](https://v3.tauri.app/develop/sidecar/) · [Tauri Node.js sidecar guide](https://v2.tauri.app/learn/sidecar-nodejs/) · [Elysia 1.x Node adapter](https://elysiajs.com/integrations/node) · [mediasoup worker installation](https://mediasoup.org/documentation/v3/mediasoup/installation/) · [Kōrero build](../scripts/build.ts) · [Database](../src/database/index.ts) · [Server startup](../src/cli.ts)
+## Linux x86_64
 
-## Client boundaries
+Install Bun 1.4.5, Rust, Clang with its resource headers, CMake, Ninja, Git,
+curl, and the Tauri 2 Linux development dependencies. On Debian or Ubuntu the
+desktop dependencies include `libwebkit2gtk-4.1-dev`, `libx11-dev`,
+`libxdo-dev`, `libssl-dev`, `librsvg2-dev`, and
+`libayatana-appindicator3-dev`. See [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
-| Layer | Responsibility |
-| --- | --- |
-| HTTP | Export `type App = ReturnType<typeof createApp>` from `src/app.ts` and import it with `import type` in the frontend. Create `treaty<App>(serverOrigin)` using an Eden release compatible with Elysia 1.4. Use it for discovery, capabilities, registration, recovery, refresh, account/session management, and connection tickets. Send the current access token as a bearer header on protected requests. [Eden Treaty overview](https://elysiajs.com/eden/treaty/overview) · [Eden request headers](https://elysiajs.com/eden/treaty/config#headers) · [Kōrero routes](../src/app.ts) |
-| Realtime | Open `capabilities.websocketPath` using native `WebSocket`. Fetch a fresh ticket over HTTP, then send `connection.authenticate` with that ticket and supported versions as the first message. Reuse the existing `Request` types, share types for replies and events as they are added, and keep request IDs, timeouts, event dispatch, heartbeat, and reconnect in this client. Use the authentication reply's snapshot to rebuild state after reconnect. Eden supports `.subscribe()`, but this route declares neither message-body nor response schemas, and the application handles its own versioned envelopes and request/reply correlation. [Eden WebSocket](https://elysiajs.com/eden/treaty/websocket) · [Kōrero protocol](../src/protocol/index.ts) · [Kōrero realtime implementation](../src/modules/realtime.ts) |
-| Voice | Run `mediasoup-client` and `getUserMedia` in the renderer. Load the device from `media.capabilities` after joining a channel. Use one send transport and one shared receive transport for that channel. Drive their `connect` and `produce` callbacks over the signaling client. Create server consumers paused, attach and start their local audio, then send `media.consumer.resume`. Discover existing producers with `media.producers` and track subsequent producer events. Media flows over WebRTC to the SFU. [mediasoup signaling and transport guide](https://mediasoup.org/documentation/v3/communication-between-client-and-server/) · [Kōrero media handling](../src/modules/media.ts) · [Existing browser harness](../tests/e2e/browser.ts) |
-| Svelte UI | Keep selected server, session, connection state, channel state, and voice controls in client modules scoped to the current server. Let Svelte components subscribe and call commands. Close transports, tracks, timers, and the socket when leaving their owning session or channel. Use `presence.set` for persistent mute/deafen. It closes producers on mute and also closes consumers on deafen, so transient push-to-talk needs a separate control that keeps the producer available. [Kōrero mute/deafen](../src/modules/realtime.ts) · [Kōrero producer controls](../src/modules/media.ts) |
+From the repository root, install and start the server.
 
-A type-check against `@elysia/eden@1.4.10` and the installed Elysia 1.4.32 inferred the HTTP route paths and rejected an invalid registration body. The shared request and error hooks put `Response` and the error envelope into the inferred success data for discovery and registration. Narrow those results in the HTTP client or give the server's status-specific responses more precise types. With the current WebSocket route, both valid and invalid outgoing messages compiled through Eden. [Eden 1.4.10 release](https://github.com/elysiajs/eden/releases/tag/1.4.10) · [Kōrero routes](../src/app.ts)
+```sh
+cd backend
+bun install --frozen-lockfile --ignore-scripts
+bun run prepare:worker
+bun run start
+```
 
-## First working slice
+From the repository root in a second terminal, prepare and launch the desktop
+client.
 
-1. Start with one server. Serve the SPA and proxy `/api/v1` and its WebSocket upgrade on the same HTTPS origin. Allow the exact frontend origin in `server.origins` because the app checks any `Origin` header even on same-origin requests. Use trusted TLS for the first rollout because the server defaults to a self-signed certificate. For a desktop build connecting directly to a chosen server, each server must allow the renderer's origin. [Kōrero origin checks](../src/app.ts) · [Kōrero configuration](../src/config/index.ts)
-2. Implement registration or recovery, authenticated connection, channel list, join, and two-way audio. Start microphone capture and audio playback from the join or microphone-enable gesture. Extend the existing Chromium audio test to run against that frontend and check decoded audio in both directions. [Media Capture and Streams](https://w3c.github.io/mediacapture-main/#dom-mediadevices-getusermedia) · [Browser audio test](../tests/e2e/audio.ts) · [Existing compatibility result](compatibility.md)
-3. Load the same build in the candidate desktop shell and test microphone permission, decoded audio, device changes, and reconnect on each target OS. Inspect the packaged renderer's actual origin. The server currently accepts only configured HTTP(S) origins. Tauri 3 CEF documents `http://tauri.localhost` and an HTTPS option, while custom schemes need an explicit origin strategy. Include a connection from a different network to exercise ICE and the configured UDP/TCP media port in addition to HTTPS/WSS. [Tauri webview URLs](https://v3.tauri.app/develop/webview-runtime/#custom-scheme-url) · [Kōrero configuration](../src/config/index.ts) · [Compose ports](../compose.yaml)
+```sh
+cd frontend
+bun install --frozen-lockfile
+bun run tauri dev
+```
 
-With the pinned Bun 1.4.5 runtime, the current Chromium harness passed on UDP. Its forced-TCP run negotiated and decoded Opus, then failed the assertion that the old consumer's packet count stays stable after a channel leave. The desktop client and microphone capture still need direct testing because the harness sends a synthetic tone. [Browser audio test](../tests/e2e/audio.ts) · [Synthetic audio source](../tests/e2e/browser.ts)
+The first Tauri run prepares the media SDK in `frontend/.native/m140-linux-x86_64`.
+You can prepare it separately with `bun run prepare:media`. It verifies a pinned
+WebRTC M140 archive from Shiguredo, builds libmediasoupclient 3.5.0 and
+libsdptransform from pinned revisions, and uses Chromium's matching libc++
+configuration. Cargo finds the prepared SDK in that directory by default.
+Set `CXX` for a different Clang installation or `KORERO_MEDIA_SDK` to select a
+different SDK directory. Build the Linux binary with the frontend embedded
+using `bun run tauri build --no-bundle`.
+
+## Verify
+
+Use Chromium from Playwright to exercise the server. The native probe uses a
+synthetic input and measures decoded PCM on the Rust client and Chromium peer.
+
+```sh
+cd frontend
+bun run check
+bun run build
+bun run prepare:media
+cargo build --manifest-path native/Cargo.toml --features media --bin voice-probe
+cd ../backend
+bun run check
+bun run test
+bunx --bun playwright install chromium
+bun run test:e2e
+bun run test:e2e:native
+```
+
+The native test runs two rounds with distinct WebSocket connections. In each
+round both peers decode audio, then the native client leaves and its producer
+closes. This build passed the native probe, the existing Chromium UDP test,
+the server's 12 unit and integration tests, and
+`bun run tauri build --debug --no-bundle` without an SDK environment override.
+The desktop client uses the system audio device. The probe validates synthetic
+capture and decoded playout. Physical microphone behavior needs a manual check.
+
+## Android source
+
+The Kotlin Tauri plugin requests microphone permission and starts a microphone
+foreground service while the activity is visible. The service holds
+communication audio focus and the native session owns the socket outside the
+WebView. Leaving voice or disconnecting stops the service.
+
+The Android APK was outside the first build. To prepare an Android build, use the
+same pinned M140 WebRTC source on arm64-v8a, build libmediasoupclient for the NDK
+target, and supply the corresponding Java SDK classes with
+`KORERO_ANDROID_WEBRTC_CLASSES`. The Linux preparation script targets Linux only.
+The Android ABI, microphone, routing, and activity recreation still need device
+verification.
