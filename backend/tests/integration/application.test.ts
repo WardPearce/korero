@@ -7,7 +7,7 @@ test("channels, inheritance, password membership, moderation and text are permis
   try {
     const owner = await server.owner();
     const alice = await server.register("Alice");
-    const bob = await server.register("Bob");
+    const bob = await server.register("Bobby");
     const adminWs = await server.ws(owner);
     const aliceWs = await server.ws(alice);
     const bobWs = await server.ws(bob);
@@ -15,6 +15,17 @@ test("channels, inheritance, password membership, moderation and text are permis
     const parent = await create({ name: "Parent", position: 1 });
     const child = await create({ name: "Child", parentId: parent.channelId, password: "private phrase" });
     await expect(aliceWs.rpc("channel.create", { name: "Unauthorized" })).rejects.toThrow("FORBIDDEN");
+    const backgroundImageUrl = "https://images.example/room.jpg";
+    await expect(aliceWs.rpc("channel.edit", { channelId: parent.channelId, backgroundImageUrl })).rejects.toThrow("FORBIDDEN");
+    await expect(adminWs.rpc("channel.edit", { channelId: parent.channelId, backgroundImageUrl: "http://images.example/room.jpg" }))
+      .rejects.toThrow("INVALID_REQUEST");
+    await adminWs.rpc("channel.edit", { channelId: parent.channelId, backgroundImageUrl });
+    await adminWs.rpc("channel.edit", { channelId: parent.channelId, name: "Renamed parent" });
+    expect((await aliceWs.rpc<Snapshot>("state.get")).channels).toContainEqual(expect.objectContaining({ id: parent.channelId, backgroundImageUrl }));
+    await adminWs.rpc("channel.edit", { channelId: parent.channelId, backgroundImageUrl: null });
+    expect((await aliceWs.rpc<Snapshot>("state.get")).channels).toContainEqual(expect.objectContaining({
+      id: parent.channelId, backgroundImageUrl: null,
+    }));
     await expect(aliceWs.rpc("role.set", { accountId: alice.account.id, role: "Owner" })).rejects.toThrow("FORBIDDEN");
     await expect(adminWs.rpc("role.set", { accountId: owner.account.id, role: "Member" })).rejects.toThrow("FORBIDDEN");
     await adminWs.rpc("channel.override", { channelId: parent.channelId, role: "Member", permission: "join", allow: false });

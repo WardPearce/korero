@@ -1,19 +1,26 @@
-import { and, count, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, lte, ne, or, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, lte, or, type SQL } from "drizzle-orm";
 import { integer, sqliteTable } from "drizzle-orm/sqlite-core";
-import { randomUUID } from "node:crypto";
+import { createPublicKey, randomUUID, verify } from "node:crypto";
 import type { Config } from "../config";
 import { audit, type Queries, type Role, type Store } from "../database";
-import { accounts, accountRoles, bans, invitations, recoveryCredentials, refreshHistory, sessions, setup } from "../database/schema";
-import { Credentials, equalDigest, normalizeRecovery, randomToken, recoveryCode } from "../security/credentials";
+import { accountIdentities, accounts, accountRoles, bans, invitations, refreshHistory, sessions, settings, setup } from "../database/schema";
+import { Credentials, equalDigest, randomToken } from "../security/credentials";
 import { fail } from "../security/errors";
 
 export type Account = { id: string; displayName: string; role: Role; createdAt: number };
 const { accessDigest: _, ...sessionColumns } = getTableColumns(sessions);
 export type Session = Omit<typeof sessions.$inferSelect, "accessDigest">;
+type IdentityOperation = "login" | "register" | "bootstrap";
+type IdentityProof = { id: string; signature: string };
+type IdentityChallenge = {
+  publicKey: string; operation: IdentityOperation;
+  deviceName: string; serverId: string; origin: string; expiresAt: number;
+};
 type Ticket = { sessionId: string; expiresAt: number };
 type RevokedSession = { id: string };
 
 const invitationRow = sqliteTable("invitations", { rowId: integer("rowid") });
+const passwordKey = "serverPasswordHash";
 
 function getAccount(db: Queries, id: string): Account {
   const row = db.select({ id: accounts.id, displayName: accounts.displayName, createdAt: accounts.createdAt, role: accountRoles.role })
@@ -38,7 +45,9 @@ export function isBanned(db: Queries, accountId: string) {
 }
 
 export class Auth {
+  private readonly identityChallenges = new Map<string, IdentityChallenge>();
   private readonly tickets = new Map<string, Ticket>();
+  private passwordWork = 0;
   onRevoked: (sessionIds: Set<string>) => void = () => {};
   onAccountChanged: (accountId: string) => void = () => {};
   constructor(private readonly db: Store, private readonly credentials: Credentials, private readonly config: Config) {}
@@ -50,6 +59,39 @@ export class Auth {
     return this.account(id);
   }
   hasOwner() { return hasOwner(this.db); }
+
+  private passwordHash() {
+    return this.db.select({ value: settings.value }).from(settings).where(eq(settings.key, passwordKey)).get()?.value;
+  }
+
+  passwordRequired() { return Boolean(this.passwordHash()); }
+
+  private async password<T>(work: () => Promise<T>) {
+    if (this.passwordWork >= 2) fail("RATE_LIMITED");
+    this.passwordWork++;
+    try { return await work(); } finally { this.passwordWork--; }
+  }
+
+  private async verifyPassword(password?: string) {
+    const hash = this.passwordHash();
+    if (hash && (!password || !await this.password(() => Bun.password.verify(password, hash)))) fail("AUTH_FAILED");
+    return hash;
+  }
+
+  async setServerPassword(authorize: () => Account, password: string | null) {
+    const previous = this.passwordHash();
+    const hash = password === null ? null :
+      await this.password(() => Bun.password.hash(password, { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 }));
+    const actor = authorize();
+    this.db.transaction((tx) => {
+      if (this.passwordHash() !== previous) fail("CONFLICT");
+      if (hash === null) tx.delete(settings).where(eq(settings.key, passwordKey)).run();
+      else tx.insert(settings).values({ key: passwordKey, value: hash })
+        .onConflictDoUpdate({ target: settings.key, set: { value: hash } }).run();
+      audit(tx, actor.id, "server.password_changed", null);
+    }, { behavior: "immediate" });
+    return { passwordRequired: hash !== null };
+  }
 
   issueSetup(renew = false) {
     return this.db.transaction((tx) => {
@@ -67,20 +109,33 @@ export class Auth {
     }, { behavior: "immediate" });
   }
 
-  bootstrap(token: string, name: string, device: string) {
-    return this.db.transaction((tx) => {
+  bootstrap(token: string, name: string, device: string, identity: IdentityChallenge) {
+    const result = this.db.transaction((tx) => {
       if (hasOwner(tx)) fail("NOT_FOUND");
       const row = tx.select().from(setup).where(eq(setup.id, 1)).get();
       if (!row || row.expiresAt <= Date.now() || !equalDigest(row.digest, this.credentials.digest("setup", token))) fail("AUTH_FAILED");
       tx.delete(setup).where(eq(setup.id, row.id)).run();
-      const result = this.createAccount(tx, name, device, "Owner");
+      const existing = tx.select({ accountId: accountIdentities.accountId }).from(accountIdentities)
+        .where(eq(accountIdentities.publicKey, identity.publicKey)).get();
+      if (existing) {
+        if (isBanned(tx, existing.accountId)) fail("FORBIDDEN");
+        tx.update(accountRoles).set({ role: "Owner" }).where(eq(accountRoles.accountId, existing.accountId)).run();
+        audit(tx, existing.accountId, "setup.consumed", existing.accountId);
+        return { account: getAccount(tx, existing.accountId), ...this.createSession(tx, existing.accountId, device) };
+      }
+      const result = this.createAccount(tx, name, device, "Owner", identity);
       audit(tx, result.account.id, "setup.consumed", result.account.id);
       return result;
     }, { behavior: "immediate" });
+    this.onAccountChanged(result.account.id);
+    return result;
   }
 
-  register(name: string, device: string, invitation?: string) {
+  async register(name: string, device: string, identity: IdentityChallenge, invitation?: string, password?: string) {
+    if (this.config.server.registration === "disabled") fail("FORBIDDEN");
+    const hash = await this.verifyPassword(password);
     return this.db.transaction((tx) => {
+      if (this.passwordHash() !== hash) fail("CONFLICT");
       const mode = this.config.server.registration;
       if (mode === "disabled") fail("FORBIDDEN");
       if (mode !== "open" || invitation) {
@@ -95,28 +150,67 @@ export class Auth {
         if (!row) fail("AUTH_FAILED");
         if (row.usesLeft !== null) tx.update(invitations).set({ usesLeft: row.usesLeft - 1 }).where(eq(invitations.id, row.id)).run();
       }
-      return this.createAccount(tx, name, device, "Member");
+      return this.createAccount(tx, name, device, "Member", identity);
     }, { behavior: "immediate" });
   }
 
-  private createAccount(db: Queries, name: string, device: string, role: Role) {
+  private createAccount(db: Queries, name: string, device: string, role: Role, { publicKey, origin }: IdentityChallenge) {
+    const length = Array.from(name).length;
+    if (length < 4 || length > 32) fail("INVALID_REQUEST");
+    if (db.select().from(accountIdentities).where(eq(accountIdentities.publicKey, publicKey)).get()) fail("CONFLICT");
     const id = randomUUID();
     const createdAt = Date.now();
     db.insert(accounts).values({ id, displayName: name, createdAt }).run();
     db.insert(accountRoles).values({ accountId: id, role }).run();
-    const recovery = recoveryCode();
-    db.insert(recoveryCredentials).values({ accountId: id, digest: this.credentials.digest("recovery", normalizeRecovery(recovery)!) }).run();
-    return { account: { id, displayName: name, role, createdAt }, recoveryCode: recovery, ...this.createSession(db, id, device) };
+    db.insert(accountIdentities).values({ accountId: id, publicKey, origin }).run();
+    audit(db, id, "identity.attached", id);
+    return { account: { id, displayName: name, role, createdAt }, ...this.createSession(db, id, device) };
   }
 
-  recover(code: string, device: string) {
+  challengeIdentity(serverId: string, operation: IdentityOperation, publicKey: string, deviceName: string, origin: string) {
+    const now = Date.now();
+    for (const [id, challenge] of this.identityChallenges) if (challenge.expiresAt <= now) this.identityChallenges.delete(id);
+    if (this.identityChallenges.size >= 512) fail("RATE_LIMITED");
+    const id = randomToken();
+    if (operation === "login") {
+      origin = this.db.select({ origin: accountIdentities.origin }).from(accountIdentities)
+        .where(eq(accountIdentities.publicKey, publicKey)).get()?.origin ?? origin;
+    }
+    const challenge = { serverId, operation, publicKey, deviceName, origin, expiresAt: now + 60_000 };
+    this.identityChallenges.set(id, challenge);
+    return { id, ...challenge, binding: "" };
+  }
+
+  private proveIdentity(serverId: string, operation: IdentityOperation, id: string, signature: string) {
+    const challenge = this.identityChallenges.get(id);
+    if (!challenge || challenge.serverId !== serverId || challenge.operation !== operation ||
+        challenge.expiresAt <= Date.now()) fail("AUTH_FAILED");
+    this.identityChallenges.delete(id);
+    const { publicKey, deviceName, expiresAt, origin } = challenge;
+    const raw = Buffer.from(publicKey, "base64url");
+    const proof = Buffer.from(signature, "base64url");
+    if (raw.length !== 32 || raw.toString("base64url") !== publicKey || proof.length !== 64) fail("AUTH_FAILED");
+    const key = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: publicKey }, format: "jwk" });
+    const transcript = JSON.stringify(["korero-identity-v1", serverId, origin, operation, id, publicKey, "", deviceName, expiresAt]);
+    if (!verify(null, Buffer.from(transcript), key, proof)) fail("AUTH_FAILED");
+    return challenge;
+  }
+
+  proveEnrollment(serverId: string, operation: "register" | "bootstrap", deviceName: string, proof: IdentityProof) {
+    const challenge = this.proveIdentity(serverId, operation, proof.id, proof.signature);
+    if (challenge.deviceName !== deviceName) fail("AUTH_FAILED");
+    return challenge;
+  }
+
+  async loginIdentity(serverId: string, id: string, signature: string, password?: string) {
+    const { publicKey, deviceName } = this.proveIdentity(serverId, "login", id, signature);
+    const hash = await this.verifyPassword(password);
     return this.db.transaction((tx) => {
-      const normal = normalizeRecovery(code);
-      if (!normal) fail("AUTH_FAILED");
-      const row = tx.select({ accountId: recoveryCredentials.accountId }).from(recoveryCredentials)
-        .where(eq(recoveryCredentials.digest, this.credentials.digest("recovery", normal))).get();
-      if (!row || isBanned(tx, row.accountId)) fail("AUTH_FAILED");
-      return { account: getAccount(tx, row.accountId), ...this.createSession(tx, row.accountId, device) };
+      if (this.passwordHash() !== hash) fail("CONFLICT");
+      const row = tx.select().from(accountIdentities).where(eq(accountIdentities.publicKey, publicKey)).get();
+      if (!row) fail("NOT_FOUND");
+      if (isBanned(tx, row.accountId)) fail("FORBIDDEN");
+      return { account: getAccount(tx, row.accountId), ...this.createSession(tx, row.accountId, deviceName) };
     }, { behavior: "immediate" });
   }
 
@@ -154,23 +248,6 @@ export class Auth {
     if (now - session.lastActive < 60000) return;
     this.db.update(sessions).set({ lastActive: now }).where(and(eq(sessions.id, session.id), lte(sessions.lastActive, now - 60000))).run();
     session.lastActive = now;
-  }
-
-  rotateRecovery(session: Session, oldCode: string, revokeOthers: boolean) {
-    const { code, revoked } = this.db.transaction((tx) => {
-      const row = tx.select({ digest: recoveryCredentials.digest }).from(recoveryCredentials)
-        .where(eq(recoveryCredentials.accountId, session.accountId)).get();
-      const normal = normalizeRecovery(oldCode);
-      if (!row || !normal || !equalDigest(row.digest, this.credentials.digest("recovery", normal))) fail("AUTH_FAILED");
-      const code = recoveryCode();
-      tx.update(recoveryCredentials).set({ digest: this.credentials.digest("recovery", normalizeRecovery(code)!) })
-        .where(eq(recoveryCredentials.accountId, session.accountId)).run();
-      audit(tx, session.accountId, "recovery.rotated", session.accountId);
-      const revoked = revokeOthers ? this.markRevoked(tx, eq(sessions.accountId, session.accountId), ne(sessions.id, session.id)) : [];
-      return { code, revoked };
-    }, { behavior: "immediate" });
-    this.notifyRevoked(revoked);
-    return { recoveryCode: code };
   }
 
   refresh(token: string) {

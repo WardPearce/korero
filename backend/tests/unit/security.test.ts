@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Credentials, normalizeRecovery, randomToken, recoveryCode } from "../../src/security/credentials";
+import { Credentials, randomToken } from "../../src/security/credentials";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -8,20 +8,12 @@ import { extractWorker, sha256 } from "../../src/security/files";
 import { symlink, unlink } from "node:fs/promises";
 import { decode } from "../../src/protocol";
 
-test("recovery codes encode 32 bytes in 13 Crockford groups and accept human input", () => {
-  const codes = Array.from({ length: 128 }, recoveryCode);
-  expect(new Set(codes).size).toBe(128);
-  for (const code of codes) {
-    expect(code.split("-").map((group) => group.length)).toEqual(Array.from({ length: 13 }, () => 4));
-    expect(normalizeRecovery(code)).toHaveLength(52);
-    expect(normalizeRecovery(code.toLowerCase().replaceAll("-", " "))).toBe(normalizeRecovery(code));
-  }
-  expect(normalizeRecovery("a".repeat(52))).toBeNull();
+test("tokens encode 32 bytes and credential verifiers are domain-separated", () => {
   const credential = randomToken();
   expect(Buffer.from(credential, "base64url")).toHaveLength(32);
   const hmac = new Credentials(new Uint8Array(32).fill(7));
-  expect(new Set(["access", "refresh", "recovery", "ticket", "setup", "invitation"].map((domain) =>
-    hmac.digest(domain as Parameters<Credentials["digest"]>[0], credential))).size).toBe(6);
+  const domains = ["access", "refresh", "ticket", "setup", "invitation"] as const;
+  expect(new Set(domains.map((domain) => hmac.digest(domain, credential))).size).toBe(domains.length);
 });
 
 test("checks the complete TOML configuration before startup", async () => {

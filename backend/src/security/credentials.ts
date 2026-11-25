@@ -3,35 +3,13 @@ import { join } from "node:path";
 import { atomicWrite, privateDirectory } from "./files";
 import { readPrivate } from "./tls";
 
-const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-export function recoveryCode() {
-  const bytes = randomBytes(32);
-  let value = 0;
-  let remaining = 0;
-  let result = "";
-  for (const byte of bytes) {
-    value = (value << 8) | byte;
-    remaining += 8;
-    while (remaining >= 5) {
-      remaining -= 5;
-      result += alphabet[(value >>> remaining) & 31];
-    }
-  }
-  result += alphabet[(value << (5 - remaining)) & 31];
-  return result.match(/.{1,4}/g)!.join("-");
-}
-
-export function normalizeRecovery(code: string) {
-  const plain = code.toUpperCase().replace(/[\s-]/g, "").replace(/O/g, "0").replace(/[IL]/g, "1");
-  return /^[0-9A-HJKMNP-TV-Z]{51}[0G]$/.test(plain) ? plain : null;
-}
 export const randomToken = () => randomBytes(32).toString("base64url");
 export function equalDigest(a: string, b: string) {
   return timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));
 }
 export class Credentials {
   constructor(private readonly secret: Uint8Array) {}
-  digest(domain: "recovery" | "access" | "refresh" | "invitation" | "setup" | "ticket", token: string) {
+  digest(domain: "access" | "refresh" | "invitation" | "setup" | "ticket", token: string) {
     return createHmac("sha256", this.secret).update(`voice/v1/verifier/${domain}\0`).update(token).digest("hex");
   }
   successor(domain: "access" | "refresh", previous: string) {

@@ -16,9 +16,10 @@ export const accountRoles = sqliteTable("account_roles", {
   accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
   role: text().notNull().references(() => rolesTable.name),
 }, (table) => [index("account_roles_role").on(table.role)]);
-export const recoveryCredentials = sqliteTable("recovery_credentials", {
+export const accountIdentities = sqliteTable("account_identities", {
   accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
-  digest: text().unique().notNull(),
+  publicKey: text("public_key").unique().notNull(),
+  origin: text().notNull(),
 });
 export const sessions = sqliteTable("sessions", {
   id: text().primaryKey(), accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
@@ -42,6 +43,7 @@ export const channels = sqliteTable("channels", {
   id: text().primaryKey(), parentId: text("parent_id").references((): AnySQLiteColumn => channels.id),
   name: text().notNull(), description: text().notNull().default(""), position: integer().notNull().default(0), capacity: integer(),
   temporary: integer({ mode: "boolean" }).notNull().default(false), passwordHash: text("password_hash"),
+  backgroundImageUrl: text("background_image_url"),
 }, (table) => [index("channels_parent").on(table.parentId, table.position)]);
 export const channelOverrides = sqliteTable("channel_overrides", {
   channelId: text("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),

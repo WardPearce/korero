@@ -36,13 +36,13 @@ from the locked npm package and its hashed Meson wraps. [OpenSSL advisories](htt
 The tests used two independent Chromium sessions on the same machine. The browser harness
 used an ephemeral test-only SPKI exception for its assigned server key. Independent
 HTTPS/WSS tests checked the expected fingerprint, SAN and certificate trust, including
-preventing a recovery request to an unexpected key. The compiled worker's native
+preventing sign-in to an unexpected key. The compiled worker's native
 dependencies included glibc, libstdc++, libgcc_s, libm, libssl, libcrypto, and the host's
 transitive zlib. Debian 13 is the verified clean baseline. Older platforms and other
 architectures need verification before support is claimed.
 
 The integration suite exercises concurrent bootstrap and refresh, ticket expiry and
-replay, recovery rotation, permission enforcement, media worker replacement, and a
+replay, identity proof, permission enforcement, media worker replacement, and a
 backup/restore that preserves accounts, channels and TLS keys. The end-to-end suite
 checks decoded audio and ownership, administrative mute, switching channels, and
 active-session revocation. The npm audit found zero advisories in the resolved lockfile

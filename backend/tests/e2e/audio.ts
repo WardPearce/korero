@@ -40,7 +40,7 @@ try {
     const [alice, bob] = pages as [typeof pages[number], typeof pages[number]];
     const [aliceIdentity, bobIdentity] = await Promise.all([
       alice.evaluate(() => window.harness.initialize("Alice")),
-      bob.evaluate(() => window.harness.initialize("Bob")),
+      bob.evaluate(() => window.harness.initialize("Bobby")),
     ]);
     if (aliceIdentity.accountId === bobIdentity.accountId) throw new Error("Expected independent accounts");
     const firstProducer = await alice.evaluate((tcp) => window.harness.publish(tcp), forceTcp);

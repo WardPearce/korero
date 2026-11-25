@@ -13,12 +13,12 @@ export const errors = {
 } as const;
 export type ErrorCode = keyof typeof errors;
 export class ProtocolError extends Error {
-  constructor(readonly code: ErrorCode) { super(errors[code][1]); }
+  constructor(readonly code: ErrorCode, message: string = errors[code][1]) { super(message); }
 }
 export function fail(code: ErrorCode): never { throw new ProtocolError(code); }
 export function errorResponse(error: unknown) {
   const code = error instanceof ProtocolError ? error.code : "INTERNAL";
-  return { status: errors[code][0], error: { code, message: errors[code][1] } };
+  return { status: errors[code][0], error: { code, message: error instanceof ProtocolError ? error.message : errors[code][1] } };
 }
 
 export class RateLimit {

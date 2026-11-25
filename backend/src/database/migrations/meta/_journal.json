@@ -15,6 +15,27 @@
       "when": 1795579766921,
       "tag": "0001_speaking_restrictions",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1795597098140,
+      "tag": "0002_account_identities",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1795598754199,
+      "tag": "0003_channel_backgrounds",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1795599866997,
+      "tag": "0004_remove_recovery_credentials",
+      "breakpoints": true
     }
   ]
 }

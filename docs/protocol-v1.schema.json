@@ -310,6 +310,18 @@
                     }
                   ]
                 },
+                "backgroundImageUrl": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "maxLength": 512,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "temporary": {
                   "type": "boolean"
                 }
@@ -422,6 +434,18 @@
                     {
                       "minLength": 1,
                       "maxLength": 128,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "backgroundImageUrl": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "maxLength": 512,
                       "type": "string"
                     },
                     {
@@ -2815,12 +2839,67 @@
         "payload": {}
       }
     },
+    "identityChallenge": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "operation",
+        "publicKey",
+        "deviceName",
+        "origin"
+      ],
+      "properties": {
+        "operation": {
+          "default": "login",
+          "type": "string",
+          "enum": [
+            "login",
+            "register",
+            "bootstrap"
+          ]
+        },
+        "publicKey": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        },
+        "deviceName": {
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
+          "type": "string"
+        },
+        "origin": {
+          "minLength": 1,
+          "maxLength": 512,
+          "type": "string"
+        }
+      }
+    },
+    "identityProof": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "id",
+        "signature"
+      ],
+      "properties": {
+        "id": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        },
+        "signature": {
+          "pattern": "^[A-Za-z0-9_-]{86}$",
+          "type": "string"
+        }
+      }
+    },
     "register": {
       "additionalProperties": false,
       "type": "object",
       "required": [
         "displayName",
-        "deviceName"
+        "deviceName",
+        "identity"
       ],
       "properties": {
         "displayName": {
@@ -2838,27 +2917,24 @@
         "invitation": {
           "pattern": "^[A-Za-z0-9_-]{43}$",
           "type": "string"
-        }
-      }
-    },
-    "recover": {
-      "additionalProperties": false,
-      "type": "object",
-      "required": [
-        "recoveryCode",
-        "deviceName"
-      ],
-      "properties": {
-        "recoveryCode": {
-          "minLength": 1,
-          "maxLength": 128,
-          "type": "string"
         },
-        "deviceName": {
-          "minLength": 1,
-          "maxLength": 80,
-          "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
-          "type": "string"
+        "identity": {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "id",
+            "signature"
+          ],
+          "properties": {
+            "id": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            },
+            "signature": {
+              "pattern": "^[A-Za-z0-9_-]{86}$",
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -2875,30 +2951,14 @@
         }
       }
     },
-    "rotate": {
-      "additionalProperties": false,
-      "type": "object",
-      "required": [
-        "recoveryCode"
-      ],
-      "properties": {
-        "recoveryCode": {
-          "minLength": 1,
-          "maxLength": 128,
-          "type": "string"
-        },
-        "revokeOthers": {
-          "type": "boolean"
-        }
-      }
-    },
     "bootstrap": {
       "additionalProperties": false,
       "type": "object",
       "required": [
         "token",
         "displayName",
-        "deviceName"
+        "deviceName",
+        "identity"
       ],
       "properties": {
         "token": {
@@ -2916,6 +2976,24 @@
           "maxLength": 80,
           "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
           "type": "string"
+        },
+        "identity": {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "id",
+            "signature"
+          ],
+          "properties": {
+            "id": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            },
+            "signature": {
+              "pattern": "^[A-Za-z0-9_-]{86}$",
+              "type": "string"
+            }
+          }
         }
       }
     },

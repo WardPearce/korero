@@ -29,7 +29,7 @@ The private key and certificate are replaced together in the owner-only
    global verifier or a bare certificate fingerprint in place of handshake verification.
 4. Over that verified connection call `GET /api/v1/server/info`. Check the
    returned server ID against any earlier trusted binding. Only then attach access,
-   refresh, invitation or recovery credentials.
+   refresh or invitation credentials.
 5. Require explicit approval for a changed public key. A different logical server ID
    also requires a new trust decision and credential namespace. Renewal with the
    same key and server ID continues to work.

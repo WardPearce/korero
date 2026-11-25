@@ -27,5 +27,9 @@ private:
 
 std::unique_ptr<Voice> make_voice(rust::Box<Rpc> rpc, rust::Str capabilities,
                                  rust::Str ice_servers, bool synthetic);
+void set_audio_profile(rust::Str settings);
+void set_push_to_talk(bool pressed) noexcept;
+rust::String audio_devices();
+double test_microphone();
 bool initialize_android(size_t env, size_t context) noexcept;
 }  // namespace korero

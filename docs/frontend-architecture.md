@@ -1,12 +1,15 @@
 # Kōrero client
 
-The client uses Svelte 5, Vite, Tailwind CSS, and Bits UI. Tauri 2 serves the
-same responsive UI on desktop and Android. Kōrero connects to a separately
+The client uses SvelteKit, Svelte 5, Tailwind CSS, and Bits UI. The static adapter
+writes the SPA entry point and assets to `frontend/dist` for Tauri 2. The root
+layout owns the server sidebar and listens for native session updates across
+the workspace and account settings routes. Kōrero connects to a separately
 deployed Bun/Elysia and mediasoup server using the [v1 protocol](protocol.md).
 
-Eden Treaty type-checks discovery, registration, recovery, and account requests
+Eden Treaty type-checks discovery and account requests
 against the Elysia app. A scoped Tauri command sends those HTTP requests through
-native Rust. The Rust session coordinates refresh-token rotation, authenticated
+native Rust. The native identity command signs server challenges for enrollment
+and sign-in. The Rust session coordinates refresh-token rotation, authenticated
 WebSocket requests, heartbeat, reconnect, and channel state. It sends client
 state and errors to Svelte over Tauri IPC.
 
@@ -21,7 +24,8 @@ The native client uses the platform certificate store for HTTPS and WSS. For a
 self-signed server, export the public certificate with the server's
 `identity export` command and select it in the connect dialog. Obtain and
 verify the certificate through a trusted channel. Refresh credentials stay in
-native memory. Recover the account to sign in after the desktop process exits.
+native memory. The saved identity signs a fresh challenge when the app reconnects
+after the desktop process exits.
 
 ## Linux x86_64
 

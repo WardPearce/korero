@@ -26,13 +26,13 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | GET `/ready` | Public | — | `{status:"ready"}`, or 503 with `{status:"unavailable"}` |
 | GET `/api/v1/server/info` | Public | — | `serverId, name, version, protocolVersions, registration, setupRequired, fingerprint?` |
 | GET `/api/v1/server/capabilities` | Optional | — | `protocolVersions, websocketPath, audio, targetAudioBitrate, heartbeatSeconds, maxWebSocketBytes, udp, tcp, textPersistence, iceServers?` |
-| POST `/api/v1/admin/bootstrap` | Setup token in body | `token, displayName, deviceName` | Account, recovery code and session |
-| POST `/api/v1/auth/register` | Invitation where required | `displayName, deviceName, invitation?` | Account, recovery code and session |
-| POST `/api/v1/auth/recover` | Recovery code in body | `recoveryCode, deviceName` | Account and new session |
+| POST `/api/v1/auth/identity/challenge` | Public | `operation, publicKey, deviceName, origin` | Single-use challenge |
+| POST `/api/v1/auth/identity/login` | Signed login challenge | `id, signature` | Account and new session |
+| POST `/api/v1/admin/bootstrap` | Setup token and signed bootstrap challenge | `token, displayName, deviceName, identity` | Account and session |
+| POST `/api/v1/auth/register` | Signed registration challenge and invitation where required | `displayName, deviceName, identity, invitation?` | Account and session |
 | POST `/api/v1/auth/refresh` | Refresh token in body | `refreshToken` | Rotated session credentials |
 | POST `/api/v1/auth/logout` | Access token | — | `{}` |
 | POST `/api/v1/auth/logout-all` | Access token | — | `{}` |
-| POST `/api/v1/auth/recovery-code/rotate` | Access token | `recoveryCode, revokeOthers?` | `{recoveryCode}` |
 | POST `/api/v1/auth/connection-ticket` | Access token | — | `{ticket, expiresAt}` |
 | GET `/api/v1/account` | Access token | — | Account |
 | PATCH `/api/v1/account` | Access token | `displayName` | Account |
@@ -41,10 +41,24 @@ A credential-bearing response carries `Cache-Control: no-store`.
 
 An Account object has `id, displayName, role, createdAt`. Session responses have
 `sessionId, accessToken, refreshToken, accessExpiresAt, refreshExpiresAt` at the top
-level alongside `account` and, for creation only, `recoveryCode`. Session listings
+level alongside `account` for sign-in and account creation. Session listings
 contain no token values. The capability response supplies ICE server settings
 only to authenticated callers. Native requests may omit the Origin header.
 A supplied browser Origin must exactly match an entry in `server.origins`.
+
+For `login`, `register`, or `bootstrap`, request a challenge for the raw 32-byte
+Ed25519 public key encoded in base64url without padding. Verify the returned server
+ID, origin, operation, key, device name, and empty binding. Sign the UTF-8 bytes of
+the compact JSON array below with the private key. `id` is the challenge nonce and
+`expiresAt` is in Unix milliseconds.
+
+```text
+["korero-identity-v1", serverId, origin, operation, id, publicKey, "", deviceName, expiresAt]
+```
+
+Encode the signature as base64url without padding. Send `{id, signature}` to the
+login endpoint or as `identity` in the enrollment request. A valid login proof for
+an unregistered key returns `NOT_FOUND`.
 
 ## WebSocket connection and envelopes
 

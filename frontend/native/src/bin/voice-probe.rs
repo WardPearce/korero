@@ -1,9 +1,8 @@
 use anyhow::{ensure, Context, Result};
 use korero_native::{
     media::RoomVoice,
-    signaling::{require_success, Credentials, Server},
+    signaling::{Credentials, Server},
 };
-use reqwest::Method;
 use serde_json::{json, Value};
 use std::{io::Write, time::Duration};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -19,18 +18,9 @@ async fn main() -> Result<()> {
             .context("Pass the server's trusted certificate")?,
     )?;
     let server = Server::new(&address, Some(&ca))?;
-    let (status, profile) = server
-        .http(
-            Method::POST,
-            "/api/v1/auth/register",
-            Some(json!({
-                "displayName": "Rust voice probe", "deviceName": "Synthetic audio desktop"
-            })),
-            None,
-        )
-        .await?;
-    let credentials: Credentials = serde_json::from_value(require_success(status, profile)?)?;
     let mut commands = BufReader::new(tokio::io::stdin()).lines();
+    let credentials: Credentials =
+        serde_json::from_str(&commands.next_line().await?.context("Expected device credentials")?)?;
     for pass in 1..=2 {
         let mut connection = server.authenticate(&credentials).await?;
         let lobby = connection.snapshot["channels"]

@@ -12,16 +12,21 @@ const empty = object({});
 export const id = t.String({ pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$" });
 export const token = t.String({ pattern: "^[A-Za-z0-9_-]{43}$" });
 const displayName = t.String({ minLength: 1, maxLength: 80, pattern: "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$" });
-const recoveryCode = text(128);
 const deviceName = displayName;
 const requestId = int(1, Number.MAX_SAFE_INTEGER);
+const identityProof = { id: token, signature: t.String({ pattern: "^[A-Za-z0-9_-]{86}$" }) };
+const enrollmentProof = object(identityProof);
+const password = text(128);
 export const httpBodies = {
-  register: object({ displayName, deviceName, invitation: optional(token) }),
-  recover: object({ recoveryCode, deviceName }),
+  identityChallenge: object({ operation: t.UnionEnum(["login", "register", "bootstrap"]),
+    publicKey: t.String({ pattern: "^[A-Za-z0-9_-]{43}$" }), deviceName, origin: text(512) }),
+  identityProof: object({ ...identityProof, password: optional(password) }),
+  register: object({ displayName, deviceName, invitation: optional(token), password: optional(password), identity: enrollmentProof }),
   refresh: object({ refreshToken: token }),
-  rotate: object({ recoveryCode, revokeOthers: optional(t.Boolean()) }),
-  bootstrap: object({ token, displayName, deviceName }),
+  bootstrap: object({ token, displayName, deviceName, identity: enrollmentProof }),
   account: object({ displayName }),
+  serverPassword: object({ password: nullable(password) }),
+  serverConfiguration: object({ toml: text(65536, 0), revision: t.String({ pattern: "^[a-f0-9]{64}$" }) }),
 };
 
 const codecParameters = optional(t.Record(t.String({ pattern: "^(?!constructor$|prototype$|__proto__$)[a-zA-Z0-9_-]{1,64}$" }),
@@ -69,6 +74,7 @@ const channelDetails = {
   position: optional(int(0, 100000)),
   capacity: optional(nullable(int(1, 1024))),
   password: optional(nullable(text(128))),
+  backgroundImageUrl: optional(nullable(text(512))),
 };
 const target = object({ channelId: optional(id), accountId: optional(id) });
 export const payloads = {

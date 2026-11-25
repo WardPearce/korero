@@ -105,12 +105,22 @@ export class Media {
     });
     return room;
   }
+  isSpeaking(channelId: string, connectionId: string) {
+    const room = this.rooms.get(channelId);
+    return !!room && [...room.speaking].some((id) => room.producers.get(id)?.peerId === connectionId);
+  }
+
   private speaking(channelId: string, room: Room, next: Set<string>) {
     if (room.closed) return;
     for (const id of room.speaking) if (!next.has(id)) this.event(channelId, "media.speaking", { producerId: id, speaking: false });
     for (const id of next) if (room.producers.has(id) && !room.speaking.has(id)) this.event(channelId, "media.speaking", { producerId: id, speaking: true });
+    const changed = new Set([...room.speaking, ...next]
+      .filter((id) => room.speaking.has(id) !== next.has(id)).map((id) => room.producers.get(id)?.peerId));
     room.speaking = new Set([...next].filter((id) => room.producers.has(id)));
+    for (const connectionId of changed) if (connectionId)
+      this.event(channelId, "channel.voiceActivity", { channelId, connectionId, speaking: this.isSpeaking(channelId, connectionId) });
   }
+
   releaseRoom(channelId: string) {
     const room = this.rooms.get(channelId);
     if (!room) return;
@@ -209,7 +219,8 @@ export class Media {
           entry.observer.once("close", () => {
             resources.producers.delete(entry.id);
             room.producers.delete(entry.id);
-            room.speaking.delete(entry.id);
+            if (room.speaking.delete(entry.id)) this.event(channelId, "channel.voiceActivity",
+              { channelId, connectionId: peer.id, speaking: this.isSpeaking(channelId, peer.id) });
             this.event(channelId, "media.producerClosed", { channelId, producerId: entry.id });
           });
           void observer.addProducer({ producerId: entry.id }).catch(() => {});

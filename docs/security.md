@@ -19,8 +19,8 @@ prompt but still checks target join permission and capacity.
 TLS over signalling prevents passive observation of account credentials. Independent
 verification of the first public-key pin and subsequent pin enforcement protect against
 impersonation. A first TOFU connection without fingerprint verification can trust an
-impersonator. Clients must also protect OS credential storage. Stolen recovery codes
-grant account access until rotated. Stolen active session credentials can be used until
+impersonator. Clients must protect the private identity key and its encrypted backups.
+A stolen private key can sign new challenges as that identity. Stolen active session credentials can be used until
 expiration, revocation, or detected refresh-token reuse.
 
 Standard WebRTC encrypts media on each link to the SFU using DTLS-SRTP. The SFU and

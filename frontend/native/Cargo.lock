@@ -649,12 +649,14 @@ dependencies = [
  "cxx-build",
  "futures-util",
  "reqwest",
+ "ring",
  "rustls",
  "rustls-native-certs",
  "rustls-pemfile",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-rustls",
  "tokio-tungstenite",
 ]
 

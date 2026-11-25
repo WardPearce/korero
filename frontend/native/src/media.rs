@@ -17,6 +17,10 @@ mod ffi {
         include!("cpp/voice.hpp");
 
         type Voice;
+        fn set_audio_profile(settings: &str) -> Result<()>;
+        fn set_push_to_talk(pressed: bool);
+        fn audio_devices() -> Result<String>;
+        fn test_microphone() -> Result<f64>;
         #[cfg(target_os = "android")]
         fn initialize_android(env: usize, context: usize) -> bool;
         fn make_voice(
@@ -37,6 +41,48 @@ mod ffi {
 #[cfg(target_os = "android")]
 pub fn initialize_android(env: usize, context: usize) -> bool {
     ffi::initialize_android(env, context)
+}
+
+#[derive(Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioProfile {
+    pub input: String,
+    pub output: String,
+    pub input_level: u8,
+    pub output_level: u8,
+    pub transmit_mode: TransmitMode,
+    pub activity_threshold: u8,
+    pub noise_suppression: bool,
+    pub automatic_gain: bool,
+    pub echo_cancellation: bool,
+}
+
+#[derive(Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TransmitMode {
+    #[default]
+    Open,
+    Activity,
+    PushToTalk,
+}
+
+pub fn set_audio_profile(profile: &AudioProfile) -> Result<()> {
+    anyhow::ensure!(profile.input_level <= 100 && profile.output_level <= 100 &&
+        (1..=100).contains(&profile.activity_threshold) && profile.input.len() <= 4096 &&
+        profile.output.len() <= 4096, "Invalid audio preferences");
+    Ok(ffi::set_audio_profile(&serde_json::to_string(profile)?)?)
+}
+
+pub fn set_push_to_talk(pressed: bool) {
+    ffi::set_push_to_talk(pressed);
+}
+
+pub fn audio_devices() -> Result<Value> {
+    Ok(serde_json::from_str(&ffi::audio_devices()?)?)
+}
+
+pub fn test_microphone() -> Result<f64> {
+    Ok(ffi::test_microphone()?)
 }
 
 pub struct Rpc {

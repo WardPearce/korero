@@ -1,0 +1,1 @@
+ALTER TABLE `channels` ADD `background_image_url` text;

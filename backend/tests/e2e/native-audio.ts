@@ -25,6 +25,7 @@ try {
     });
     const ca = server.directory + "/probe-public.crt";
     await Bun.write(ca, server.ca);
+    const credentials = await server.register("Rust voice probe");
     const native = Bun.spawn([executable, server.origin, ca], { stdin: "pipe", stdout: "pipe", stderr: "inherit" });
     type Result = { ready?: number; left?: number; connectionId?: string; decoded?: number; peak?: number };
     const results: Result[] = [];
@@ -37,6 +38,8 @@ try {
       }
     })();
     try {
+      native.stdin.write(JSON.stringify(credentials) + "\n");
+      await native.stdin.flush();
       let previousConnection: string | undefined;
       for (const round of [1, 2]) {
         const ready = await until(async () => {

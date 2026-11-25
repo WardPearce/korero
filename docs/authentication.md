@@ -1,34 +1,22 @@
 # Authentication
 
-Every server has its own accounts. Registration accepts a display name and device name.
-Names may repeat and play no part in authentication. The server assigns a random UUID
-and returns a recovery code and device credentials in the registration response.
-Recover on a new device using only the recovery code and a name for the new device.
+Every server has its own accounts. Registration accepts a display name, a device name,
+and proof of an Ed25519 identity. Names may repeat. The server assigns a random account
+ID, associates it with the public key, and returns device credentials.
 
-## Recovery codes
+## Identity sign-in
 
-Codes encode 32 cryptographically random bytes as 52 Crockford Base32 characters
-in 13 groups of four. The decoder ignores case, spaces, and hyphens and accepts common
-letter substitutions. The last character contains one payload bit and four zero pad bits.
-The code has no checksum. Keep an offline copy in a place only the user can access.
-
-A recovery code is a long-term bearer credential. Anyone in possession can create a
-device session as that account. The server returns a new code once when it is created
-or rotated. Recovering a session leaves the current code valid. Administrators cannot
-retrieve existing codes. Losing the code and every authenticated device can permanently
-end access. A malicious operator with control of the server can issue credentials or
-observe authentication requests.
+The client sends the public key and signs the server's single-use challenge locally.
+A challenge is bound to the server, origin, operation, public key, and device name.
+It expires after 60 seconds. The server verifies the signature before creating a new
+device session for that key. Import the original identity from an encrypted backup
+to sign in from another device. Losing the private key and its backup ends the user's
+ability to create new sessions for that account.
 
 The server stores domain-separated HMAC-SHA-256 verifiers. A 32-byte random key is created
 in `secrets/credentials.key` with owner-only access. Include it in encrypted backups.
-Losing it makes existing credentials unusable. Recovery and access lookups use indexed
+Losing it makes existing session credentials unusable. Access token lookups use indexed
 verifiers. Checks against a specific stored verifier use constant-time comparisons.
-
-To rotate, present an access token and the current recovery code in the same request.
-The database commits the replacement and, by default, revokes all other device sessions
-in the same transaction. If the response is lost, the old code is already invalid and
-the replacement cannot be reissued by support or derived from the database. The current
-device session remains valid. Keep it active and contact the server operator if needed.
 
 ## Devices and refresh
 
@@ -61,7 +49,7 @@ crash reports for all bearer credentials. On device logout remove its local cred
 
 `open` accepts registrations without an invitation. `invitation` requires a valid
 invitation. `admin` requires an invitation issued by an Administrator or Owner.
-`disabled` blocks new registrations, while recovery still works for existing accounts.
+`disabled` blocks new registrations. Existing identities can still sign in.
 Administrators can create invitations with an expiry and/or use limit and revoke them.
 Moderators can create and revoke their own invitations in open and invitation-only
 registration.

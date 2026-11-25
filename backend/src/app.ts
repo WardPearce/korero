@@ -4,7 +4,7 @@ import type { Config } from "./config";
 import type { Auth } from "./modules/auth";
 import type { Media } from "./modules/media";
 import type { Realtime } from "./modules/realtime";
-import { httpBodies, id, version } from "./protocol";
+import { httpBodies, id, payloads, version } from "./protocol";
 import { errorResponse, fail, ProtocolError, RateLimit } from "./security/errors";
 import { version as serverVersion } from "../package.json";
 
@@ -28,7 +28,7 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
   const app = new Elysia({
     name: "voice-api",
     normalize: false,
-    serve: { maxRequestBodySize: 8192, idleTimeout: 30 },
+    serve: { maxRequestBodySize: 393728, idleTimeout: 30 },
     websocket: { maxPayloadLength: config.limits.websocket_bytes,
       idleTimeout: 60, backpressureLimit: 262144, closeOnBackpressureLimit: true, perMessageDeflate: false },
   });
@@ -39,6 +39,7 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
     globalAuth.take("auth");
   };
   const bearer = (request: Request) => auth.access(request.headers.get("authorization"));
+  const requireSettings = (request: Request) => () => realtime.authorize(bearer(request).accountId, "manageSettings");
   return app
     .onRequest(({ request, set }) => {
       const path = new URL(request.url).pathname;
@@ -47,7 +48,7 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
       set.headers["cache-control"] = "no-store";
       set.headers["x-content-type-options"] = "nosniff";
       const origin = request.headers.get("origin");
-      if (origin) {
+      if (origin && origin !== new URL(request.url).origin) {
         if (!origins.has(origin)) fail("FORBIDDEN");
         set.headers["access-control-allow-origin"] = origin;
         set.headers.vary = "Origin";
@@ -71,7 +72,8 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
       return { status: media.ready ? "ready" : "unavailable" };
     })
     .get("/api/v1/server/info", () => ({ ...info, name: config.server.name, version: serverVersion, protocolVersions: [version],
-      registration: config.server.registration, setupRequired: !auth.hasOwner() }))
+      registration: config.server.registration, setupRequired: !auth.hasOwner(), identityAuthentication: true,
+      identityEnrollment: true, channelBackgrounds: true, serverAdministration: true, passwordRequired: auth.passwordRequired() }))
     .get("/api/v1/server/capabilities", ({ request }) => {
       const access = request.headers.get("authorization");
       if (access) bearer(request);
@@ -80,16 +82,21 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
         udp: config.media.enable_udp, tcp: config.media.enable_tcp, textPersistence: config.messaging.persistence,
         ...(access ? { iceServers: config.media.ice_servers } : {}) };
     })
-    .post("/api/v1/auth/register", ({ request, body, set }) => {
+    .post("/api/v1/auth/identity/challenge", ({ request, body }) => {
+      limit(request);
+      return auth.challengeIdentity(info.serverId, body.operation, body.publicKey, body.deviceName, body.origin);
+    }, { body: httpBodies.identityChallenge })
+    .post("/api/v1/auth/identity/login", ({ request, body }) => {
+      limit(request);
+      return auth.loginIdentity(info.serverId, body.id, body.signature, body.password);
+    }, { body: httpBodies.identityProof })
+    .post("/api/v1/auth/register", async ({ request, body, set }) => {
       limit(request, true);
-      const result = auth.register(body.displayName.trim(), body.deviceName.trim(), body.invitation);
+      const identity = auth.proveEnrollment(info.serverId, "register", body.deviceName, body.identity);
+      const result = await auth.register(body.displayName.trim(), body.deviceName.trim(), identity, body.invitation, body.password);
       set.status = 201;
       return result;
     }, { body: httpBodies.register })
-    .post("/api/v1/auth/recover", ({ request, body }) => {
-      limit(request);
-      return auth.recover(body.recoveryCode, body.deviceName.trim());
-    }, { body: httpBodies.recover })
     .post("/api/v1/auth/refresh", ({ request, body }) => {
       limit(request);
       return auth.refresh(body.refreshToken);
@@ -104,10 +111,6 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
       auth.revoke(session.accountId);
       return {};
     })
-    .post("/api/v1/auth/recovery-code/rotate", ({ request, body }) => {
-      limit(request);
-      return auth.rotateRecovery(bearer(request), body.recoveryCode, body.revokeOthers ?? true);
-    }, { body: httpBodies.rotate })
     .post("/api/v1/auth/connection-ticket", ({ request }) => {
       limit(request);
       return auth.ticket(bearer(request));
@@ -121,10 +124,30 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
     }, { params: t.Object({ id }) })
     .post("/api/v1/admin/bootstrap", ({ request, body, set }) => {
       limit(request);
-      const result = auth.bootstrap(body.token, body.displayName.trim(), body.deviceName.trim());
+      const identity = auth.proveEnrollment(info.serverId, "bootstrap", body.deviceName, body.identity);
+      const result = auth.bootstrap(body.token, body.displayName.trim(), body.deviceName.trim(), identity);
       set.status = 201;
       return result;
     }, { body: httpBodies.bootstrap })
+    .get("/api/v1/admin/accounts", ({ request, query }) => realtime.listAccounts(bearer(request).accountId, query.after),
+      { query: t.Object({ after: t.Optional(id) }) })
+    .patch("/api/v1/admin/roles", ({ request, body }) => {
+      realtime.setRole(auth.account(bearer(request).accountId), body.accountId, body.role);
+      return { role: body.role };
+    }, { body: payloads["role.set"] })
+    .post("/api/v1/admin/invitations", ({ request, body }) =>
+      auth.invitation(realtime.authorize(bearer(request).accountId, "manageInvitations"), body.expiresInSeconds, body.uses),
+      { body: payloads["invitation.create"] })
+    .patch("/api/v1/admin/password", ({ request, body }) => {
+      const authorize = requireSettings(request);
+      authorize();
+      return auth.setServerPassword(authorize, body.password);
+    }, { body: httpBodies.serverPassword })
+    .get("/api/v1/admin/configuration", ({ request }) => realtime.configuration(requireSettings(request)))
+    .patch("/api/v1/admin/configuration", ({ request, body }) => {
+      if (Buffer.byteLength(body.toml) > 65536) fail("LIMIT");
+      return realtime.saveConfiguration(requireSettings(request), body.toml, body.revision);
+    }, { body: httpBodies.serverConfiguration })
     .ws("/api/v1/ws", {
       open: (ws) => realtime.open(ws.id, ws),
       message: (ws, message) => realtime.receive(ws.id, message),

@@ -64,8 +64,11 @@ fn main() {
         .include(".")
         .include(root.join("libmediasoupclient/include"))
         .include(root.join("libsdptransform/include"))
-        .include(&include)
-        .include(include.join("third_party/abseil-cpp"))
+        .flag(format!("-isystem{}", include.display()))
+        .flag(format!(
+            "-isystem{}",
+            include.join("third_party/abseil-cpp").display()
+        ))
         .define("WEBRTC_POSIX", None)
         .define("_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS", None)
         .define("_LIBCPP_INSTRUMENTED_WITH_ASAN", "0")

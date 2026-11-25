@@ -2,6 +2,7 @@ import { treaty } from "@elysia/eden";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { App } from "../../../backend/src/app";
+import { browserSession } from "./browser-session";
 
 export interface Account {
   id: string;
@@ -17,6 +18,9 @@ export interface Channel {
   capacity: number | null;
   temporary: boolean;
   passwordRequired: boolean;
+  backgroundImageUrl?: string | null;
+  canEdit?: boolean;
+  canSetPassword?: boolean;
 }
 
 export interface Member {
@@ -26,6 +30,7 @@ export interface Member {
   muted: boolean;
   deafened: boolean;
   adminMuted: boolean;
+  speaking?: boolean;
 }
 
 export interface Snapshot {
@@ -35,6 +40,7 @@ export interface Snapshot {
   channels: Channel[];
   presence: { accountId: string; displayName: string; connections: number }[];
   members: Member[];
+  channelMembers?: Record<string, Member[]>;
   serverPermissions: string[];
 }
 
@@ -59,12 +65,17 @@ export interface VoiceState {
 export interface ServerInfo {
   name: string;
   serverId: string;
+  identityAuthentication?: boolean;
+  identityEnrollment?: boolean;
+  channelBackgrounds?: boolean;
+  serverAdministration?: boolean;
+  passwordRequired?: boolean;
   registration: "open" | "invitation" | "admin" | "disabled";
   setupRequired: boolean;
   version: string;
 }
 
-interface RelayResponse {
+export interface RelayResponse {
   status: number;
   body: unknown;
 }
@@ -97,6 +108,7 @@ export function watchVoice(onState: (state: VoiceState) => void) {
 export function apiFor(origin: string) {
   const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
+    if (!nativeApp()) return browserSession.fetch(request);
     const url = new URL(request.url);
     const body = request.body ? (await request.json() as unknown) : null;
     const result = await call<RelayResponse>("api_fetch", {

@@ -42,7 +42,20 @@ async function rpc<T>(type: string, payload: unknown = {}): Promise<T> {
 }
 
 export async function initialize(name: string) {
-  auth = await api<Account>("auth/register", { displayName: name, deviceName: "Test browser" });
+  const key = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+  const publicKey = (await crypto.subtle.exportKey("jwk", key.publicKey)).x!;
+  const deviceName = "Test browser";
+  const operation = "register";
+  const origin = location.origin;
+  const { id, serverId, binding, expiresAt } = await api<{ id: string; serverId: string; binding: string; expiresAt: number }>(
+    "auth/identity/challenge", { operation, publicKey, deviceName, origin },
+  );
+  const transcript = new TextEncoder().encode(JSON.stringify(
+    ["korero-identity-v1", serverId, origin, operation, id, publicKey, binding, deviceName, expiresAt],
+  ));
+  const signed = new Uint8Array(await crypto.subtle.sign("Ed25519", key.privateKey, transcript));
+  const signature = btoa(String.fromCharCode(...signed)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+  auth = await api<Account>("auth/register", { displayName: name, deviceName, identity: { id, signature } });
   const { ticket } = await api<{ ticket: string }>("auth/connection-ticket", {}, auth.accessToken);
   socket = new WebSocket("wss://" + location.host + "/api/v1/ws");
   await new Promise<void>((resolve, reject) => {

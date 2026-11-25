@@ -49,13 +49,13 @@ function objectValue(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 
-export async function loadConfig(options: { file?: string; directory?: string } = {}): Promise<Config> {
+export async function loadConfig(options: { file?: string; directory?: string; source?: string } = {}): Promise<Config> {
   const hint = options.directory ?? process.env.VOICE_DATA_DIR;
   const selected = options.file ?? process.env.VOICE_CONFIG;
   const file = resolve(selected ?? resolve(hint ?? "./data", "server.toml"));
   let raw: unknown = {};
-  if (existsSync(file)) {
-    try { raw = Bun.TOML.parse(await Bun.file(file).text()); }
+  if (options.source !== undefined || existsSync(file)) {
+    try { raw = Bun.TOML.parse(options.source ?? await Bun.file(file).text()); }
     catch { throw new Error(`Invalid TOML in ${file}`); }
   } else if (selected) throw new Error(`Configuration file does not exist: ${file}`);
   if (!objectValue(raw)) throw new Error("Expected a configuration table");
@@ -69,6 +69,7 @@ export async function loadConfig(options: { file?: string; directory?: string } 
     const settings = raw[section] ?? {};
     if (!objectValue(settings)) throw new Error(`Expected [${section}] table`);
     const next: Record<string, unknown> = { ...values, ...settings };
+    if (section === "server" && next.registration === "closed") next.registration = "disabled";
     for (const [key, value] of Object.entries(values)) {
       const env = process.env[`VOICE_${section.toUpperCase()}_${key.toUpperCase()}`];
       if (env === undefined) continue;

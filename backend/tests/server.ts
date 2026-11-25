@@ -2,13 +2,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { checkServerIdentity } from "node:tls";
-import { X509Certificate } from "node:crypto";
+import { generateKeyPairSync, sign, X509Certificate } from "node:crypto";
 import { endpoint } from "../src/config";
 import { fingerprint } from "../src/security/tls";
 
 export type Device = {
   account: { id: string; displayName: string; role: string };
-  recoveryCode: string;
   sessionId: string;
   accessToken: string;
   refreshToken: string;
@@ -22,6 +21,7 @@ export type Snapshot = {
 type Failure = { status: number; payload: { error: { code: string; message: string } } };
 type Event = { type: string; payload: Record<string, unknown> };
 const cli = resolve(import.meta.dir, "../src/index.ts");
+export const testIdentity = () => generateKeyPairSync("ed25519");
 
 function freePort() {
   const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
@@ -50,10 +50,10 @@ export function trusted(ca: string, expected = fingerprint(ca)) {
 }
 
 export async function fixture(options: {
-  host?: string; ip?: string; environment?: Record<string, string>; binary?: string; directory?: string; cleanup?: boolean; dockerImage?: string;
+  host?: string; ip?: string; port?: number; environment?: Record<string, string>; binary?: string; directory?: string; cleanup?: boolean; dockerImage?: string;
 } = {}) {
   const directory = options.directory ?? await mkdtemp(join(tmpdir(), "voice-test-"));
-  const port = freePort();
+  const port = options.port ?? freePort();
   let mediaPort = freePort();
   while (port === mediaPort) mediaPort = freePort();
   const ip = options.ip ?? "127.0.0.1";
@@ -112,9 +112,27 @@ export async function fixture(options: {
         headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...(access ? { authorization: `Bearer ${access}` } : {}) } });
       return { response, payload: await response.json() as T };
     }
-    return { directory, port, mediaPort, origin, ca, tls, command, defaultEnv, setupToken, stop, cleanup, call,
-      async register(name: string) { return (await call<Device>("/api/v1/auth/register", { displayName: name, deviceName: "Test" })).payload; },
-      async owner() { return (await call<Device>("/api/v1/admin/bootstrap", { displayName: "Owner", deviceName: "Test", token: setupToken })).payload; },
+    async function proof(operation: "login" | "register" | "bootstrap", identity: ReturnType<typeof testIdentity>, deviceName = "Test") {
+      const publicKey = identity.publicKey.export({ format: "jwk" }).x!;
+      const { response, payload } = await call<{ id: string; serverId: string; binding: string; expiresAt: number }>(
+        "/api/v1/auth/identity/challenge", { operation, publicKey, deviceName, origin },
+      );
+      if (!response.ok) throw new Error("Could not obtain an identity challenge");
+      const { id, serverId, binding, expiresAt } = payload;
+      const transcript = ["korero-identity-v1", serverId, origin, operation, id, publicKey, binding, deviceName, expiresAt];
+      return { id, signature: sign(null, Buffer.from(JSON.stringify(transcript)), identity.privateKey).toString("base64url") };
+    }
+    return { directory, port, mediaPort, origin, ca, tls, command, defaultEnv, setupToken, stop, cleanup, call, proof,
+      async register(name: string, identity = testIdentity()) {
+        return (await call<Device>("/api/v1/auth/register", {
+          displayName: name, deviceName: "Test", identity: await proof("register", identity),
+        })).payload;
+      },
+      async owner(identity = testIdentity()) {
+        return (await call<Device>("/api/v1/admin/bootstrap", {
+          displayName: "Owner", deviceName: "Test", token: setupToken, identity: await proof("bootstrap", identity),
+        })).payload;
+      },
       async ws(device: Device) {
         const { payload } = await call<{ ticket: string }>("/api/v1/auth/connection-ticket", {}, device.accessToken);
         const socket = await openSocket(origin, tls);

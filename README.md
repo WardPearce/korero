@@ -1,15 +1,33 @@
 # Kōrero
 
 A self-hosted, voice-first server with direct-IP HTTPS and WebSocket signalling, an Opus SFU,
-recovery-code accounts, persistent device sessions, hierarchical channels, moderation, and basic text.
+public-key accounts, persistent device sessions, hierarchical channels, moderation, and basic text.
 The [v1 protocol](docs/protocol.md) is open to independent clients. The Bun/Elysia server lives in
-[`backend/`](backend/). The Svelte and Tauri desktop client lives in [`frontend/`](frontend/).
+[`backend/`](backend/). The SvelteKit and Tauri desktop client lives in [`frontend/`](frontend/).
 
 ## Develop the desktop client
 
 Prepare the native media SDK and launch Tauri on Linux x86_64. See the
 [client build guide](docs/frontend-architecture.md) for prerequisites, certificate setup,
 and the native audio test.
+
+## Manage a server
+
+Right-click a connected server and choose **Server administration** to assign
+built-in roles, issue invitations, set a shared sign-in password, or edit its
+active configuration file. The first owner claims the server with its setup
+token. Regular sign-in uses your Kōrero identity and follows the server’s
+registration policy. Right-click a channel to edit it, including its password,
+or right-click a server to remove it from your device.
+
+Start the server with `--config ./server.toml` from `backend/` to manage that
+file specifically. Saved TOML changes apply after a restart. Environment
+overrides take precedence. Change the storage directory on the host.
+
+To use administration in a browser, serve the frontend over HTTPS or localhost,
+add the frontend’s origin to `server.origins`, and use a server certificate
+trusted by the browser. You can import an existing Kōrero identity backup.
+Voice uses the desktop app.
 
 ## Run a standalone build
 

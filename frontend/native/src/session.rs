@@ -98,8 +98,9 @@ pub enum Action {
         muted: Option<bool>,
         deafened: Option<bool>,
     },
+    ReloadAudio,
     SendMessage(String),
-    CreateChannel(String),
+    SaveChannel(Value),
     Disconnect,
 }
 
@@ -338,6 +339,15 @@ impl Active {
                 self.reset_room().await;
             }
             Action::Presence { muted, deafened } => self.presence(muted, deafened).await?,
+            Action::ReloadAudio => {
+                if let Some(voice) = self.voice.take() {
+                    voice.stop().await;
+                }
+                self.reconcile_voice().await;
+                if let Some(error) = &self.view.voice_error {
+                    bail!("{error}");
+                }
+            }
             Action::SendMessage(text) => {
                 let channel = self.view.snapshot["channelId"]
                     .as_str()
@@ -350,12 +360,13 @@ impl Active {
                     )
                     .await?;
             }
-            Action::CreateChannel(name) => {
-                let reply = self
-                    .connection
-                    .wire
-                    .rpc("channel.create", json!({ "name": name }))
-                    .await?;
+            Action::SaveChannel(payload) => {
+                let operation = if payload["channelId"].is_string() {
+                    "channel.edit"
+                } else {
+                    "channel.create"
+                };
+                let reply = self.connection.wire.rpc(operation, payload).await?;
                 self.view.snapshot = reply["state"].clone();
             }
             Action::Disconnect => unreachable!(),
@@ -508,6 +519,30 @@ impl Active {
             || payload["channelId"] == self.view.snapshot["channelId"];
         match event["type"].as_str().unwrap_or_default() {
             "state.invalidated" | "presence.changed" | "presence.offline" => self.resync().await?,
+            "channel.member" | "channel.voiceActivity" => {
+                if let Some(channel) = payload["channelId"].as_str() {
+                    let visible = self.view.snapshot["channels"].as_array().is_some_and(|channels|
+                        channels.iter().any(|entry| entry["id"] == channel));
+                    if visible {
+                        if let Some(tree) = self.view.snapshot["channelMembers"].as_object_mut() {
+                            let members = tree.entry(channel).or_insert_with(|| json!([]));
+                            if let Some(members) = members.as_array_mut() {
+                                let id = &payload["connectionId"];
+                                if event["type"] == "channel.voiceActivity" {
+                                    if let Some(member) = members.iter_mut().find(|member| member["connectionId"] == *id) {
+                                        member["speaking"] = payload["speaking"].clone();
+                                    }
+                                } else {
+                                    members.retain(|member| member["connectionId"] != *id);
+                                    if payload["left"] != true {
+                                        members.push(payload.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             "channel.changed" => {
                 self.resync().await?;
                 *desired = self.view.snapshot["channelId"].as_str().map(|id| Join {

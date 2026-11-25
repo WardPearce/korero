@@ -1,10 +1,11 @@
-import { and, desc, eq, gte, inArray, lt, or } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, lt, or } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
-import type { Config } from "../config";
+import { loadConfig, type Config } from "../config";
+import { atomicWrite } from "../security/files";
 import { audit, LOBBY, roles, type Permission, type Role, type Store } from "../database";
 import { accounts, accountRoles, auditEvents, bans, channelOverrides, channels, messages, rolePermissions, settings, speakingRestrictions } from "../database/schema";
 import { decode, type Request } from "../protocol";
-import { errorResponse, fail, RateLimit } from "../security/errors";
+import { errorResponse, fail, ProtocolError, RateLimit } from "../security/errors";
 import { Auth, isBanned, type Account, type Session } from "./auth";
 import { Media } from "./media";
 
@@ -18,6 +19,12 @@ type ChannelChange = Extract<Request, { type: "channel.edit" | "channel.create" 
 const rank = (role: Role) => roles.indexOf(role);
 const replyWindow = 16;
 const replayByteLimit = 262144;
+
+function channelBackgroundUrl(value: string) {
+  const url = URL.parse(value);
+  if (!url || url.protocol !== "https:" || url.username || url.password || url.href.length > 512) fail("INVALID_REQUEST");
+  return url.href;
+}
 
 export class Realtime {
   private readonly peers = new Map<string, Peer>();
@@ -36,6 +43,7 @@ export class Realtime {
   private tick = 0;
   private pending = 0;
   private passwordWork = 0;
+  private savingConfiguration = false;
 
   constructor(private readonly db: Store, private readonly auth: Auth, private readonly media: Media, private readonly config: Config) {
     db.delete(channels).where(eq(channels.temporary, true)).run();
@@ -60,7 +68,10 @@ export class Realtime {
       for (const peer of this.peers.values()) if (peer.session && ids.has(peer.session.id)) this.disconnect(peer, 4401, "Session revoked");
     };
     auth.onAccountChanged = (id) => this.accountChanged(id);
-    media.event = (channelId, type, payload) => this.broadcast(this.memberships.get(channelId), type, payload);
+    media.event = (channelId, type, payload) => {
+      if (type === "channel.voiceActivity") this.broadcastVisible(channelId, type, payload);
+      else this.broadcast(this.memberships.get(channelId), type, payload);
+    };
     media.peerEvent = (peerId, type, payload) => {
       const peer = this.connected.get(peerId);
       if (peer) this.event(peer, type, payload);
@@ -96,9 +107,9 @@ export class Realtime {
       this.connected.delete(peer.id);
       const group = this.online.get(peer.account.id)!;
       group.delete(peer);
+      if (!group.size) this.online.delete(peer.account.id);
       this.leave(peer);
       if (!group.size) {
-        this.online.delete(peer.account.id);
         this.broadcastAll("presence.offline", { accountId: peer.account.id });
       } else this.presenceAccount(peer.account.id);
     } else this.pending--;
@@ -182,6 +193,22 @@ export class Realtime {
     const text = JSON.stringify({ version: 1, type, payload });
     for (const peer of [...peers]) if (peer !== except) this.send(peer, text);
   }
+  private broadcastVisible(channelId: string, type: string, payload: unknown) {
+    const channel = this.catalog.get(channelId);
+    if (!channel) return;
+    for (const peers of this.online.values()) {
+      if (this.allowed(peers.values().next().value!.account!, "join", channel)) this.broadcast(peers, type, payload);
+    }
+  }
+  private treeMember(peer: Peer, channelId: string) {
+    return { ...this.member(peer), speaking: this.media.isSpeaking(channelId, peer.id) };
+  }
+  private memberChanged(peer: Peer) {
+    if (!peer.channelId) return;
+    const channelId = peer.channelId;
+    this.broadcast(this.memberships.get(channelId), "channel.userChanged", { channelId, ...this.member(peer) });
+    this.broadcastVisible(channelId, "channel.member", { channelId, ...this.treeMember(peer, channelId) });
+  }
   private broadcastAll(type: string, payload: unknown) {
     this.broadcast([...this.online.values()].flatMap((set) => [...set]), type, payload);
   }
@@ -199,8 +226,7 @@ export class Realtime {
     for (const peer of [...peers]) {
       peer.account = account;
       this.recheck(peer);
-      if (peer.channelId) this.broadcast(this.memberships.get(peer.channelId), "channel.userChanged",
-        { channelId: peer.channelId, ...this.member(peer) });
+      this.memberChanged(peer);
     }
     this.presenceAccount(id);
     this.broadcast(peers, "state.invalidated", {});
@@ -229,6 +255,72 @@ export class Realtime {
   private require(account: Account, permission: Permission, channel?: Channel) {
     if (!this.allowed(account, permission, channel)) fail("FORBIDDEN");
   }
+  authorize(accountId: string, permission: Permission) {
+    const account = this.auth.account(accountId);
+    this.require(account, permission);
+    return account;
+  }
+  listAccounts(accountId: string, after?: string) {
+    const actor = this.authorize(accountId, "manageRoles");
+    const rows = this.db.select({ id: accounts.id, displayName: accounts.displayName, role: accountRoles.role })
+      .from(accounts).innerJoin(accountRoles, eq(accounts.id, accountRoles.accountId))
+      .where(after ? gt(accounts.id, after) : undefined).orderBy(accounts.id).limit(51).all();
+    const accountsPage = rows.slice(0, 50).map((account) => ({
+      ...account, editable: account.id !== actor.id && rank(account.role as Role) < rank(actor.role),
+    }));
+    return { accounts: accountsPage, next: rows.length > 50 ? accountsPage.at(-1)!.id : null, roles: roles.slice(0, rank(actor.role)) };
+  }
+  setRole(actor: Account, accountId: string, role: Role) {
+    this.require(actor, "manageRoles");
+    const target = this.auth.account(accountId);
+    this.subordinate(actor, target);
+    if (rank(role) >= rank(actor.role)) fail("FORBIDDEN");
+    if (target.role === role) return;
+    this.db.transaction((tx) => {
+      tx.update(accountRoles).set({ role }).where(eq(accountRoles.accountId, accountId)).run();
+      audit(tx, actor.id, "role.changed", accountId);
+    }, { behavior: "immediate" });
+    this.accountChanged(accountId);
+  }
+  async configuration(authorize: () => Account) {
+    authorize();
+    const file = Bun.file(this.config.file);
+    if (file.size > 65536) throw new ProtocolError("LIMIT", "The configuration file is too large to edit here.");
+    const toml = await file.text();
+    authorize();
+    return {
+      toml, revision: createHash("sha256").update(toml).digest("hex"),
+      overrides: ["name", "registration"].filter((key) => this.db.select().from(settings).where(eq(settings.key, key)).get()),
+    };
+  }
+  async saveConfiguration(authorize: () => Account, toml: string, revision: string) {
+    authorize();
+    if (this.savingConfiguration) fail("CONFLICT");
+    this.savingConfiguration = true;
+    try {
+      const previous = await this.configuration(authorize);
+      if (previous.revision !== revision) throw new ProtocolError("CONFLICT", "The file changed. Reload it before saving.");
+      if (previous.toml === toml) return previous;
+      try {
+        const old = Bun.TOML.parse(previous.toml) as { storage?: { directory?: string } };
+        const next = Bun.TOML.parse(toml) as typeof old;
+        if (old.storage?.directory !== next.storage?.directory) {
+          throw new Error("Change storage.directory on the host.");
+        }
+        await loadConfig({ file: this.config.file, directory: this.config.directory, source: toml });
+      } catch (error) {
+        const message = error instanceof SyntaxError ? "Invalid TOML." : (error as Error).message;
+        throw new ProtocolError("INVALID_REQUEST", message);
+      }
+      const actor = authorize();
+      await atomicWrite(this.config.file, toml);
+      this.db.transaction((tx) => {
+        tx.delete(settings).where(inArray(settings.key, ["name", "registration"])).run();
+        audit(tx, actor.id, "server.configuration_changed", null);
+      }, { behavior: "immediate" });
+      return { toml, revision: createHash("sha256").update(toml).digest("hex"), overrides: [] };
+    } finally { this.savingConfiguration = false; }
+  }
   private subordinate(actor: Account, target: Account) {
     if (target.id === actor.id || rank(actor.role) <= rank(target.role)) fail("FORBIDDEN");
   }
@@ -247,13 +339,19 @@ export class Realtime {
     const visibleIds = new Set(visible.map(({ id }) => id));
     return { connectionId: peer.id, account, channelId: peer.channelId,
       channels: visible.sort((a, b) => a.position - b.position || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)).map(
-        ({ id, name, parentId, description, position, capacity, temporary, passwordHash }) =>
-          ({ id, name, parentId: parentId && visibleIds.has(parentId) ? parentId : null, description, position, capacity, temporary, passwordRequired: !!passwordHash })),
+        (channel) => {
+          const { id, name, parentId, description, position, capacity, temporary, passwordHash, backgroundImageUrl } = channel;
+          return { id, name, parentId: parentId && visibleIds.has(parentId) ? parentId : null, description, position, capacity,
+            temporary, passwordRequired: !!passwordHash, backgroundImageUrl, canEdit: this.allowed(account, "editChannels", channel),
+            canSetPassword: id !== LOBBY && this.allowed(account, "editChannels", channel) };
+        }),
       presence: [...this.online.values()].map((connections) => {
         const { id, displayName } = connections.values().next().value!.account!;
         return { accountId: id, displayName, connections: connections.size };
       }),
       members: peer.channelId ? [...(this.memberships.get(peer.channelId) ?? [])].map((member) => this.member(member)) : [],
+      channelMembers: Object.fromEntries(visible.filter(({ id }) => this.memberships.has(id)).map(({ id }) =>
+        [id, [...this.memberships.get(id)!].map((member) => this.treeMember(member, id))])),
       serverPermissions: [...this.roleGrants.get(account.role) ?? []],
     };
   }
@@ -264,6 +362,7 @@ export class Realtime {
     peer.membershipEpoch++;
     const members = this.memberships.get(channelId);
     members?.delete(peer);
+    this.broadcastVisible(channelId, "channel.member", { channelId, connectionId: peer.id, left: true });
     this.media.detach(peer.id);
     this.broadcast(members, "channel.userLeft", { channelId, connectionId: peer.id, accountId: peer.account!.id });
     if (!members?.size) {
@@ -282,6 +381,7 @@ export class Realtime {
     peer.membershipEpoch++;
     members.add(peer);
     this.memberships.set(channel.id, members);
+    this.broadcastVisible(channel.id, "channel.member", { channelId: channel.id, ...this.treeMember(peer, channel.id) });
     this.broadcast(members, "channel.userJoined", { channelId: channel.id, ...this.member(peer) }, peer);
   }
   private recheck(peer: Peer) {
@@ -349,13 +449,15 @@ export class Realtime {
       return { actor, parentId };
     };
     authorize();
+    const image = payload.backgroundImageUrl;
+    const backgroundImageUrl = image === undefined ? current?.backgroundImageUrl ?? null : image === null ? null : channelBackgroundUrl(image);
     const passwordHash = payload.password === undefined ? current?.passwordHash ?? null : payload.password === null ? null :
       await this.password(() => Bun.password.hash(payload.password!, { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 }));
     const { actor, parentId } = authorize();
     const channel = {
       id, parentId, name: payload.name?.trim() ?? current!.name, description: payload.description ?? current?.description ?? "",
       position: payload.position ?? current?.position ?? 0, capacity: payload.capacity !== undefined ? payload.capacity : current?.capacity ?? null,
-      temporary: "temporary" in payload ? !!payload.temporary : current?.temporary ?? false, passwordHash,
+      temporary: "temporary" in payload ? !!payload.temporary : current?.temporary ?? false, passwordHash, backgroundImageUrl,
     };
     this.db.transaction((tx) => {
       tx.insert(channels).values(channel).onConflictDoUpdate({ target: channels.id, set: channel }).run();
@@ -495,20 +597,11 @@ export class Realtime {
         peer.deafened = request.payload.deafened ?? peer.deafened;
         if (peer.muted || peer.deafened) this.media.stopSending(peer.id);
         if (peer.deafened) this.media.stopReceiving(peer.id);
-        if (peer.channelId) this.broadcast(this.memberships.get(peer.channelId), "channel.userChanged", { channelId: peer.channelId, ...this.member(peer) });
+        this.memberChanged(peer);
         return this.member(peer);
       }
       case "role.set": {
-        this.require(actor, "manageRoles");
-        const { accountId, role } = request.payload;
-        const target = this.auth.account(accountId);
-        this.subordinate(actor, target);
-        if (rank(role) >= rank(actor.role)) fail("FORBIDDEN");
-        this.db.transaction((tx) => {
-          tx.update(accountRoles).set({ role }).where(eq(accountRoles.accountId, accountId)).run();
-          audit(tx, actor.id, "role.changed", accountId);
-        }, { behavior: "immediate" });
-        this.accountChanged(accountId);
+        this.setRole(actor, request.payload.accountId, request.payload.role);
         break;
       }
       case "channel.override": {
@@ -549,8 +642,7 @@ export class Realtime {
         for (const connection of [...(this.online.get(accountId) ?? [])]) {
           connection.adminMuted = muted;
           if (muted) this.media.stopSending(connection.id);
-          if (connection.channelId) this.broadcast(this.memberships.get(connection.channelId), "channel.userChanged",
-            { channelId: connection.channelId, ...this.member(connection) });
+          this.memberChanged(connection);
         }
         break;
       }
