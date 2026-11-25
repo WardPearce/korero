@@ -1,0 +1,72 @@
+import { sql } from "drizzle-orm";
+import { type AnySQLiteColumn, check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+
+export const metadata = sqliteTable("metadata", { key: text().primaryKey(), value: text().notNull() });
+export const settings = sqliteTable("settings", { key: text().primaryKey(), value: text().notNull() });
+export const rolesTable = sqliteTable("roles", { name: text().primaryKey(), rank: integer().notNull().unique() });
+export const permissionsTable = sqliteTable("permissions", { name: text().primaryKey() });
+export const rolePermissions = sqliteTable("role_permissions", {
+  role: text().notNull().references(() => rolesTable.name),
+  permission: text().notNull().references(() => permissionsTable.name),
+}, (table) => [primaryKey({ columns: [table.role, table.permission] })]);
+export const accounts = sqliteTable("accounts", {
+  id: text().primaryKey(), displayName: text("display_name").notNull(), createdAt: integer("created_at").notNull(),
+});
+export const accountRoles = sqliteTable("account_roles", {
+  accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
+  role: text().notNull().references(() => rolesTable.name),
+}, (table) => [index("account_roles_role").on(table.role)]);
+export const recoveryCredentials = sqliteTable("recovery_credentials", {
+  accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
+  digest: text().unique().notNull(),
+});
+export const sessions = sqliteTable("sessions", {
+  id: text().primaryKey(), accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  deviceName: text("device_name").notNull(), createdAt: integer("created_at").notNull(), lastActive: integer("last_active").notNull(),
+  expiresAt: integer("expires_at").notNull(), accessDigest: text("access_digest").unique().notNull(), accessExpires: integer("access_expires").notNull(),
+  refreshDigest: text("refresh_digest").unique().notNull(), revokedAt: integer("revoked_at"),
+}, (table) => [index("sessions_account").on(table.accountId, table.revokedAt), index("sessions_expiry").on(table.expiresAt)]);
+export const refreshHistory = sqliteTable("refresh_history", {
+  digest: text().primaryKey(), sessionId: text("session_id").notNull().references(() => sessions.id, { onDelete: "cascade" }),
+  replacedAt: integer("replaced_at").notNull(), successorDigest: text("successor_digest").notNull(),
+}, (table) => [index("refresh_history_session").on(table.sessionId)]);
+export const invitations = sqliteTable("invitations", {
+  id: text().primaryKey(), digest: text().unique().notNull(), createdBy: text("created_by").notNull().references(() => accounts.id),
+  expiresAt: integer("expires_at"), usesLeft: integer("uses_left"), revokedAt: integer("revoked_at"),
+  adminOnly: integer("admin_only", { mode: "boolean" }).notNull().default(false),
+});
+export const setup = sqliteTable("setup", {
+  id: integer().primaryKey(), digest: text().notNull(), expiresAt: integer("expires_at").notNull(),
+}, (table) => [check("setup_singleton", sql`${table.id} = 1`)]);
+export const channels = sqliteTable("channels", {
+  id: text().primaryKey(), parentId: text("parent_id").references((): AnySQLiteColumn => channels.id),
+  name: text().notNull(), description: text().notNull().default(""), position: integer().notNull().default(0), capacity: integer(),
+  temporary: integer({ mode: "boolean" }).notNull().default(false), passwordHash: text("password_hash"),
+}, (table) => [index("channels_parent").on(table.parentId, table.position)]);
+export const channelOverrides = sqliteTable("channel_overrides", {
+  channelId: text("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
+  role: text().notNull().references(() => rolesTable.name), permission: text().notNull().references(() => permissionsTable.name),
+  allow: integer({ mode: "boolean" }).notNull(),
+}, (table) => [primaryKey({ columns: [table.channelId, table.role, table.permission] }), check("override_allow", sql`${table.allow} IN (0,1)`)]);
+export const bans = sqliteTable("bans", {
+  accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
+  actorId: text("actor_id").notNull().references(() => accounts.id), expiresAt: integer("expires_at"),
+});
+export const messages = sqliteTable("messages", {
+  id: text().primaryKey(), channelId: text("channel_id").references(() => channels.id, { onDelete: "cascade" }),
+  senderId: text("sender_id").notNull().references(() => accounts.id), recipientId: text("recipient_id").references(() => accounts.id),
+  text: text().notNull(), createdAt: integer("created_at").notNull(),
+}, (table) => [
+  check("message_destination", sql`(${table.channelId} IS NULL) != (${table.recipientId} IS NULL)`),
+  index("messages_channel").on(table.channelId, table.createdAt, table.id),
+  index("messages_direct").on(table.senderId, table.recipientId, table.createdAt, table.id),
+  index("messages_retention").on(table.createdAt),
+]);
+export const auditEvents = sqliteTable("audit", {
+  id: integer().primaryKey(), actorId: text("actor_id").references(() => accounts.id), action: text().notNull(),
+  targetId: text("target_id"), createdAt: integer("created_at").notNull(),
+});
+export const speakingRestrictions = sqliteTable("speaking_restrictions", {
+  accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
+  actorId: text("actor_id").notNull().references(() => accounts.id),
+});

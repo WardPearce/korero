@@ -1,0 +1,59 @@
+[server]
+name = "Voice Server"
+host = "::"
+port = 8443
+registration = "open"
+max_users = 128
+origins = []
+public_addresses = []
+trusted_proxies = []
+
+[tls]
+mode = "self-signed"
+# certificate = "/etc/voice/server.crt"
+# private_key = "/etc/voice/server.key"
+names = []
+
+[media]
+# Empty means enumerate concrete interface addresses for direct LAN use.
+listen_ips = []
+# Alternatively set listen = [{ ip = "192.168.1.100" }, { ip = "192.168.1.101", announced_address = "203.0.113.10" }]
+announced_address = ""
+announced_ipv6 = ""
+port = 8444
+workers = 1
+target_audio_bitrate = 48000
+enable_udp = true
+enable_tcp = true
+ice_servers = []
+
+[authentication]
+access_seconds = 900
+refresh_seconds = 7776000
+setup_seconds = 900
+ticket_seconds = 20
+refresh_retry_seconds = 10
+max_sessions = 32
+
+[limits]
+connections_per_account = 4
+pending_connections = 32
+transports = 2
+producers = 1
+consumers = 128
+users_per_channel = 32
+max_channels = 1024
+websocket_bytes = 65536
+websocket_pending = 16
+websocket_requests_per_minute = 1200
+media_per_minute = 360
+ice_restarts_per_minute = 6
+auth_per_minute = 30
+registration_per_minute = 12
+upgrades_per_minute = 60
+
+[messaging]
+persistence = false
+retention_hours = 24
+max_length = 2000
+per_minute = 20
