@@ -4,6 +4,7 @@ import { fingerprint } from "../../src/security/tls";
 import type { harness } from "./browser";
 
 declare global { interface Window { harness: typeof harness } }
+type VoicePresence = { afk: boolean; afkMessage: string; muted: boolean; deafened: boolean };
 
 const args = process.argv.slice(2);
 const dockerImage = process.env.VOICE_TEST_DOCKER_IMAGE;
@@ -56,6 +57,36 @@ try {
     await moderator.rpc("moderation.mute", { connectionId: aliceIdentity.connectionId, muted: true });
     await until(() => bob.evaluate(() => window.harness.events().some(({ type }) => type === "media.producerClosed")), Boolean);
     await moderator.rpc("moderation.mute", { connectionId: aliceIdentity.connectionId, muted: false });
+    await alice.evaluate(async () => {
+      await window.harness.rpc("channel.leave");
+      await window.harness.join();
+    });
+    const awayProducer = await alice.evaluate((tcp) => window.harness.publish(tcp), forceTcp);
+    const bobProducer = await bob.evaluate((tcp) => window.harness.publish(tcp), forceTcp);
+    const aliceAudio = await alice.evaluate(({ bobProducer, forceTcp }) => window.harness.consume(bobProducer, forceTcp), { bobProducer, forceTcp });
+    const away = await alice.evaluate(() => window.harness.rpc<VoicePresence>(
+      "presence.set", { afk: true, afkMessage: "  Back in five  " }));
+    if (!away.afk || !away.muted || !away.deafened || away.afkMessage !== "Back in five") throw new Error("AFK state is incomplete");
+    await until(() => bob.evaluate((id) => window.harness.events().some(({ type, payload }) =>
+      type === "channel.member" && payload.connectionId === id && payload.afk === true && payload.afkMessage === "Back in five"),
+    aliceIdentity.connectionId), Boolean);
+    const afterAfk = await moderator.rpc<{ producers: number; consumers: number }>("admin.diagnostics");
+    if (afterAfk.producers !== 1 || afterAfk.consumers !== 0) throw new Error("AFK left active audio resources");
+    const blockedWhileAfk = await alice.evaluate(async ({ producerId, consumerId }) => {
+      const resume = (kind: string, payload: object) => window.harness.rpc(kind, payload)
+        .then(() => "unexpected success", (error: Error) => error.message);
+      return Promise.all([
+        resume("media.producer.resume", { producerId }),
+        resume("media.consumer.resume", { consumerId }),
+      ]);
+    }, { producerId: awayProducer, consumerId: aliceAudio.consumerId });
+    if (blockedWhileAfk.some((error) => error !== "FORBIDDEN")) throw new Error("AFK allowed a media request");
+    const returned = await alice.evaluate(async () => {
+      await window.harness.rpc("presence.set", { muted: true });
+      return window.harness.rpc<VoicePresence>("presence.set", { afk: false });
+    });
+    if (returned.afk || !returned.muted || returned.deafened || returned.afkMessage) throw new Error("Returning from AFK did not restore self-mute");
+    await alice.evaluate(() => window.harness.rpc("presence.set", { muted: false }));
     await alice.evaluate((channelId) => window.harness.join(channelId), channelId);
     const secondProducer = await alice.evaluate((tcp) => window.harness.publish(tcp), forceTcp);
     const denied = await bob.evaluate(({ secondProducer, forceTcp }) =>
@@ -84,7 +115,7 @@ try {
     if (final.producers || final.consumers) throw new Error("Media resources survived session revocation");
     console.log(`Authenticated ${dockerImage ? "Docker" : binary ? "standalone" : "source"} Opus over ${measured.protocol!.toUpperCase()} at ${ip}`,
       { peak: measured.peak, codec: measured.codec, packets: measured.packets },
-      "Verified mute, cross-channel isolation, channel switching and revocation.");
+      "Verified mute, AFK, cross-channel isolation, channel switching and revocation.");
     moderator.close();
   } finally { await browser.close(); }
 } finally { await server.cleanup(); }

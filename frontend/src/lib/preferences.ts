@@ -36,6 +36,17 @@ class Preferences extends Dexie {
 
 export const preferences = new Preferences();
 
+export async function getMemberVolumes(serverId: string) {
+  const { value } = await preferences.local.get(`member-volumes:${serverId}`) ?? {};
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(Object.entries(value).filter(([, level]) =>
+    typeof level === "number" && Number.isInteger(level) && level >= 0 && level < 100));
+}
+
+export async function saveMemberVolumes(serverId: string, value: Record<string, number>) {
+  await preferences.local.put({ key: `member-volumes:${serverId}`, value });
+}
+
 export async function getUsername() {
   const stored = await preferences.local.get("username");
   return typeof stored?.value === "string" ? stored.value : "";

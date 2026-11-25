@@ -28,7 +28,7 @@ export function fingerprint(pem: string) {
 }
 
 export async function identity(config: Config, rotate = false) {
-  if (config.tls.mode === "proxy" || config.tls.mode === "disabled") return null;
+  if (config.tls.mode === "proxy") return null;
   if (config.tls.mode === "manual") {
     const cert = await Bun.file(config.tls.certificate).text();
     const key = (await readPrivate(config.tls.private_key)).toString();

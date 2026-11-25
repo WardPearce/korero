@@ -7,6 +7,8 @@ max_users = 128
 origins = []
 public_addresses = []
 trusted_proxies = []
+# Optional shared password required for new sign-ins/registrations. Leave empty to disable.
+password = ""
 
 [tls]
 mode = "self-signed"

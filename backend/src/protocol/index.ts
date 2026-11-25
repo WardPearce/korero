@@ -1,5 +1,5 @@
 import { getSchemaValidator, t } from "elysia";
-import { channelPermissions, roles } from "../database";
+import { channelPermissions, permissions } from "../database";
 import { fail } from "../security/errors";
 
 const object = <P extends Parameters<typeof t.Object>[0]>(properties: P) => t.Object(properties, { additionalProperties: false });
@@ -13,6 +13,7 @@ export const id = t.String({ pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f
 export const token = t.String({ pattern: "^[A-Za-z0-9_-]{43}$" });
 const displayName = t.String({ minLength: 1, maxLength: 80, pattern: "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$" });
 const deviceName = displayName;
+const roleName = t.String({ minLength: 1, maxLength: 80, pattern: "^(?=.*\\S)[^/\\u0000-\\u001f\\u007f]+$" });
 const requestId = int(1, Number.MAX_SAFE_INTEGER);
 const identityProof = { id: token, signature: t.String({ pattern: "^[A-Za-z0-9_-]{86}$" }) };
 const enrollmentProof = object(identityProof);
@@ -27,6 +28,9 @@ export const httpBodies = {
   account: object({ displayName }),
   serverPassword: object({ password: nullable(password) }),
   serverConfiguration: object({ toml: text(65536, 0), revision: t.String({ pattern: "^[a-f0-9]{64}$" }) }),
+  roleDefinition: object({ name: roleName, permissions: list(t.UnionEnum([...permissions]), permissions.length) }),
+  channelOrder: object({ channelId: id, targetId: id, placement: t.UnionEnum(["before", "after"]) }),
+  serverBanner: object({ bannerImageUrl: nullable(text(512)) }),
 };
 
 const codecParameters = optional(t.Record(t.String({ pattern: "^(?!constructor$|prototype$|__proto__$)[a-zA-Z0-9_-]{1,64}$" }),
@@ -88,14 +92,17 @@ export const payloads = {
   "channel.join": object({ channelId: id, password: optional(text(128)) }),
   "channel.leave": empty,
   "channel.move": object({ connectionId: id, channelId: id }),
-  "presence.set": object({ muted: optional(t.Boolean()), deafened: optional(t.Boolean()) }),
-  "role.set": object({ accountId: id, role: t.UnionEnum([...roles]) }),
-  "channel.override": object({ channelId: id, role: t.UnionEnum([...roles]), permission: t.UnionEnum([...channelPermissions]), allow: nullable(t.Boolean()) }),
+  "presence.set": object({ muted: optional(t.Boolean()), deafened: optional(t.Boolean()), afk: optional(t.Boolean()),
+    afkMessage: optional(t.String({ maxLength: 120, pattern: "^[^\\u0000-\\u001f\\u007f]*$" })) }),
+  "role.set": object({ accountId: id, role: roleName }),
+  "channel.override": object({ channelId: id, role: roleName, permission: t.UnionEnum([...channelPermissions]), allow: nullable(t.Boolean()) }),
   "moderation.mute": object({ connectionId: id, muted: t.Boolean() }),
+  "moderation.deafen": object({ connectionId: id, deafened: t.Boolean() }),
   "moderation.kick": object({ accountId: id }),
   "moderation.ban": object({ accountId: id, expiresInSeconds: optional(int(1, 31536000)) }),
   "moderation.unban": object({ accountId: id }),
-  "invitation.create": object({ expiresInSeconds: optional(int(1, 31536000)), uses: optional(int(1, 10000)) }),
+  "invitation.create": object({ expiresInSeconds: optional(int(1, 31536000)), expiresAt: optional(int(1, 8640000000000000)),
+    uses: optional(int(1, 10000)) }),
   "invitation.list": empty,
   "invitation.revoke": object({ invitationId: id }),
   "admin.diagnostics": empty,

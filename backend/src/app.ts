@@ -73,7 +73,8 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
     })
     .get("/api/v1/server/info", () => ({ ...info, name: config.server.name, version: serverVersion, protocolVersions: [version],
       registration: config.server.registration, setupRequired: !auth.hasOwner(), identityAuthentication: true,
-      identityEnrollment: true, channelBackgrounds: true, serverAdministration: true, passwordRequired: auth.passwordRequired() }))
+      identityEnrollment: true, channelBackgrounds: true, serverAdministration: true, passwordRequired: auth.passwordRequired(),
+      bannerImageUrl: realtime.bannerImageUrl }))
     .get("/api/v1/server/capabilities", ({ request }) => {
       const access = request.headers.get("authorization");
       if (access) bearer(request);
@@ -135,8 +136,16 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
       realtime.setRole(auth.account(bearer(request).accountId), body.accountId, body.role);
       return { role: body.role };
     }, { body: payloads["role.set"] })
-    .post("/api/v1/admin/invitations", ({ request, body }) =>
-      auth.invitation(realtime.authorize(bearer(request).accountId, "manageInvitations"), body.expiresInSeconds, body.uses),
+    .post("/api/v1/admin/roles", ({ request, body }) =>
+      realtime.defineRole(bearer(request).accountId, body.name.trim(), body.permissions, true), { body: httpBodies.roleDefinition })
+    .patch("/api/v1/admin/roles/definition", ({ request, body }) =>
+      realtime.defineRole(bearer(request).accountId, body.name.trim(), body.permissions, false), { body: httpBodies.roleDefinition })
+    .patch("/api/v1/admin/banner", ({ request, body }) =>
+      realtime.setBanner(bearer(request).accountId, body.bannerImageUrl), { body: httpBodies.serverBanner })
+    .patch("/api/v1/channels/order", ({ request, body }) =>
+      realtime.reorderChannel(bearer(request).accountId, body.channelId, body.targetId, body.placement), { body: httpBodies.channelOrder })
+    .post("/api/v1/admin/invitations", ({ request, body: { expiresInSeconds, uses, expiresAt } }) =>
+      auth.invitation(realtime.authorize(bearer(request).accountId, "manageInvitations"), expiresInSeconds, uses, expiresAt),
       { body: payloads["invitation.create"] })
     .patch("/api/v1/admin/password", ({ request, body }) => {
       const authorize = requireSettings(request);

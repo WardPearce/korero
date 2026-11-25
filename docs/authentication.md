@@ -55,3 +55,9 @@ Moderators can create and revoke their own invitations in open and invitation-on
 registration.
 The first Owner uses a separate, 15-minute, locally displayed setup token and an atomic
 bootstrap request. The bootstrap route returns `NOT_FOUND` once an Owner exists.
+Regular identities can enroll before the owner claims the server if registration
+permits it. A valid setup token can promote an existing identity to first Owner.
+
+An Owner or Administrator can require a shared password for identity login and
+registration. The server stores its Argon2id hash. Existing sessions continue
+until they expire or are revoked.

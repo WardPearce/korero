@@ -47,6 +47,8 @@ an authenticated caller. The client implements ICE server use.
 
 ## Configuration and TLS
 
+HTTPS is always used for the voice server. Clients connect with a server IP/host (and optional port), e.g. `example.com:8443`.
+
 Start with [server.example.toml](../backend/server.example.toml). Precedence is the explicit
 CLI path or data directory, then `VOICE_CONFIG` or `VOICE_DATA_DIR`, then
 `[storage].directory` if specified in the selected TOML, then `./data`.
@@ -60,8 +62,7 @@ changed through the API.
 - `self-signed` is the default. Clients verify a public-key pin.
 - `manual` loads `tls.certificate` and an owner-only `tls.private_key`. Use PEM,
   including intermediary certificates in the certificate file when applicable.
-- `proxy` delegates TLS to the explicitly configured proxy.
-- `disabled` accepts only a loopback HTTP bind for development.
+- `proxy` delegates TLS to the explicitly configured proxy. The proxy must present TLS to clients.
 - ACME can provision the manual paths or be handled by the proxy. Built-in ACME is deferred.
 
 ```sh

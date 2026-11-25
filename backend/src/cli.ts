@@ -60,6 +60,13 @@ function applySettings(db: Store, config: Config) {
   if (registration && !process.env.VOICE_SERVER_REGISTRATION) config.server.registration = registration;
 }
 
+function applyServerPassword(db: Store, auth: Auth, config: Config) {
+  if (process.env.VOICE_SERVER_PASSWORD !== undefined) return;
+  const password = config.server.password;
+  if (!password) return;
+  auth.syncConfiguredServerPassword(password);
+}
+
 function printSetup(setup: { token: string; expiresAt: number }) {
   console.log(`First-owner setup token (expires ${new Date(setup.expiresAt).toISOString()}): ${setup.token}`);
 }
@@ -186,6 +193,7 @@ export async function cli(args: string[]) {
     const initialized = !!db.select({ id: accounts.id }).from(accounts).limit(1).get();
     const auth = new Auth(db, await loadCredentials(config.directory, initialized), config);
     applySettings(db, config);
+    applyServerPassword(db, auth, config);
     switch (options.command) {
       case "start":
         if (!existsSync(config.file)) await atomicWrite(config.file, defaultToml);

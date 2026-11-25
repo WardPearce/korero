@@ -5,7 +5,7 @@ import type { Config } from "../config";
 import { audit, type Queries, type Role, type Store } from "../database";
 import { accountIdentities, accounts, accountRoles, bans, invitations, refreshHistory, sessions, settings, setup } from "../database/schema";
 import { Credentials, equalDigest, randomToken } from "../security/credentials";
-import { fail } from "../security/errors";
+import { fail, ProtocolError } from "../security/errors";
 
 export type Account = { id: string; displayName: string; role: Role; createdAt: number };
 const { accessDigest: _, ...sessionColumns } = getTableColumns(sessions);
@@ -26,7 +26,7 @@ function getAccount(db: Queries, id: string): Account {
   const row = db.select({ id: accounts.id, displayName: accounts.displayName, createdAt: accounts.createdAt, role: accountRoles.role })
     .from(accounts).innerJoin(accountRoles, eq(accounts.id, accountRoles.accountId)).where(eq(accounts.id, id)).get();
   if (!row) fail("NOT_FOUND");
-  return { ...row, role: row.role as Role };
+  return row;
 }
 
 function hasOwner(db: Queries) {
@@ -91,6 +91,18 @@ export class Auth {
       audit(tx, actor.id, "server.password_changed", null);
     }, { behavior: "immediate" });
     return { passwordRequired: hash !== null };
+  }
+
+  syncConfiguredServerPassword(password: string) {
+    const previous = this.passwordHash();
+    if (previous && Bun.password.verifySync(password, previous)) return;
+    const hash = Bun.password.hashSync(password, { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 });
+    this.db.transaction((tx) => {
+      if (this.passwordHash() !== previous) fail("CONFLICT");
+      tx.insert(settings).values({ key: passwordKey, value: hash })
+        .onConflictDoUpdate({ target: settings.key, set: { value: hash } }).run();
+      audit(tx, null, "server.password_changed", null);
+    }, { behavior: "immediate" });
   }
 
   issueSetup(renew = false) {
@@ -354,26 +366,30 @@ export class Auth {
     return session;
   }
 
-  invitation(actor: Account, expiresInSeconds?: number, uses?: number) {
+  invitation(actor: Account, expiresInSeconds?: number, uses?: number, expiresAt?: number) {
     const adminOnly = actor.role === "Administrator" || actor.role === "Owner";
     if (this.config.server.registration === "admin" && !adminOnly) fail("FORBIDDEN");
+    const now = Date.now();
+    if (expiresAt !== undefined && (expiresInSeconds !== undefined || expiresAt <= now)) {
+      throw new ProtocolError("INVALID_REQUEST", "Choose a future expiration date.");
+    }
+    const expiration = expiresAt ?? (expiresInSeconds ? now + expiresInSeconds * 1000 : null);
     const token = randomToken();
     const id = randomUUID();
-    const expiresAt = expiresInSeconds ? Date.now() + expiresInSeconds * 1000 : null;
     this.db.transaction((tx) => {
       tx.insert(invitations).values({
         id, digest: this.credentials.digest("invitation", token), createdBy: actor.id,
-        expiresAt, usesLeft: uses ?? null, adminOnly,
+        expiresAt: expiration, usesLeft: uses ?? null, adminOnly,
       }).run();
       audit(tx, actor.id, "invitation.created", id);
     }, { behavior: "immediate" });
-    return { id, token, expiresAt, usesLeft: uses ?? null };
+    return { id, token, expiresAt: expiration, usesLeft: uses ?? null };
   }
 
   invitations(actor: Account) {
     const { id, createdBy, expiresAt, usesLeft, revokedAt } = invitations;
     return this.db.select({ id, createdBy, expiresAt, usesLeft, revokedAt }).from(invitations)
-      .where(actor.role === "Moderator" ? eq(createdBy, actor.id) : undefined)
+      .where(actor.role === "Administrator" || actor.role === "Owner" ? undefined : eq(createdBy, actor.id))
       .orderBy(desc(invitationRow.rowId)).limit(100).all();
   }
 
@@ -381,7 +397,7 @@ export class Auth {
     this.db.transaction((tx) => {
       const revoked = tx.update(invitations).set({ revokedAt: Date.now() })
         .where(and(eq(invitations.id, id), isNull(invitations.revokedAt),
-          actor.role === "Moderator" ? eq(invitations.createdBy, actor.id) : undefined)).returning({ id: invitations.id }).get();
+          actor.role === "Administrator" || actor.role === "Owner" ? undefined : eq(invitations.createdBy, actor.id))).returning({ id: invitations.id }).get();
       if (!revoked) fail("NOT_FOUND");
       audit(tx, actor.id, "invitation.revoked", id);
     }, { behavior: "immediate" });

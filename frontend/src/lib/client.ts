@@ -21,6 +21,7 @@ export interface Channel {
   backgroundImageUrl?: string | null;
   canEdit?: boolean;
   canSetPassword?: boolean;
+  canMute?: boolean;
 }
 
 export interface Member {
@@ -29,7 +30,11 @@ export interface Member {
   displayName: string;
   muted: boolean;
   deafened: boolean;
+  afk?: boolean;
+  afkMessage?: string;
   adminMuted: boolean;
+  adminDeafened?: boolean;
+  role?: string;
   speaking?: boolean;
 }
 
@@ -42,7 +47,17 @@ export interface Snapshot {
   members: Member[];
   channelMembers?: Record<string, Member[]>;
   serverPermissions: string[];
+  lowerRoles?: string[];
+  assignableRoles?: string[];
+  bannerImageUrl?: string | null;
+  canReorderChannels?: boolean;
 }
+
+export type MemberRequest =
+  | { kind: "moderation.mute"; payload: { connectionId: string; muted: boolean } }
+  | { kind: "moderation.deafen"; payload: { connectionId: string; deafened: boolean } }
+  | { kind: "moderation.kick" | "moderation.ban"; payload: { accountId: string } }
+  | { kind: "role.set"; payload: { accountId: string; role: string } };
 
 export interface Message {
   id: string;
@@ -70,6 +85,7 @@ export interface ServerInfo {
   channelBackgrounds?: boolean;
   serverAdministration?: boolean;
   passwordRequired?: boolean;
+  bannerImageUrl?: string | null;
   registration: "open" | "invitation" | "admin" | "disabled";
   setupRequired: boolean;
   version: string;

@@ -55,6 +55,49 @@ test("channels, inheritance, password membership, moderation and text are permis
   } finally { await server.cleanup(); }
 });
 
+test("server deafen follows the moderation hierarchy and survives reconnects", async () => {
+  const server = await fixture();
+  const sockets: Awaited<ReturnType<typeof server.ws>>[] = [];
+  const connect = async (device: Parameters<typeof server.ws>[0]) => {
+    const socket = await server.ws(device);
+    sockets.push(socket);
+    return socket;
+  };
+  try {
+    const owner = await connect(await server.owner());
+    const member = await server.register("Listener");
+    const listener = await connect(member);
+    const otherDevice = await connect(member);
+    const join = (socket: typeof listener) => socket.rpc<Snapshot>("channel.join", { channelId: LOBBY });
+    await join(owner);
+    await join(listener);
+    await join(otherDevice);
+    const target = { connectionId: listener.state.connectionId };
+    const deafen = (deafened: boolean) => owner.rpc("moderation.deafen", { ...target, deafened });
+    await expect(listener.rpc("moderation.deafen", { connectionId: owner.state.connectionId, deafened: true }))
+      .rejects.toThrow("FORBIDDEN");
+    await owner.rpc("moderation.mute", { ...target, muted: true });
+    await deafen(true);
+    const ownPresence = await listener.rpc("presence.set", { deafened: false });
+    expect(ownPresence).toMatchObject({ deafened: false, adminDeafened: true, adminMuted: true });
+    const consumer = { consumerId: crypto.randomUUID() };
+    await expect(otherDevice.rpc("media.consumer.resume", consumer)).rejects.toThrow("FORBIDDEN");
+    otherDevice.close();
+    await otherDevice.closed;
+    const reconnected = await connect(member);
+    expect((await join(reconnected)).members).toContainEqual(expect.objectContaining({
+      connectionId: reconnected.state.connectionId, adminDeafened: true,
+    }));
+    await deafen(false);
+    expect(await reconnected.rpc("presence.set")).toMatchObject({ adminDeafened: false, adminMuted: true });
+    await expect(reconnected.rpc("media.consumer.resume", consumer)).rejects.toThrow("NOT_FOUND");
+  } finally {
+    for (const socket of sockets) socket.close();
+    await Promise.all(sockets.map((socket) => socket.closed));
+    await server.cleanup();
+  }
+});
+
 test("duplicate requests are replayed safely, malformed requests are correlated, oversized frames are closed", async () => {
   const server = await fixture({ environment: { VOICE_LIMITS_WEBSOCKET_BYTES: "4096" } });
   try {

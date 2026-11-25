@@ -24,12 +24,12 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | --- | --- | --- | --- |
 | GET `/health` | Public | — | `{status:"ok"}` |
 | GET `/ready` | Public | — | `{status:"ready"}`, or 503 with `{status:"unavailable"}` |
-| GET `/api/v1/server/info` | Public | — | `serverId, name, version, protocolVersions, registration, setupRequired, fingerprint?` |
+| GET `/api/v1/server/info` | Public | — | `serverId, name, version, protocolVersions, registration, setupRequired, passwordRequired, serverAdministration, bannerImageUrl, fingerprint?` |
 | GET `/api/v1/server/capabilities` | Optional | — | `protocolVersions, websocketPath, audio, targetAudioBitrate, heartbeatSeconds, maxWebSocketBytes, udp, tcp, textPersistence, iceServers?` |
 | POST `/api/v1/auth/identity/challenge` | Public | `operation, publicKey, deviceName, origin` | Single-use challenge |
-| POST `/api/v1/auth/identity/login` | Signed login challenge | `id, signature` | Account and new session |
+| POST `/api/v1/auth/identity/login` | Signed login challenge and server password where required | `id, signature, password?` | Account and new session |
 | POST `/api/v1/admin/bootstrap` | Setup token and signed bootstrap challenge | `token, displayName, deviceName, identity` | Account and session |
-| POST `/api/v1/auth/register` | Signed registration challenge and invitation where required | `displayName, deviceName, identity, invitation?` | Account and session |
+| POST `/api/v1/auth/register` | Signed registration challenge, invitation and server password where required | `displayName, deviceName, identity, invitation?, password?` | Account and session |
 | POST `/api/v1/auth/refresh` | Refresh token in body | `refreshToken` | Rotated session credentials |
 | POST `/api/v1/auth/logout` | Access token | — | `{}` |
 | POST `/api/v1/auth/logout-all` | Access token | — | `{}` |
@@ -38,13 +38,32 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | PATCH `/api/v1/account` | Access token | `displayName` | Account |
 | GET `/api/v1/account/sessions` | Access token | — | Array of `id, deviceName, createdAt, lastActive, expiresAt` |
 | DELETE `/api/v1/account/sessions/:id` | Access token | — | `{}` |
+| GET `/api/v1/admin/accounts` | `manageRoles` | Query `after?` account ID | `accounts, next, roles, canDefineRoles, customRoles, assignablePermissions` |
+| PATCH `/api/v1/admin/roles` | `manageRoles` | `accountId, role` | `{role}` |
+| POST `/api/v1/admin/roles` | Administrator or Owner | `name, permissions` | `{name, permissions}` |
+| PATCH `/api/v1/admin/roles/definition` | Administrator or Owner | `name, permissions` | `{name, permissions}` |
+| POST `/api/v1/admin/invitations` | `manageInvitations` | `expiresAt?, expiresInSeconds?, uses?` | `id, token, expiresAt, usesLeft` |
+| PATCH `/api/v1/admin/banner` | `manageSettings` | `bannerImageUrl` as an HTTPS URL or `null` | `{bannerImageUrl}` |
+| PATCH `/api/v1/channels/order` | `editChannels` | `channelId, targetId, placement` as `before` or `after` | `{}` |
+| PATCH `/api/v1/admin/password` | `manageSettings` | `password` or `null` to remove it | `{passwordRequired}` |
+| GET `/api/v1/admin/configuration` | `manageSettings` | — | `toml, revision, overrides` |
+| PATCH `/api/v1/admin/configuration` | `manageSettings` | `toml, revision` from the last read | `toml, revision, overrides` |
 
 An Account object has `id, displayName, role, createdAt`. Session responses have
 `sessionId, accessToken, refreshToken, accessExpiresAt, refreshExpiresAt` at the top
 level alongside `account` for sign-in and account creation. Session listings
 contain no token values. The capability response supplies ICE server settings
 only to authenticated callers. Native requests may omit the Origin header.
-A supplied browser Origin must exactly match an entry in `server.origins`.
+Cross-origin browser requests require an exact match in `server.origins`.
+
+Role changes require the actor to rank above both the account’s current role and
+its new role and to hold the new role’s permissions. Custom roles share a rank
+between Moderator and Administrator. Channel ordering applies to sibling channels
+the caller can see and edit. Invitation expiration can use either a future Unix
+timestamp in milliseconds or a lifetime in seconds. Omitting both leaves the
+invitation without an expiration. Omitting `uses` allows unlimited registrations.
+Configuration changes validate and save the active TOML file.
+They take effect after a server restart. A stale revision returns `CONFLICT`.
 
 For `login`, `register`, or `bootstrap`, request a challenge for the raw 32-byte
 Ed25519 public key encoded in base64url without padding. Verify the returned server
@@ -102,10 +121,13 @@ ID receives an error with ID zero if the socket remains writable. A reconnect do
 not replay mutations. Reconcile state before retrying operations across connections.
 
 A successful snapshot has `connectionId, account, channelId, channels, presence,
-members, serverPermissions`. The channel list has `id, parentId, name, description,
-position, capacity, temporary, passwordRequired`. Invisible parents are represented
-as null. Members have `connectionId, accountId, displayName, muted, deafened,
-adminMuted` and cover the socket's current channel. Presence entries have
+members, serverPermissions, lowerRoles, assignableRoles, bannerImageUrl, canReorderChannels`.
+`lowerRoles` lists roles below the caller in the server hierarchy. `assignableRoles`
+lists roles the caller can assign to a subordinate account. The channel list has
+`id, parentId, name, description, position, capacity, temporary, passwordRequired, canMute`.
+Invisible parents are represented as null. Members have `connectionId, accountId,
+displayName, role, muted, deafened, adminMuted, adminDeafened` and cover the socket's
+current channel. Presence entries have
 `accountId, displayName, connections` and count all online devices by account.
 
 Oversized frames, a full pending request queue or outbound backpressure may close
@@ -130,14 +152,15 @@ password or permission-override fields.
 | `channel.join` | `channelId, password?` | Snapshot |
 | `channel.leave` | — | Snapshot |
 | `channel.move` | `connectionId, channelId` | `{}` |
-| `presence.set` | `muted?, deafened?` | Member |
+| `presence.set` | `muted?, deafened?, afk?, afkMessage?` | Member |
 | `role.set` | `accountId, role` | `{}` |
 | `channel.override` | `channelId, role, permission, allow` | `{}` |
 | `moderation.mute` | `connectionId, muted` | `{}` |
+| `moderation.deafen` | `connectionId, deafened` | `{}` |
 | `moderation.kick` | `accountId` | `{}` |
 | `moderation.ban` | `accountId, expiresInSeconds?` | `{}` |
 | `moderation.unban` | `accountId` | `{}` |
-| `invitation.create` | `expiresInSeconds?, uses?` | `{id, token, expiresAt, usesLeft}` |
+| `invitation.create` | `expiresAt?, expiresInSeconds?, uses?` | `{id, token, expiresAt, usesLeft}` |
 | `invitation.list` | — | Latest 100 invitation records without tokens or verifiers |
 | `invitation.revoke` | `invitationId` | `{}` |
 | `server.settings` | `name?, registration?` | `{}` |
@@ -147,15 +170,24 @@ password or permission-override fields.
 | `message.history` | One of `channelId, accountId`, plus `before?` timestamp | Up to 100 messages in descending time order |
 | `message.delete` | `messageId` | `{}` |
 
-Moderation mute applies to the account associated with the supplied connection ID
-and persists across connections. It removes existing producers. Self-mute or deafen
-also removes voice resources in the affected directions. Clients recreate producers
-or consumers once allowed. Kicking closes all account connections. Banning also
+Server mute and deafen require `mute` at server scope and in the target channel.
+They apply to a subordinate account identified by its connection ID and persist
+across connections. Server mute blocks producers. Server deafen blocks producers
+and consumers independently of self-deafen. Enabling either restriction closes
+affected media resources. Clients recreate producers or consumers once allowed.
+Kicking closes all account connections. Banning also
 revokes all device sessions. Temporary rooms are joined on creation and disappear
 when empty. Channel history requires current channel membership and text permission.
 History is empty when text persistence is disabled. Current live text still works.
 Message objects contain `id, channelId, recipientId, senderId, createdAt, text`.
 Exactly one of channel or recipient ID is non-null.
+
+AFK is connection-scoped. While `afk` is true, both `muted` and `deafened` are
+reported as true and the server closes and blocks producers and consumers for
+that connection. Setting `afk` to false restores its self-mute and self-deafen
+settings. Channel members include `afk` and `afkMessage` in snapshots and member
+events. Messages are single lines of up to 120 characters and are shared while
+AFK. An empty string clears the message.
 
 ## WebRTC negotiation
 
@@ -176,7 +208,7 @@ ownership scope. Client-supplied account IDs never establish media ownership.
 | `media.producers` | — | Array of accessible `producerId, connectionId, paused, speaking` |
 | `media.producer.create` | `transportId, kind:"audio", rtpParameters` | `{id}` |
 | `media.producer.pause`, `resume`, `close` | `producerId` | `{}` |
-| `media.consumer.create` | `transportId, producerId, rtpCapabilities` | `{id, producerId, kind, rtpParameters, producerPaused}` |
+| `media.consumer.create` | `transportId, producerId, rtpCapabilities` | `{id, producerId, accountId, kind, rtpParameters, producerPaused}` |
 | `media.consumer.pause`, `resume`, `close` | `consumerId` | `{}` |
 
 On the sending side, route the WebRTC transport's DTLS connect and produce

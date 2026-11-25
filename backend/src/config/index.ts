@@ -12,8 +12,8 @@ const object = <P extends Parameters<typeof t.Object>[0]>(properties: P) => t.Ob
 const configuration = object({
   server: object({ name: t.String({ minLength: 1, maxLength: 100, pattern: "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$" }), host: string, port,
     max_users: integer(1, 10000), registration: t.UnionEnum(["open", "invitation", "admin", "disabled"]),
-    origins: list, public_addresses: list, trusted_proxies: list }),
-  tls: object({ mode: t.UnionEnum(["self-signed", "manual", "proxy", "disabled"]), certificate: string, private_key: string, names: list }),
+    origins: list, public_addresses: list, trusted_proxies: list, password: t.String({ maxLength: 128 }) }),
+  tls: object({ mode: t.UnionEnum(["self-signed", "manual", "proxy"]), certificate: string, private_key: string, names: list }),
   media: object({ listen: t.Array(object({ ip: string, announced_address: t.Optional(string) }), { maxItems: 32 }), listen_ips: list, listen_ip: string, announced_address: string, announced_ipv6: string,
     port, workers: integer(1, 32), target_audio_bitrate: integer(32000, 64000), enable_udp: t.Boolean(), enable_tcp: t.Boolean(),
     ice_servers: t.Array(object({ urls: list, username: t.Optional(string), credential: t.Optional(string) }), { maxItems: 8 }) }),
@@ -28,7 +28,7 @@ const configuration = object({
 });
 type Settings = typeof configuration.static;
 const defaults: Settings = {
-  server: { name: "Voice Server", host: "::", port: 8443, max_users: 128, registration: "open", origins: [], public_addresses: [], trusted_proxies: [] },
+  server: { name: "Voice Server", host: "::", port: 8443, max_users: 128, registration: "open", origins: [], public_addresses: [], trusted_proxies: [], password: "" },
   tls: { mode: "self-signed", certificate: "", private_key: "", names: [] },
   media: { listen: [], listen_ips: [], listen_ip: "", announced_address: "", announced_ipv6: "", port: 8444, workers: 1,
     target_audio_bitrate: 48000, enable_udp: true, enable_tcp: true, ice_servers: [] },
@@ -88,7 +88,6 @@ export async function loadConfig(options: { file?: string; directory?: string; s
   const settings = merged as Settings;
   const { server, tls, media, authentication } = settings;
   if (!isIP(server.host)) throw new Error("server.host must be an IPv4 or IPv6 literal");
-  if (tls.mode === "disabled" && !loopback(server.host)) throw new Error("Disabled TLS requires a loopback server.host");
   if (tls.mode === "proxy" && !server.trusted_proxies.length) {
     throw new Error("Proxy TLS requires the exact IP addresses of explicitly trusted proxies");
   }

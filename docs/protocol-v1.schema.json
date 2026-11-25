@@ -692,6 +692,14 @@
                 },
                 "deafened": {
                   "type": "boolean"
+                },
+                "afk": {
+                  "type": "boolean"
+                },
+                "afkMessage": {
+                  "maxLength": 120,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]*$",
+                  "type": "string"
                 }
               }
             }
@@ -742,15 +750,10 @@
                   "type": "string"
                 },
                 "role": {
-                  "default": "Guest",
-                  "type": "string",
-                  "enum": [
-                    "Guest",
-                    "Member",
-                    "Moderator",
-                    "Administrator",
-                    "Owner"
-                  ]
+                  "minLength": 1,
+                  "maxLength": 80,
+                  "pattern": "^(?=.*\\S)[^/\\u0000-\\u001f\\u007f]+$",
+                  "type": "string"
                 }
               }
             }
@@ -803,15 +806,10 @@
                   "type": "string"
                 },
                 "role": {
-                  "default": "Guest",
-                  "type": "string",
-                  "enum": [
-                    "Guest",
-                    "Member",
-                    "Moderator",
-                    "Administrator",
-                    "Owner"
-                  ]
+                  "minLength": 1,
+                  "maxLength": 80,
+                  "pattern": "^(?=.*\\S)[^/\\u0000-\\u001f\\u007f]+$",
+                  "type": "string"
                 },
                 "permission": {
                   "default": "join",
@@ -886,6 +884,57 @@
                   "type": "string"
                 },
                 "muted": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
+              "const": "moderation.deafen"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "connectionId",
+                "deafened"
+              ],
+              "properties": {
+                "connectionId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "deafened": {
                   "type": "boolean"
                 }
               }
@@ -1097,6 +1146,22 @@
                     {
                       "minimum": 1,
                       "maximum": 31536000,
+                      "type": "integer"
+                    }
+                  ]
+                },
+                "expiresAt": {
+                  "minimum": 1,
+                  "maximum": 8640000000000000,
+                  "anyOf": [
+                    {
+                      "format": "integer",
+                      "default": 0,
+                      "type": "string"
+                    },
+                    {
+                      "minimum": 1,
+                      "maximum": 8640000000000000,
                       "type": "integer"
                     }
                   ]
@@ -2890,6 +2955,11 @@
         "signature": {
           "pattern": "^[A-Za-z0-9_-]{86}$",
           "type": "string"
+        },
+        "password": {
+          "minLength": 1,
+          "maxLength": 128,
+          "type": "string"
         }
       }
     },
@@ -2916,6 +2986,11 @@
         },
         "invitation": {
           "pattern": "^[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        },
+        "password": {
+          "minLength": 1,
+          "maxLength": 128,
           "type": "string"
         },
         "identity": {
@@ -3009,6 +3084,135 @@
           "maxLength": 80,
           "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
           "type": "string"
+        }
+      }
+    },
+    "serverPassword": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "password"
+      ],
+      "properties": {
+        "password": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "serverConfiguration": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "toml",
+        "revision"
+      ],
+      "properties": {
+        "toml": {
+          "minLength": 0,
+          "maxLength": 65536,
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        }
+      }
+    },
+    "roleDefinition": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name",
+        "permissions"
+      ],
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^(?=.*\\S)[^/\\u0000-\\u001f\\u007f]+$",
+          "type": "string"
+        },
+        "permissions": {
+          "minItems": 0,
+          "maxItems": 14,
+          "type": "array",
+          "items": {
+            "default": "join",
+            "type": "string",
+            "enum": [
+              "join",
+              "speak",
+              "text",
+              "createChannels",
+              "editChannels",
+              "deleteChannels",
+              "move",
+              "mute",
+              "kick",
+              "ban",
+              "manageRoles",
+              "manageInvitations",
+              "manageSettings",
+              "viewAdmin"
+            ]
+          }
+        }
+      }
+    },
+    "channelOrder": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "channelId",
+        "targetId",
+        "placement"
+      ],
+      "properties": {
+        "channelId": {
+          "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+          "type": "string"
+        },
+        "targetId": {
+          "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+          "type": "string"
+        },
+        "placement": {
+          "default": "before",
+          "type": "string",
+          "enum": [
+            "before",
+            "after"
+          ]
+        }
+      }
+    },
+    "serverBanner": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "bannerImageUrl"
+      ],
+      "properties": {
+        "bannerImageUrl": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     }

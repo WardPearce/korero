@@ -1,12 +1,13 @@
-import { offline, requestError, messageFrom, type RelayResponse, type Snapshot, type VoiceState } from "./client";
+import { offline, requestError, messageFrom, type MemberRequest, type RelayResponse, type Snapshot, type VoiceState } from "./client";
 
 type Credentials = { accessToken: string; refreshToken: string; accessExpiresAt: number };
 type Reply = { type: string; id: number; success: boolean; payload: unknown; error?: unknown };
 
 export function browserServerOrigin(address: string) {
-  const url = URL.parse(address.includes("://") ? address : `https://${address}`);
-  if (!url || url.protocol !== "https:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
-    throw new Error("Enter an HTTPS server address.");
+  const value = address.trim();
+  const url = URL.parse(value.includes("://") ? value : `https://${value}`);
+  if (!url || url.protocol !== "https:" || !url.host || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("Enter a server IP or host, with an optional port.");
   }
   return url.origin;
 }
@@ -166,6 +167,10 @@ class BrowserSession {
   async saveChannel(payload: Record<string, unknown>) {
     const result = await this.rpc<{ state: Snapshot }>(payload.channelId ? "channel.edit" : "channel.create", payload);
     this.showSnapshot(result.state);
+  }
+
+  async memberAction({ kind, payload }: MemberRequest) {
+    await this.rpc(kind, payload);
   }
 
   private closeSocket() {

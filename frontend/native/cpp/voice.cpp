@@ -440,11 +440,18 @@ void Voice::consume(rust::Str parameters) {
   auto rtp = p.at("rtpParameters");
   std::unique_ptr<mediasoupclient::Consumer> consumer(impl_->receive->Consume(
       &impl_->listeners, p.at("id"), id, p.at("kind"), &rtp));
-  if (!impl_->probe) {
-    auto* track = static_cast<webrtc::AudioTrackInterface*>(consumer->GetTrack());
-    track->GetSource()->SetVolume(impl_->settings.value("outputLevel", 100) / 100.0);
-  }
   impl_->consumers.emplace(id, std::move(consumer));
+  set_consumer_volume(rust::Str(id.data(), id.size()), p.value("volumeLevel", uint8_t{100}));
+}
+
+void Voice::set_consumer_volume(rust::Str producer_id, uint8_t level) {
+  if (impl_->probe) return;
+  const auto found = impl_->consumers.find(as_string(producer_id));
+  if (found != impl_->consumers.end()) {
+    auto* track = static_cast<webrtc::AudioTrackInterface*>(found->second->GetTrack());
+    const double output = impl_->settings.value("outputLevel", 100) / 100.0;
+    track->GetSource()->SetVolume(output * (level / 100.0));
+  }
 }
 
 void Voice::close_consumer(rust::Str producer_id) {

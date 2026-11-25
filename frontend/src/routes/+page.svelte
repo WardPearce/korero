@@ -1,11 +1,13 @@
 <script lang="ts">
+  import { DropdownMenu } from "bits-ui";
   import {
-    ChevronDown, CircleAlert, DoorOpen, Hash, Headphones,
-    HeadphoneOff, Home, ImageIcon, ListTree, LockKeyhole, MessageCircle, Mic, MicOff, Plus, Search,
-    Send, Server, Volume2,
+    ChevronDown, CircleAlert, DoorOpen, Headphones,
+    HeadphoneOff, ImageIcon, ListTree, LockKeyhole, MessageCircle, Mic, MicOff, Plus, Search,
+    Send, Server,
   } from "lucide-svelte";
   import { tick } from "svelte";
   import Avatar from "$lib/Avatar.svelte";
+  import ChannelMember from "$lib/ChannelMember.svelte";
   import ContextActions from "$lib/ContextActions.svelte";
   import IconButton from "$lib/IconButton.svelte";
   import Modal from "$lib/Modal.svelte";
@@ -36,8 +38,14 @@
   let search = $state("");
   let collapsed = $state<string[]>([]);
   let message = $state("");
+  let afkFormOpen = $state(false);
+  let afkMessage = $state("");
+  let afkFormOrigin = $state("");
   let messageList: HTMLDivElement | undefined;
   let lastChatChannel: string | null | undefined;
+  type Placement = "before" | "after";
+  let draggedChannel = $state<{ id: string; origin: string } | null>(null);
+  let dropTarget = $state<{ id: string; placement: Placement } | null>(null);
 
   let snapshot = $derived(view.snapshot);
   let me = $derived(snapshot?.account);
@@ -50,8 +58,10 @@
     search.trim() ? (snapshot?.channels ?? []).filter((channel) => channel.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())) : [],
   );
   let canCreate = $derived(online && Boolean(snapshot?.serverPermissions.includes("createChannels")));
+  let canReorder = $derived(online && Boolean(snapshot?.canReorderChannels) && !search.trim() && !pending);
   let canChat = $derived(online && isInRoom);
   let canVoice = $derived(voiceAvailable && online && Boolean(activeChannel));
+  let canSetAfk = $derived(canVoice && ownMember?.afk !== undefined && !pending);
   let canSetChannelAccess = $derived(editingChannel?.canSetPassword !== false);
   let possibleParents = $derived((snapshot?.channels ?? []).filter((parent, _, all) => {
     for (let candidate: Channel | undefined = parent; candidate; candidate = all.find(({ id }) => id === candidate?.parentId)) {
@@ -60,7 +70,7 @@
     return true;
   }));
   let voiceLabel = $derived(
-    view.voice === "active" ? "Voice active" : view.voice === "muted" ? "Microphone muted" :
+    ownMember?.afk ? "AFK" : view.voice === "active" ? "Voice active" : view.voice === "muted" ? "Microphone muted" :
       view.voice === "deafened" ? "Deafened" : view.voice === "error" ? "Audio unavailable" : isInRoom ? "Voice connecting" : "Ready to join",
   );
 
@@ -160,8 +170,79 @@
     if (!(await run("message", "send_message", { text })) && !message) message = text;
   }
 
+  function toggleAfk() {
+    if (!canSetAfk) return;
+    void run("afk", "set_presence", { afk: !ownMember?.afk, afkMessage: "" });
+  }
+
+  function showAfkForm() {
+    workspace.actionError = "";
+    afkFormOrigin = workspace.serverOrigin;
+    afkMessage = ownMember?.afkMessage ?? "";
+    afkFormOpen = true;
+  }
+
+  async function saveAfkMessage(event: SubmitEvent) {
+    event.preventDefault();
+    if (!canSetAfk || afkFormOrigin !== workspace.serverOrigin) return;
+    if (await run("afk", "set_presence", { afk: true, afkMessage: afkMessage.trim() })) afkFormOpen = false;
+  }
+
   function toggleGroup(id: string) {
     collapsed = collapsed.includes(id) ? collapsed.filter((item) => item !== id) : [...collapsed, id];
+  }
+
+  function channelActions(channel: Channel) {
+    if (!channel.canEdit) return [];
+    const actions = [{ label: "Edit channel", select: () => showChannelForm(channel) }];
+    if (!canReorder) return actions;
+    const siblings = snapshot?.channels.filter((item) => item.parentId === channel.parentId) ?? [];
+    const index = siblings.findIndex(({ id }) => id === channel.id);
+    const previous = siblings[index - 1];
+    const next = siblings[index + 1];
+    if (previous?.canEdit) actions.push({ label: "Move up", select: () => { void workspace.reorderChannel(channel.id, previous.id, "before"); } });
+    if (next?.canEdit) actions.push({ label: "Move down", select: () => { void workspace.reorderChannel(channel.id, next.id, "after"); } });
+    return actions;
+  }
+
+  function startDrag(event: DragEvent, channel: Channel) {
+    if (!canReorder || !channel.canEdit || !event.dataTransfer) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", channel.id);
+    draggedChannel = { id: channel.id, origin: workspace.serverOrigin };
+  }
+
+  function dragPlacement(event: DragEvent & { currentTarget: HTMLButtonElement }, channel: Channel): Placement | null {
+    if (!canReorder || !channel.canEdit || draggedChannel?.origin !== workspace.serverOrigin) return null;
+    const source = snapshot?.channels.find(({ id }) => id === draggedChannel?.id);
+    if (!source?.canEdit || source.id === channel.id || source.parentId !== channel.parentId) return null;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+  }
+
+  function dragOver(event: DragEvent & { currentTarget: HTMLButtonElement }, channel: Channel) {
+    const placement = dragPlacement(event, channel);
+    if (!placement) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    if (dropTarget?.id !== channel.id || dropTarget.placement !== placement) dropTarget = { id: channel.id, placement };
+  }
+
+  function endDrag() {
+    draggedChannel = null;
+    dropTarget = null;
+  }
+
+  function dropChannel(event: DragEvent & { currentTarget: HTMLButtonElement }, channel: Channel) {
+    const placement = dragPlacement(event, channel);
+    if (!placement || !draggedChannel) return;
+    event.preventDefault();
+    const { id } = draggedChannel;
+    endDrag();
+    void workspace.reorderChannel(id, channel.id, placement);
   }
 
   function senderName(id: string) {
@@ -178,10 +259,10 @@
   {@const isSelected = currentChannel?.id === channel.id}
   {@const image = channel.backgroundImageUrl?.startsWith("https://") ? channel.backgroundImageUrl : null}
   <li>
-    <ContextActions disabled={!online || Boolean(pending)}
-      actions={channel.canEdit ? [{ label: "Edit channel", select: () => showChannelForm(channel) }] : []}>
+    <ContextActions disabled={!online || Boolean(pending)} actions={channelActions(channel)}>
       {#snippet trigger({ props })}
-    <div {...props} class="channel-row" data-selected={isSelected} style:--depth={Math.min(depth, 6)}>
+    <div {...props} class="channel-row" data-selected={isSelected} data-drop={dropTarget?.id === channel.id ? dropTarget.placement : undefined}
+      style:--depth={Math.min(depth, 6)}>
       {#if image}
         {#key image}
           <img class="channel-background" src={image} alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"
@@ -195,11 +276,16 @@
       {:else}
         <span class="tree-spacer"></span>
       {/if}
-      <button class="channel-target" aria-current={isSelected ? "true" : undefined} aria-describedby={isActive ? "joined-channel-description" : undefined} onclick={() => selectChannel(channel)} ondblclick={() => joinChannel(channel)}>
-        {#if channel.passwordRequired}<LockKeyhole size={15} strokeWidth={1.8} />
-        {:else if channel.name === "Lobby"}<Home size={16} strokeWidth={1.8} />
-        {:else}<Hash size={16} strokeWidth={1.85} />{/if}
+      <button class="channel-target" aria-current={isSelected ? "true" : undefined} aria-describedby={isActive ? "joined-channel-description" : undefined}
+        onclick={() => selectChannel(channel)} ondblclick={() => joinChannel(channel)} draggable={canReorder && channel.canEdit === true}
+        ondragstart={(event) => startDrag(event, channel)} ondragend={endDrag}
+        ondragover={(event) => dragOver(event, channel)}
+        ondragleave={(event) => {
+          if (dropTarget?.id === channel.id && !(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) dropTarget = null;
+        }}
+        ondrop={(event) => dropChannel(event, channel)}>
         <span class="truncate" title={channel.name}>{channel.name}</span>
+        {#if channel.passwordRequired}<small class="channel-access">Locked</small>{/if}
         {#if isActive}<span class="joined-dot" title="Joined" aria-hidden="true"></span>{/if}
       </button>
     </div>
@@ -208,15 +294,7 @@
     {#if members.length && !collapsed.includes(channel.id)}
       <ul class="member-list" aria-label={`Members in ${channel.name}`} style:--depth={Math.min(depth, 6)}>
         {#each members as member (member.connectionId)}
-          <li class="tree-member">
-            <Avatar name={member.displayName} class="avatar-small" speaking={member.speaking ?? view.speaking.includes(member.connectionId)} />
-            <span class="truncate">{member.displayName}</span>
-            {#if member.connectionId === snapshot?.connectionId}<small>you</small>{/if}
-            {#if member.deafened}<HeadphoneOff size={13} class="member-state" aria-label="Deafened" />
-            {/if}
-            {#if member.muted || member.adminMuted}<MicOff size={13} class="member-state" aria-label="Muted" />{/if}
-            {#if member.speaking ?? view.speaking.includes(member.connectionId)}<Volume2 size={13} class="speaking-icon" aria-label="Speaking" />{/if}
-          </li>
+          <ChannelMember {channel} {member} />
         {/each}
       </ul>
     {/if}
@@ -232,18 +310,39 @@
 
 <aside id="channel-pane" class="channel-pane" aria-label="Channels">
   <div class="channel-top">
+    {#if workspace.bannerImageUrl}
+      {#key workspace.bannerImageUrl}
+        <img class="server-banner" src={workspace.bannerImageUrl} alt="" decoding="async" referrerpolicy="no-referrer"
+          onerror={(event) => { event.currentTarget.setAttribute("hidden", ""); }} />
+      {/key}
+    {/if}
     <div class="server-tile"><Server size={22} strokeWidth={1.75} /></div>
     <div class="min-w-0">
       <h1 class="truncate">{serverTitle}</h1>
     </div>
   </div>
     <div class="voice-toolbar" aria-label="Voice controls">
-      <IconButton label={ownMember?.muted ? "Unmute microphone" : "Mute microphone"} disabled={!canVoice || Boolean(pending) || ownMember?.adminMuted} active={Boolean(ownMember?.muted || ownMember?.adminMuted)} onclick={() => run("mute", "set_presence", { muted: !ownMember?.muted, deafened: null })}>
+      <IconButton label={ownMember?.muted ? "Unmute microphone" : "Mute microphone"} disabled={!canVoice || Boolean(pending) || ownMember?.adminMuted || ownMember?.afk} active={Boolean(ownMember?.muted || ownMember?.adminMuted)} onclick={() => run("mute", "set_presence", { muted: !ownMember?.muted, deafened: null })}>
         {#if ownMember?.muted || ownMember?.adminMuted}<MicOff size={18} />{:else}<Mic size={18} />{/if}
       </IconButton>
-      <IconButton label={ownMember?.deafened ? "Undeafen" : "Deafen"} disabled={!canVoice || Boolean(pending)} active={Boolean(ownMember?.deafened)} onclick={() => run("deafen", "set_presence", { muted: null, deafened: !ownMember?.deafened })}>
-        {#if ownMember?.deafened}<HeadphoneOff size={18} />{:else}<Headphones size={18} />{/if}
+      <IconButton label={ownMember?.adminDeafened ? "Server deafened" : ownMember?.deafened ? "Undeafen" : "Deafen"}
+        disabled={!canVoice || Boolean(pending) || ownMember?.afk || ownMember?.adminDeafened}
+        active={Boolean(ownMember?.deafened || ownMember?.adminDeafened)}
+        onclick={() => run("deafen", "set_presence", { muted: null, deafened: !ownMember?.deafened })}>
+        {#if ownMember?.deafened || ownMember?.adminDeafened}<HeadphoneOff size={18} />{:else}<Headphones size={18} />{/if}
       </IconButton>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger class="icon-button afk-button" data-afk={ownMember?.afk} aria-label={ownMember?.afk ? "AFK status (away)" : "AFK status"} disabled={!canSetAfk}>
+          AFK <ChevronDown size={12} aria-hidden="true" />
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content class="context-menu" align="start" sideOffset={4}
+            onCloseAutoFocus={(event) => { if (afkFormOpen) event.preventDefault(); }}>
+            <DropdownMenu.Item class="context-menu-item" onSelect={toggleAfk}>{ownMember?.afk ? "Return from AFK" : "Mark as AFK"}</DropdownMenu.Item>
+            <DropdownMenu.Item class="context-menu-item" onSelect={showAfkForm}>Set AFK message</DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
       {#if activeChannel}
         <span class="toolbar-separator"></span>
         <IconButton label="Leave voice channel" disabled={!canVoice || Boolean(pending)} onclick={() => run("leave", "leave_channel")} class="leave-icon"><DoorOpen size={18} /></IconButton>
@@ -271,7 +370,7 @@
         {/if}
       </ul>
     {:else}
-      <div class="channel-empty"><Hash size={20} strokeWidth={1.5} /><p>{snapshot ? "No channels are available." : "Connect to view channels."}</p></div>
+      <div class="channel-empty"><p>{snapshot ? "No channels are available." : "Connect to view channels."}</p></div>
     {/if}
   </div>
   <div class="channel-footer">
@@ -330,6 +429,16 @@
   </div>
 </main>
 
+<Modal bind:open={afkFormOpen} title="AFK message" description="People who can see your voice channel can read this message while you’re AFK." dismissible={pending !== "afk"}>
+  {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}
+  <form class="dialog-form" onsubmit={saveAfkMessage}>
+    <label>Message <input type="text" maxlength={120} placeholder="Optional" bind:value={afkMessage} /></label>
+    <button class="primary-button justify-center" type="submit" disabled={!canSetAfk || afkFormOrigin !== workspace.serverOrigin}>
+      {ownMember?.afk ? "Save message" : "Go AFK"}
+    </button>
+  </form>
+</Modal>
+
 <Modal bind:open={passwordOpen} title={joining ? `Join ${joining.name}` : "Join channel"} description="Enter the password for this channel." dismissible={pending !== "join"}>
   {#snippet icon()}<LockKeyhole size={21} />{/snippet}
   {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}
@@ -341,7 +450,6 @@
 
 <Modal bind:open={channelFormOpen} title={editingChannel ? "Edit channel" : "Create a channel"}
   description={editingChannel ? editingChannel.name : "Add a voice channel to this server."} dismissible={pending !== "channel-save"}>
-  {#snippet icon()}{#if editingChannel}<ImageIcon size={21} />{:else}<Hash size={21} />{/if}{/snippet}
   {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}
   <form class="dialog-form" onsubmit={saveChannel}>
     <label>Channel name<input required maxlength={80} bind:value={newChannelName} /></label>

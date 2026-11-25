@@ -5,10 +5,10 @@ import type { Request } from "../protocol";
 import { fail, ProtocolError } from "../security/errors";
 
 type MediaRequest = Extract<Request, { type: `media.${string}` }>;
-type Peer = { id: string; channelId: string | null; membershipEpoch: number; muted: boolean; adminMuted: boolean; deafened: boolean };
+type Peer = { id: string; channelId: string | null; membershipEpoch: number; account: { id: string } | null };
 type Slot = { index: number; worker: Worker | null; server: WebRtcServer | null; rooms: number; restart?: ReturnType<typeof setTimeout> };
 type Room = { slot: Slot; pending: Promise<{ router: Router; observer: AudioLevelObserver }>; closed: boolean;
-  producers: Map<string, { producer: Producer; peerId: string }>; speaking: Set<string> };
+  producers: Map<string, { producer: Producer; peerId: string; accountId: string }>; speaking: Set<string> };
 type Transport = { rtc: WebRtcTransport; direction: "send" | "receive" };
 type Resources = { transports: Map<string, Transport>; producers: Map<string, Producer>; consumers: Map<string, Consumer> };
 
@@ -215,7 +215,7 @@ export class Media {
           const entry = await transport(request.payload.transportId, "send").produce({ kind: "audio", rtpParameters: request.payload.rtpParameters });
           try { ensureCurrent(true); } catch (error) { entry.close(); throw error; }
           resources.producers.set(entry.id, entry);
-          room.producers.set(entry.id, { producer: entry, peerId: peer.id });
+          room.producers.set(entry.id, { producer: entry, peerId: peer.id, accountId: peer.account!.id });
           entry.observer.once("close", () => {
             resources.producers.delete(entry.id);
             room.producers.delete(entry.id);
@@ -261,7 +261,7 @@ export class Media {
           entry.observer.once("close", () => resources.consumers.delete(entry.id));
           entry.once("producerclose", () => this.peerEvent(peer.id, "media.consumerClosed", { consumerId: entry.id, producerId }));
           const { id, kind, rtpParameters, producerPaused } = entry;
-          return { id, producerId, kind, rtpParameters, producerPaused };
+          return { id, producerId, kind, rtpParameters, producerPaused, accountId: sender.accountId };
         }
         case "media.consumer.pause": await consumer(request.payload.consumerId).pause(); break;
         case "media.consumer.resume": {

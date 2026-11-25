@@ -1,6 +1,7 @@
 use crate::signaling::Wire;
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use tokio::{
     runtime::Handle,
     sync::{mpsc, oneshot},
@@ -33,6 +34,7 @@ mod ffi {
         fn set_send(self: Pin<&mut Voice>, transport: &str) -> Result<()>;
         fn set_receive(self: Pin<&mut Voice>, transport: &str) -> Result<()>;
         fn consume(self: Pin<&mut Voice>, parameters: &str) -> Result<()>;
+        fn set_consumer_volume(self: Pin<&mut Voice>, producer_id: &str, level: u8) -> Result<()>;
         fn close_consumer(self: Pin<&mut Voice>, producer_id: &str) -> Result<()>;
         fn peak(self: &Voice) -> f64;
     }
@@ -102,6 +104,7 @@ enum Operation {
     Send(Option<Value>),
     Receive(Option<Value>),
     Consume(Value),
+    ConsumerVolume(String, u8),
     CloseConsumer(String),
     Peak,
     Stop,
@@ -156,6 +159,9 @@ impl VoiceThread {
                         Operation::Consume(options) => {
                             voice.pin_mut().consume(&options.to_string())
                         }
+                        Operation::ConsumerVolume(id, level) => {
+                            voice.pin_mut().set_consumer_volume(&id, level)
+                        }
                         Operation::CloseConsumer(id) => voice.pin_mut().close_consumer(&id),
                         Operation::Peak => {
                             let _ = reply.send(Ok(voice.peak()));
@@ -196,7 +202,8 @@ pub struct RoomVoice {
     rtp: Value,
     send_id: Option<String>,
     receive_id: Option<String>,
-    consumers: std::collections::HashMap<String, String>,
+    consumers: HashMap<String, Option<String>>,
+    member_volumes: HashMap<String, u8>,
     bitrate: u32,
     pub channel: String,
 }
@@ -208,6 +215,7 @@ impl RoomVoice {
         ice: Value,
         bitrate: u32,
         synthetic: bool,
+        member_volumes: HashMap<String, u8>,
     ) -> Result<Self> {
         let router = wire.rpc("media.capabilities", json!({})).await?;
         let (worker, rtp) = VoiceThread::start(wire.clone(), router, ice, synthetic).await?;
@@ -218,6 +226,7 @@ impl RoomVoice {
             send_id: None,
             receive_id: None,
             consumers: Default::default(),
+            member_volumes,
             bitrate,
             channel,
         })
@@ -302,7 +311,7 @@ impl RoomVoice {
         if self.consumers.contains_key(id) {
             return Ok(());
         }
-        let parameters = match self
+        let mut parameters = match self
             .wire
             .rpc(
                 "media.consumer.create",
@@ -317,6 +326,10 @@ impl RoomVoice {
             Err(error) => return Err(error),
         };
         let consumer = field(&parameters, "id")?.to_owned();
+        let account_id = parameters["accountId"].as_str().map(str::to_owned);
+        if let Some(level) = account_id.as_ref().and_then(|id| self.member_volumes.get(id)) {
+            parameters["volumeLevel"] = json!(level);
+        }
         let result = async {
             self.worker.request(Operation::Consume(parameters)).await?;
             self.wire
@@ -339,7 +352,21 @@ impl RoomVoice {
             }
             return Err(error);
         }
-        self.consumers.insert(id.into(), consumer);
+        self.consumers.insert(id.into(), account_id);
+        Ok(())
+    }
+
+    pub async fn set_member_volume(&mut self, account_id: &str, level: u8) -> Result<()> {
+        for (id, owner) in &self.consumers {
+            if owner.as_deref() == Some(account_id) {
+                self.worker.request(Operation::ConsumerVolume(id.clone(), level)).await?;
+            }
+        }
+        if level == 100 {
+            self.member_volumes.remove(account_id);
+        } else {
+            self.member_volumes.insert(account_id.into(), level);
+        }
         Ok(())
     }
 

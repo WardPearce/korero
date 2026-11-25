@@ -11,12 +11,12 @@ import * as schema from "./schema";
 
 export const LOBBY = "00000000-0000-4000-8000-000000000001";
 export const roles = ["Guest", "Member", "Moderator", "Administrator", "Owner"] as const;
-export type Role = typeof roles[number];
+export type Role = string;
 export const permissions = ["join", "speak", "text", "createChannels", "editChannels", "deleteChannels", "move", "mute", "kick",
   "ban", "manageRoles", "manageInvitations", "manageSettings", "viewAdmin"] as const;
 export type Permission = typeof permissions[number];
 export const channelPermissions = ["join", "speak", "text", "createChannels", "editChannels", "deleteChannels", "move", "mute"] as const;
-const defaultPermissions: Record<Role, readonly Permission[]> = {
+const defaultPermissions: Record<typeof roles[number], readonly Permission[]> = {
   Guest: ["join"], Member: ["join", "speak", "text"], Moderator: ["join", "speak", "text", "move", "mute", "kick", "manageInvitations"],
   Administrator: permissions, Owner: permissions,
 };

@@ -88,19 +88,37 @@ struct Join {
     password: Option<String>,
 }
 
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Presence {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub muted: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deafened: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub afk: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub afk_message: Option<String>,
+}
+
+impl Presence {
+    fn has_changes(&self) -> bool {
+        self.muted.is_some() || self.deafened.is_some() || self.afk.is_some() || self.afk_message.is_some()
+    }
+}
+
 pub enum Action {
     Join {
         id: String,
         password: Option<String>,
     },
     Leave,
-    Presence {
-        muted: Option<bool>,
-        deafened: Option<bool>,
-    },
+    Presence(Presence),
     ReloadAudio,
     SendMessage(String),
     SaveChannel(Value),
+    MemberAction { kind: &'static str, payload: Value },
+    MemberVolume { account_id: String, level: u8 },
     Disconnect,
 }
 
@@ -116,10 +134,10 @@ pub struct Controller {
 }
 
 impl Controller {
-    pub fn start(session: Session) -> Self {
+    pub fn start(session: Session, member_volumes: HashMap<String, u8>) -> Self {
         let (sender, receiver) = mpsc::channel(24);
         let (updates, state) = watch::channel(View::offline());
-        tokio::spawn(run(session, receiver, updates));
+        tokio::spawn(run(session, receiver, updates, member_volumes));
         Self { sender, state }
     }
 
@@ -140,11 +158,15 @@ impl Controller {
     }
 }
 
-async fn run(session: Session, mut input: mpsc::Receiver<Request>, output: watch::Sender<View>) {
+async fn run(
+    session: Session,
+    mut input: mpsc::Receiver<Request>,
+    output: watch::Sender<View>,
+    mut member_volumes: HashMap<String, u8>,
+) {
     let mut desired = None;
     let mut attempt: u32 = 0;
-    let mut muted = None;
-    let mut deafened = None;
+    let mut presence = Presence::default();
     loop {
         let phase = if attempt == 0 {
             "connecting"
@@ -164,9 +186,15 @@ async fn run(session: Session, mut input: mpsc::Receiver<Request>, output: watch
         };
         let problem = match connection {
             Ok((connection, token_expiry)) => {
-                let mut active = Active::new(connection);
-                if muted.is_some() || deafened.is_some() {
-                    let _ = active.presence(muted, deafened).await;
+                let mut active = Active::new(connection, std::mem::take(&mut member_volumes));
+                if presence.has_changes() {
+                    let was_afk = presence.afk == Some(true);
+                    if let Err(error) = active.set_presence(std::mem::take(&mut presence)).await {
+                        if was_afk {
+                            active.view.error = Some(format!("Could not restore AFK status: {error}"));
+                            desired = None;
+                        }
+                    }
                 }
                 if let Some(join) = &desired {
                     if let Err(error) = active.join(join).await {
@@ -182,10 +210,10 @@ async fn run(session: Session, mut input: mpsc::Receiver<Request>, output: watch
                         &mut input,
                         &output,
                         &mut desired,
-                        &mut muted,
-                        &mut deafened,
                     )
                     .await;
+                presence = active.own_presence;
+                member_volumes = active.member_volumes;
                 if let Some(voice) = active.voice.take() {
                     voice.stop().await;
                 }
@@ -244,12 +272,12 @@ struct Active {
     voice: Option<RoomVoice>,
     producers: HashMap<String, String>,
     speaking: HashMap<String, bool>,
-    own_muted: bool,
-    own_deafened: bool,
+    own_presence: Presence,
+    member_volumes: HashMap<String, u8>,
 }
 
 impl Active {
-    fn new(connection: Connected) -> Self {
+    fn new(connection: Connected, member_volumes: HashMap<String, u8>) -> Self {
         let view = View {
             phase: "online",
             snapshot: connection.snapshot.clone(),
@@ -261,8 +289,8 @@ impl Active {
             voice: None,
             producers: HashMap::new(),
             speaking: HashMap::new(),
-            own_muted: false,
-            own_deafened: false,
+            own_presence: Presence::default(),
+            member_volumes,
         }
     }
 
@@ -273,8 +301,6 @@ impl Active {
         input: &mut mpsc::Receiver<Request>,
         output: &watch::Sender<View>,
         desired: &mut Option<Join>,
-        muted: &mut Option<bool>,
-        deafened: &mut Option<bool>,
     ) -> Option<String> {
         let wire = self.connection.wire.clone();
         let mut heartbeat = tokio::time::interval(self.connection.heartbeat);
@@ -307,8 +333,6 @@ impl Active {
                         return None;
                     }
                     let result = self.action(request.action, desired).await;
-                    *muted = Some(self.own_muted);
-                    *deafened = Some(self.own_deafened);
                     output.send_replace(self.view.clone());
                     let _ = request.reply.send(result);
                 }
@@ -338,7 +362,7 @@ impl Active {
                 *desired = None;
                 self.reset_room().await;
             }
-            Action::Presence { muted, deafened } => self.presence(muted, deafened).await?,
+            Action::Presence(presence) => self.set_presence(presence).await?,
             Action::ReloadAudio => {
                 if let Some(voice) = self.voice.take() {
                     voice.stop().await;
@@ -369,30 +393,47 @@ impl Active {
                 let reply = self.connection.wire.rpc(operation, payload).await?;
                 self.view.snapshot = reply["state"].clone();
             }
+            Action::MemberAction { kind, payload } => {
+                self.connection.wire.rpc(kind, payload).await?;
+            }
+            Action::MemberVolume { account_id, level } => {
+                if let Some(voice) = &mut self.voice {
+                    voice.set_member_volume(&account_id, level).await?;
+                }
+                if level == 100 {
+                    self.member_volumes.remove(&account_id);
+                } else {
+                    self.member_volumes.insert(account_id, level);
+                }
+            }
             Action::Disconnect => unreachable!(),
         }
         Ok(())
     }
 
-    async fn presence(&mut self, muted: Option<bool>, deafened: Option<bool>) -> Result<()> {
+    async fn set_presence(&mut self, presence: Presence) -> Result<()> {
         if let Some(voice) = self.voice.as_mut() {
-            if muted == Some(true) || deafened == Some(true) {
+            if presence.muted == Some(true) || presence.deafened == Some(true) {
                 voice.set_sending(false).await?;
             }
-            if deafened == Some(true) {
+            if presence.deafened == Some(true) {
                 voice.set_receiving(false).await?;
             }
         }
-        let mut payload = json!({});
-        if let Some(muted) = muted {
-            payload["muted"] = json!(muted);
+        let reply = self.connection.wire.rpc("presence.set", serde_json::to_value(&presence)?).await;
+        let reply = match reply {
+            Ok(reply) => reply,
+            Err(error) => {
+                self.reconcile_voice().await;
+                return Err(error);
+            }
+        };
+        self.own_presence.muted = presence.muted.or(self.own_presence.muted);
+        self.own_presence.deafened = presence.deafened.or(self.own_presence.deafened);
+        self.own_presence.afk = presence.afk.or(self.own_presence.afk);
+        if let Some(message) = presence.afk_message {
+            self.own_presence.afk_message = Some(message);
         }
-        if let Some(deafened) = deafened {
-            payload["deafened"] = json!(deafened);
-        }
-        let reply = self.connection.wire.rpc("presence.set", payload).await?;
-        self.own_muted = reply["muted"] == true;
-        self.own_deafened = reply["deafened"] == true;
         if self.view.snapshot["channelId"].is_string() {
             self.update_member(reply);
         }
@@ -458,14 +499,14 @@ impl Active {
         let Some(channel) = self.view.snapshot["channelId"].as_str().map(str::to_owned) else {
             return;
         };
-        let restricted = self.view.snapshot["members"]
+        let own_member = self.view.snapshot["members"]
             .as_array()
-            .is_some_and(|members| {
-                members.iter().any(|member| {
-                    member["connectionId"] == self.view.snapshot["connectionId"]
-                        && member["adminMuted"] == true
-                })
+            .and_then(|members| {
+                members.iter().find(|member| member["connectionId"] == self.view.snapshot["connectionId"])
             });
+        let muted = self.own_presence.muted == Some(true) || own_member.is_some_and(|member| member["adminMuted"] == true);
+        let deafened = self.own_presence.afk == Some(true) || self.own_presence.deafened == Some(true)
+            || own_member.is_some_and(|member| member["adminDeafened"] == true);
         let outcome = async {
             if self.voice.is_none() {
                 self.voice = Some(
@@ -475,24 +516,23 @@ impl Active {
                         self.connection.ice_servers.clone(),
                         self.connection.bitrate,
                         false,
+                        self.member_volumes.clone(),
                     )
                     .await?,
                 );
             }
             let voice = self.voice.as_mut().context("Audio failed to initialize")?;
-            voice.set_receiving(!self.own_deafened).await?;
-            voice
-                .set_sending(!self.own_deafened && !self.own_muted && !restricted)
-                .await?;
+            voice.set_receiving(!deafened).await?;
+            voice.set_sending(!deafened && !muted).await?;
             Ok::<_, anyhow::Error>(())
         }
         .await;
 
         match outcome {
             Ok(()) => {
-                self.view.voice = if self.own_deafened {
+                self.view.voice = if deafened {
                     "deafened"
-                } else if self.own_muted || restricted {
+                } else if muted {
                     "muted"
                 } else {
                     "active"
@@ -552,8 +592,6 @@ impl Active {
             }
             "channel.userJoined" | "channel.userChanged" if same_room => {
                 if payload["connectionId"] == self.view.snapshot["connectionId"] {
-                    self.own_muted = payload["muted"] == true;
-                    self.own_deafened = payload["deafened"] == true;
                     self.update_member(payload.clone());
                     self.reconcile_voice().await;
                 } else {

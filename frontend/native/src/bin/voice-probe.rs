@@ -44,6 +44,7 @@ async fn main() -> Result<()> {
             connection.ice_servers,
             connection.bitrate,
             true,
+            Default::default(),
         )
         .await?;
         voice.set_receiving(true).await?;

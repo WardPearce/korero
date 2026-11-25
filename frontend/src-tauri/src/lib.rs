@@ -3,12 +3,13 @@ mod identity;
 use anyhow::{ensure, Context, Result};
 use korero_native::{
     media::{self, AudioProfile},
-    session::{Action, Controller, Session, View},
+    session::{Action, Controller, Presence, Session, View},
     signaling::{CertificateInfo, Credentials, Server, ServerContact},
 };
 use reqwest::Method;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 
@@ -114,8 +115,9 @@ async fn fetch(
     let is_administration = matches!(
         (method.as_str(), endpoint),
         ("GET", "/api/v1/admin/accounts" | "/api/v1/admin/configuration")
-            | ("PATCH", "/api/v1/admin/roles" | "/api/v1/admin/configuration" | "/api/v1/admin/password")
-            | ("POST", "/api/v1/admin/invitations")
+            | ("PATCH", "/api/v1/admin/roles" | "/api/v1/admin/roles/definition" | "/api/v1/admin/banner"
+                | "/api/v1/admin/configuration" | "/api/v1/admin/password" | "/api/v1/channels/order")
+            | ("POST", "/api/v1/admin/invitations" | "/api/v1/admin/roles")
     );
     ensure!(is_public || is_account || is_administration, "Unsupported client HTTP operation");
     let method = Method::from_bytes(method.as_bytes())?;
@@ -139,7 +141,11 @@ fn strip_credentials(body: &mut Value) {
 }
 
 #[tauri::command]
-async fn start_session(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+async fn start_session(
+    member_volumes: Option<HashMap<String, u8>>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
     let (mut updates, generation) = {
         let mut client = state.0.lock().await;
         if client
@@ -153,7 +159,9 @@ async fn start_session(app: AppHandle, state: State<'_, AppState>) -> CommandRes
             .session
             .clone()
             .ok_or("Sign in with an identity first")?;
-        let controller = Controller::start(session);
+        let mut member_volumes = member_volumes.unwrap_or_default();
+        member_volumes.retain(|_, level| *level < 100);
+        let controller = Controller::start(session, member_volumes);
         let updates = controller.state.clone();
         client.generation += 1;
         client.controller = Some(controller);
@@ -278,9 +286,11 @@ async fn leave_channel(_app: AppHandle, state: State<'_, AppState>) -> CommandRe
 async fn set_presence(
     muted: Option<bool>,
     deafened: Option<bool>,
+    afk: Option<bool>,
+    afk_message: Option<String>,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    dispatch(&state, Action::Presence { muted, deafened }).await
+    dispatch(&state, Action::Presence(Presence { muted, deafened, afk, afk_message })).await
 }
 
 #[tauri::command]
@@ -291,6 +301,27 @@ async fn send_message(text: String, state: State<'_, AppState>) -> CommandResult
 #[tauri::command]
 async fn save_channel(payload: Value, state: State<'_, AppState>) -> CommandResult<()> {
     dispatch(&state, Action::SaveChannel(payload)).await
+}
+
+#[tauri::command]
+async fn member_action(kind: String, payload: Value, state: State<'_, AppState>) -> CommandResult<()> {
+    let kind = match kind.as_str() {
+        "moderation.mute" => "moderation.mute",
+        "moderation.deafen" => "moderation.deafen",
+        "moderation.kick" => "moderation.kick",
+        "moderation.ban" => "moderation.ban",
+        "role.set" => "role.set",
+        _ => return Err("Unsupported member action".into()),
+    };
+    dispatch(&state, Action::MemberAction { kind, payload }).await
+}
+
+#[tauri::command]
+async fn set_member_volume(account_id: String, level: u8, state: State<'_, AppState>) -> CommandResult<()> {
+    if level > 100 {
+        return Err("Volume needs to be between 0 and 100".into());
+    }
+    dispatch(&state, Action::MemberVolume { account_id, level }).await
 }
 
 #[tauri::command]
@@ -367,6 +398,8 @@ pub fn run() {
             set_presence,
             send_message,
             save_channel,
+            member_action,
+            set_member_volume,
             get_audio_devices,
             configure_audio,
             push_to_talk,

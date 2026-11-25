@@ -7,20 +7,21 @@
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
   import { Tooltip } from "bits-ui";
-  import { ArrowRight, AudioLines, Bookmark, Cable, ListTree, Plus, Server, Settings2 } from "lucide-svelte";
+  import { ArrowRight, AudioLines, Bookmark, Cable, ListTree, Plus, Server, Settings2, X } from "lucide-svelte";
   import { onMount } from "svelte";
   import QuickAudio from "$lib/QuickAudio.svelte";
   import { AudioSettings, setAudioSettings } from "$lib/audio.svelte";
   import PaneDivider from "$lib/PaneDivider.svelte";
-  import { getUsername, migrateSavedServers, preferences, type SavedServer } from "$lib/preferences";
+  import { getMemberVolumes, getUsername, migrateSavedServers, preferences, saveMemberVolumes, type SavedServer } from "$lib/preferences";
   import Avatar from "$lib/Avatar.svelte";
   import ContextActions from "$lib/ContextActions.svelte";
   import IdentitySetup from "$lib/IdentitySetup.svelte";
+  import IconButton from "$lib/IconButton.svelte";
   import Modal from "$lib/Modal.svelte";
   import ServerAdministration from "$lib/ServerAdministration.svelte";
   import {
     apiFor, call, messageFrom, nativeApp, offline, requestError, shortHost, watchVoice,
-    type ServerInfo, type VoiceState,
+    type MemberRequest, type ServerInfo, type VoiceState,
   } from "$lib/client";
   import { authenticateIdentity, identityError, loadIdentity } from "$lib/identity";
   import { browserServerOrigin, browserSession } from "$lib/browser-session";
@@ -59,13 +60,13 @@
   let connectBusy = $state(false);
   let connectError = $state("");
   let bookmarkOrigin = $state("");
-  let discoverAddress = $state("");
+  let discoverAddress = $state(import.meta.env.VITE_DEFAULT_SERVER || "");
   interface CertificateContact { origin: string; fingerprint: string; publiclyTrusted: boolean }
   let trustPrompt = $state<(CertificateContact & { previous?: string }) | null>(null);
   let discovery = $state.raw<Target | null>(null);
   let accessPrompt = $state(false);
-  let claimOwnership = $state(false);
   let invitationRequired = $state(false);
+  let setupToken = $state("");
   let serverCode = $state("");
   let serverPassword = $state("");
   let administrationOpen = $state(false);
@@ -75,6 +76,7 @@
   let removeError = $state("");
   let remembered = $state(true);
   let pending = $state("");
+  let memberVolumes = $state.raw<Record<string, number>>({});
   let actionError = $state("");
   let selectedChannelId = $state<string | null>(null);
   let mobilePane = $state<MobilePane>("room");
@@ -86,6 +88,8 @@
     ["manageRoles", "manageSettings", "manageInvitations"].some((permission) => serverPermissions.includes(permission)));
   let onWorkspace = $derived(page.route.id === "/");
   let serverTitle = $derived(serverInfo?.name ?? (serverOrigin ? shortHost(serverOrigin) : "No server connected"));
+  let bannerImageUrl = $derived(view.snapshot?.bannerImageUrl === undefined ? serverInfo?.bannerImageUrl ?? null : view.snapshot.bannerImageUrl);
+  let claimOwnership = $derived(Boolean(discovery?.info.setupRequired && setupToken.trim()));
   let status = $derived(
     view.phase === "online" ? "Connected" : view.phase === "connecting" ? "Connecting" :
       view.phase === "reconnecting" ? "Reconnecting" : view.phase === "error" ? "Connection lost" : "Offline",
@@ -95,6 +99,7 @@
     get view() { return view; },
     get serverOrigin() { return serverOrigin; },
     get serverTitle() { return serverTitle; },
+    get bannerImageUrl() { return bannerImageUrl; },
     get channelBackgrounds() { return Boolean(serverInfo?.channelBackgrounds); },
     get channelWidth() { return channelWidth; },
     get channelMax() { return channelMax; },
@@ -108,6 +113,10 @@
     set mobilePane(value) { mobilePane = value; },
     showConnect,
     run,
+    memberAction,
+    memberVolume(accountId) { return memberVolumes[accountId] ?? 100; },
+    setMemberVolume,
+    reorderChannel,
     disconnect,
   });
 
@@ -167,8 +176,8 @@
     trustPrompt = null;
     connectError = "";
     accessPrompt = false;
-    claimOwnership = false;
     invitationRequired = false;
+    setupToken = "";
     serverCode = "";
     serverPassword = "";
     remembered = true;
@@ -305,10 +314,21 @@
   async function enroll(target: Target) {
     const code = serverCode.trim();
     const password = serverPassword || undefined;
+    const bootstrap = claimOwnership;
     const result = await authenticateIdentity(target.origin, target.info.serverId, deviceName,
-      claimOwnership
-        ? { operation: "bootstrap", displayName: username, token: code }
+      bootstrap
+        ? { operation: "bootstrap", displayName: username, token: setupToken.trim() }
         : { operation: "register", displayName: username, invitation: code || undefined, password });
+    if (bootstrap && result.status === 404) {
+      const response = await apiFor(target.origin).server.info.get();
+      if (!response.error && response.data && "serverId" in response.data && !response.data.setupRequired) {
+        const updated = { ...target, info: response.data };
+        setupToken = "";
+        discovery = updated;
+        if (!updated.info.passwordRequired || serverPassword) await signIn(updated);
+        return;
+      }
+    }
     if (result.status === 409) {
       const login = await authenticateIdentity(target.origin, target.info.serverId, deviceName, { operation: "login", password });
       if (login.status === 200) {
@@ -321,15 +341,23 @@
     if (!account || typeof account !== "object" || !("account" in account)) {
       throw new Error("This server did not return an account.");
     }
+    if (bootstrap) {
+      target = { ...target, info: { ...target.info, setupRequired: false } };
+      discovery = target;
+      setupToken = "";
+    }
     await finishConnection(target);
   }
 
   async function finishConnection(target: Target) {
-    serverInfo = claimOwnership ? { ...target.info, setupRequired: false } : target.info;
+    serverInfo = target.info;
     serverOrigin = target.origin;
     try {
       await audio.load();
-      if (nativeApp()) await call("start_session");
+      if (nativeApp()) {
+        memberVolumes = await getMemberVolumes(target.info.serverId).catch(() => ({}));
+        await call("start_session", { memberVolumes });
+      }
       else await browserSession.start();
     } catch (error) {
       actionError = messageFrom(error);
@@ -343,18 +371,16 @@
     openWorkspace("channels");
     connectError = "";
     serverCode = "";
+    setupToken = "";
     serverPassword = "";
   }
 
-  async function run(action: string, command: string, args?: Record<string, unknown>) {
+  async function runAction(action: string, work: () => Promise<unknown>) {
     if (pending) return false;
     pending = action;
     actionError = "";
     try {
-      if (nativeApp()) await call(command, args);
-      else if (command === "disconnect") await browserSession.disconnect();
-      else if (command === "save_channel") await browserSession.saveChannel(args?.payload as Record<string, unknown>);
-      else throw new Error("Open Kōrero in the desktop app to use voice.");
+      await work();
       return true;
     } catch (error) {
       actionError = messageFrom(error);
@@ -362,6 +388,38 @@
     } finally {
       pending = "";
     }
+  }
+
+  function run(action: string, command: string, args?: Record<string, unknown>) {
+    return runAction(action, () => {
+      if (nativeApp()) return call(command, args);
+      if (command === "disconnect") return browserSession.disconnect();
+      if (command === "save_channel") return browserSession.saveChannel(args?.payload as Record<string, unknown>);
+      throw new Error("Open Kōrero in the desktop app to use voice.");
+    });
+  }
+
+  function reorderChannel(channelId: string, targetId: string, placement: "before" | "after") {
+    return runAction("channel-order", async () => {
+      const response = await apiFor(serverOrigin).channels.order.patch({ channelId, targetId, placement });
+      if (response.error) throw requestError(response.error);
+    });
+  }
+
+  function memberAction(request: MemberRequest) {
+    return runAction(request.kind, () => nativeApp() ? call("member_action", request) : browserSession.memberAction(request));
+  }
+
+  function setMemberVolume(accountId: string, level: number) {
+    return runAction("member-volume", async () => {
+      const serverId = serverInfo?.serverId;
+      await call("set_member_volume", { accountId, level });
+      const next = { ...memberVolumes };
+      if (level === 100) delete next[accountId];
+      else next[accountId] = level;
+      memberVolumes = next;
+      if (serverId) await saveMemberVolumes(serverId, next);
+    });
   }
 
   async function disconnect() {
@@ -411,7 +469,6 @@
 </svelte:head>
 
 {#snippet brand()}
-  <span class="brand-symbol" aria-hidden="true"><AudioLines size={24} strokeWidth={2.35} /></span>
   <span class="brand-name">kōrero<span>.</span></span>
 {/snippet}
 
@@ -426,15 +483,19 @@
         <section class="rail-section">
           <div class="rail-section-label"><span>Servers</span></div>
           {#if serverOrigin}
-            <ContextActions actions={serverActions({ origin: serverOrigin, name: serverTitle })} disabled={connectBusy || Boolean(pending)}>
-              {#snippet trigger({ props })}
-            <button {...props} tabindex="0" class="rail-server current" onclick={() => openWorkspace("channels")}>
-              <span class="rail-tile"><Server size={16} strokeWidth={1.8} /></span>
-              <span class="min-w-0"><strong class="truncate">{serverTitle}</strong><small class="truncate">{shortHost(serverOrigin)}</small></span>
-              <span class="connection-dot" data-online={online}></span>
-            </button>
-              {/snippet}
-            </ContextActions>
+            <div class="active-server">
+              <ContextActions actions={serverActions({ origin: serverOrigin, name: serverTitle })} disabled={connectBusy || Boolean(pending)}>
+                {#snippet trigger({ props })}
+                  <button {...props} tabindex="0" class="rail-server current" onclick={() => openWorkspace("channels")}>
+                    <span class="rail-tile"><Server size={16} strokeWidth={1.8} /></span>
+                    <span class="min-w-0"><strong class="truncate">{serverTitle}</strong><small class="truncate">{shortHost(serverOrigin)}</small></span>
+                    <span class="connection-dot" data-online={online}></span>
+                  </button>
+                {/snippet}
+              </ContextActions>
+              <IconButton label={`Disconnect from ${serverTitle}`} class="disconnect-server" disabled={connectBusy || Boolean(pending)}
+                onclick={() => { void disconnect(); }}><X size={16} /></IconButton>
+            </div>
           {:else}
             <p class="rail-empty">No active connection</p>
           {/if}
@@ -506,14 +567,16 @@
   {:else if discovery && accessPrompt}
     <form class="dialog-form" onsubmit={submitServerCode}>
       {#if discovery.info.setupRequired}
-        <label class="checkbox-label"><input type="checkbox" bind:checked={claimOwnership}
-          onchange={() => { serverCode = ""; connectError = ""; }} /> Claim server ownership</label>
+        <label>Server setup token
+          <input type="password" autocomplete="off" spellcheck="false" bind:value={setupToken} />
+        </label>
+        <p class="field-hint">Enter the token to claim ownership, or leave it blank to connect as a member.</p>
       {/if}
       {#if discovery.info.passwordRequired && !claimOwnership}
         <label>Server password<input type="password" autocomplete="current-password" required maxlength="128" bind:value={serverPassword} /></label>
       {/if}
-      {#if claimOwnership || invitationRequired}
-        <label>{claimOwnership ? "Server setup token" : "Invitation code"}
+      {#if invitationRequired && !claimOwnership}
+        <label>Invitation code
           <input type="password" required autocomplete="off" spellcheck="false" bind:value={serverCode} />
         </label>
       {/if}
@@ -524,7 +587,7 @@
     </form>
   {:else}
     <form class="dialog-form" onsubmit={discover}>
-      <label>Server address<input required autocomplete="off" inputmode="url" placeholder="voice.example.net:8443" spellcheck="false" bind:value={discoverAddress} /></label>
+      <label>Server address<input required autocomplete="off" inputmode="url" placeholder="example.com:8443" spellcheck="false" bind:value={discoverAddress} /></label>
       <label class="checkbox-label"><input type="checkbox" bind:checked={remembered} /> Save this server address</label>
       <button class="primary-button justify-center" type="submit" disabled={connectBusy}>{connectBusy ? "Connecting…" : "Connect"} <ArrowRight size={16} /></button>
     </form>
@@ -541,6 +604,7 @@
 
 {#if administrationOpen && serverInfo && canAdminister}
   <ServerAdministration bind:open={administrationOpen} origin={serverOrigin} title={serverTitle} permissions={serverPermissions}
+    bannerSupported={serverInfo.bannerImageUrl !== undefined} {bannerImageUrl}
     passwordRequired={Boolean(serverInfo.passwordRequired)} onPasswordChange={(passwordRequired) => {
       if (serverInfo) serverInfo = { ...serverInfo, passwordRequired };
     }} />

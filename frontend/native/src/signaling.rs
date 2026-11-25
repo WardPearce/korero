@@ -48,23 +48,23 @@ struct Capabilities {
 }
 
 fn parse_origin(address: &str) -> Result<Url> {
-        let address = address.trim();
-        let address = if address.contains("://") {
-            address.to_owned()
-        } else {
-            format!("https://{address}")
-        };
-        let origin = Url::parse(&address).context("Enter a valid HTTPS server address")?;
-        ensure!(
-            origin.scheme() == "https"
-                && origin.has_host()
-                && origin.username().is_empty()
-                && origin.password().is_none()
-                && origin.path() == "/"
-                && origin.query().is_none()
-                && origin.fragment().is_none(),
-            "Enter an HTTPS server origin such as https://voice.example.net:8443"
-        );
+    let address = address.trim();
+    let address = if address.contains("://") {
+        address.to_owned()
+    } else {
+        format!("https://{address}")
+    };
+    let origin = Url::parse(&address).context("Enter a valid server address")?;
+    ensure!(
+        origin.scheme() == "https"
+            && origin.has_host()
+            && origin.username().is_empty()
+            && origin.password().is_none()
+            && origin.path() == "/"
+            && origin.query().is_none()
+            && origin.fragment().is_none(),
+        "Enter a server IP or host, with an optional port"
+    );
     Ok(origin)
 }
 

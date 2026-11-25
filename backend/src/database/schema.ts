@@ -72,3 +72,7 @@ export const speakingRestrictions = sqliteTable("speaking_restrictions", {
   accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
   actorId: text("actor_id").notNull().references(() => accounts.id),
 });
+export const hearingRestrictions = sqliteTable("hearing_restrictions", {
+  accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
+  actorId: text("actor_id").notNull().references(() => accounts.id),
+});
