@@ -17,12 +17,14 @@
   const roles = $derived(canModerate ? snapshot?.assignableRoles ?? [] : []);
   const speaking = $derived(!member.afk && (member.speaking ?? workspace.view.speaking.includes(member.connectionId)));
   const canAdjustVolume = $derived(voiceAvailable && !ownAccount && snapshot?.lowerRoles !== undefined);
-  let dialog = $state<"volume" | "kick" | "ban">("volume");
+  let dialog = $state<"volume" | "kick" | "ban" | "poke">("volume");
   let dialogOpen = $state(false);
   let volume = $state(100);
+  let pokeMessage = $state("");
 
   const actions = $derived.by(() => {
     const actions: { label: string; onSelect: () => void; disabled?: boolean }[] = [];
+    if (!ownAccount) actions.push({ label: "Poke…", onSelect: () => showDialog("poke") });
     if (canAdjustVolume) actions.push({ label: "User volume…", onSelect: () => showDialog("volume") });
     if (canModerate && channel.canMute) {
       actions.push(
@@ -56,6 +58,7 @@
   async function showDialog(kind: typeof dialog) {
     workspace.actionError = "";
     dialog = kind;
+    if (kind === "poke") pokeMessage = "";
     if (kind === "volume") volume = workspace.memberVolume(member.accountId);
     await tick();
     dialogOpen = true;
@@ -64,6 +67,7 @@
   async function confirm(event: SubmitEvent) {
     event.preventDefault();
     const ok = dialog === "volume" ? await workspace.setMemberVolume(member.accountId, volume)
+      : dialog === "poke" ? await workspace.run("poke", "message.send", { accountId: member.accountId, text: pokeMessage.trim() || "👋" })
       : await workspace.memberAction({
         kind: dialog === "kick" ? "moderation.kick" : "moderation.ban",
         payload: { accountId: member.accountId },
@@ -101,17 +105,21 @@
   <Modal bind:open={dialogOpen}
     title={dialog === "volume" ? `${member.displayName}’s volume` : `${dialog === "kick" ? "Kick" : "Ban"} ${member.displayName}?`}
     description={dialog === "volume" ? "Changes how loudly you hear this user on this device."
+      : dialog === "poke" ? "Send a poke to get their attention. Add a message if you like."
       : dialog === "kick" ? "Their devices will be disconnected from the server."
       : "Their devices will be disconnected and their account will be blocked from rejoining."}>
     <form class="dialog-form" onsubmit={confirm}>
       {#if dialog === "volume"}
         <SliderField label="Volume (%)" bind:value={volume} disabled={Boolean(workspace.pending)} />
       {/if}
+      {#if dialog === "poke"}
+        <label class="poke-label">Message (optional)<input bind:value={pokeMessage} maxlength="500" placeholder="Poke" disabled={Boolean(workspace.pending)} /></label>
+      {/if}
       {#if workspace.actionError}<p class="form-error" role="alert">{workspace.actionError}</p>{/if}
       <div class="dialog-actions">
         <Button type="button" onclick={() => { dialogOpen = false; }}>Cancel</Button>
         <Button type="submit" variant="alternate" disabled={Boolean(workspace.pending)}>
-          {dialog === "volume" ? "Apply" : dialog === "kick" ? "Kick" : "Ban"}
+          {dialog === "volume" ? "Apply" : dialog === "poke" ? "Send poke" : dialog === "kick" ? "Kick" : "Ban"}
         </Button>
       </div>
     </form>
