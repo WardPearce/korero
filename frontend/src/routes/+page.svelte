@@ -215,9 +215,10 @@
     if (!(await run("message", "send_message", { text })) && !message) message = text;
   }
 
-  function toggleAfk() {
+  async function toggleAfk() {
     if (!canSetAfk) return;
-    void run("afk", "set_presence", { afk: !ownMember?.afk, afkMessage: "" });
+    const markingAfk = !ownMember?.afk;
+    if (await run("afk", "set_presence", { afk: markingAfk, afkMessage: "" })) playUiSound(markingAfk ? "afk" : "back");
   }
 
   function showAfkForm() {
@@ -230,7 +231,10 @@
   async function saveAfkMessage(event: SubmitEvent) {
     event.preventDefault();
     if (!canSetAfk || afkFormOrigin !== workspace.serverOrigin) return;
-    if (await run("afk", "set_presence", { afk: true, afkMessage: afkMessage.trim() })) afkFormOpen = false;
+    if (await run("afk", "set_presence", { afk: true, afkMessage: afkMessage.trim() })) {
+      if (!ownMember?.afk) playUiSound("afk");
+      afkFormOpen = false;
+    }
   }
 
   function toggleGroup(id: string) {

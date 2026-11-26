@@ -114,7 +114,7 @@ body {
   width: 100%;
   min-height: 44px;
   padding: 4px;
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   background: transparent;
   text-align: left;
   font-size: var(--type-small);
@@ -215,7 +215,7 @@ body {
   min-height: 42px;
   min-width: 0;
   margin: 4px 0 4px calc(var(--depth) * 10px);
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
 }
 .channel-row:hover, .channel-row[data-selected="true"] { border-color: var(--border); background: var(--surface); }
 .channel-row[data-selected="true"] { box-shadow: var(--shadow-inset); font-weight: 700; }
