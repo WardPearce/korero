@@ -36,7 +36,8 @@
   type Permission = RoleDefinition["permissions"][number];
   const permissionLabels: Record<Permission, string> = {
     join: "See and join channels", speak: "Speak in voice", text: "Read and send channel messages", createChannels: "Create channels",
-    editChannels: "Edit channels", deleteChannels: "Delete channels", move: "Move members", mute: "Mute members",
+    editChannels: "Edit channels", removeChannels: "Delete channels", deleteChannels: "Delete other members’ channel messages",
+    move: "Move members", mute: "Mute members",
     kick: "Kick members", ban: "Ban members", manageRoles: "Assign roles", manageInvitations: "Manage invitations",
     manageSettings: "Manage server settings", viewAdmin: "View diagnostics and audit log",
     attachFiles: "Upload attachments", sendDirectMessages: "Send direct messages", shareScreen: "Share screen",
@@ -44,8 +45,8 @@
   };
   const permissionGroups = [
     { label: "Channel access and voice", permissions: ["join", "speak", "shareScreen", "useCamera", "whisper"] },
-    { label: "Messaging", permissions: ["text", "attachFiles", "sendDirectMessages"] },
-    { label: "Channel management", permissions: ["createChannels", "editChannels", "deleteChannels"] },
+    { label: "Messaging", permissions: ["text", "attachFiles", "sendDirectMessages", "deleteChannels"] },
+    { label: "Channel management", permissions: ["createChannels", "editChannels", "removeChannels"] },
     { label: "Moderation", permissions: ["move", "mute", "kick", "ban"] },
     { label: "Server administration", permissions: ["manageRoles", "manageInvitations", "manageSettings", "viewAdmin"] },
   ] satisfies { label: string; permissions: Permission[] }[];
@@ -53,7 +54,7 @@
     { name: "Listener", permissions: ["join"] },
     { name: "Text-only", permissions: ["join", "text"] },
     { name: "Presenter", permissions: ["join", "speak", "shareScreen", "useCamera"] },
-    { name: "Channel Manager", permissions: ["join", "speak", "text", "createChannels", "editChannels", "deleteChannels", "move"] },
+    { name: "Channel Manager", permissions: ["join", "speak", "text", "createChannels", "editChannels", "removeChannels", "move"] },
     { name: "Invitation Manager", permissions: ["join", "manageInvitations"] },
   ];
   type ServerPreferences = Extract<Awaited<ReturnType<ReturnType<typeof apiFor>["admin"]["preferences"]["get"]>>["data"], { motd: string }>;

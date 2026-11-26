@@ -167,7 +167,7 @@ Extended administration adds `motd` and the effective server `targetAudioBitrate
 in bits per second. Changes to either value trigger `state.invalidated`.
 `lowerRoles` lists roles below the caller in the server hierarchy. `assignableRoles`
 lists roles the caller can assign to a subordinate account. The channel list has
-`id, parentId, name, description, position, capacity, temporary, passwordRequired, canMute, canReparent`.
+`id, parentId, name, description, position, capacity, temporary, passwordRequired, canMute, canReparent, canDelete`.
 Invisible parents are represented as null. Members have `connectionId, accountId,
 displayName, role, badge, muted, deafened, adminMuted, adminDeafened` and cover the socket's
 current channel. Presence entries have
@@ -209,7 +209,7 @@ password or permission-override fields.
 | `invitation.list` | — | Latest 100 invitation records without tokens or verifiers |
 | `invitation.update` | `invitationId, expiresAt?, usesLeft?` | Updated invitation record |
 | `invitation.revoke` | `invitationId` | `{}` |
-| `server.settings` | `name?, registration?` | `{}` |
+| `server.settings` | `name?` | `{}` |
 | `admin.diagnostics` | — | Counts, process CPU and memory, worker PID and native resource usage where available |
 | `admin.audit` | `before?` audit ID | Latest 100 matching audit records |
 | `message.send` | `channelId, text, html?` | `{messageId}` |
@@ -220,6 +220,12 @@ password or permission-override fields.
 | `direct.history` | `accountId, before?: {createdAt, id}` | `{messages, next}` |
 | `direct.send` | `accountId, id, nonce, ciphertext, signature` | `{messageId}` |
 
+`channel.delete` requires the effective `removeChannels` permission. The Lobby
+and channels with children cannot be deleted. Deleting another member’s channel
+message still requires `deleteChannels`.
+
+Registration and `server.max_users` are host-only settings: change them in TOML or
+with `VOICE_SERVER_REGISTRATION` / `VOICE_SERVER_MAX_USERS`, not through `server.settings`.
 Server mute and deafen require `mute` at server scope and in the target channel.
 They apply to a subordinate account identified by its connection ID and persist
 across connections. Server mute blocks producers. Server deafen blocks producers

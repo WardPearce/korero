@@ -258,6 +258,10 @@ class BrowserSession {
     this.showSnapshot(result.state);
   }
 
+  async deleteChannel(channelId: string) {
+    await this.rpc("channel.delete", { channelId });
+  }
+
   async memberAction({ kind, payload }: MemberRequest) {
     await this.rpc(kind, payload);
   }

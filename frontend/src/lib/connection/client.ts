@@ -21,6 +21,7 @@ export interface Channel {
   passwordRequired: boolean;
   backgroundImageUrl?: string | null;
   canEdit?: boolean;
+  canDelete?: boolean;
   canReparent?: boolean;
   canSetPassword?: boolean;
   canMute?: boolean;

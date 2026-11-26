@@ -1,9 +1,11 @@
 import Dexie, { type Table } from "dexie";
 import type { TalkShortcut } from "./media/talk-shortcut";
 
-export interface SavedServer { origin: string; name: string }
+export interface SavedServer { origin: string; name: string; passwordRequired?: boolean }
 export interface DeviceIdentity { publicKey: string; privateKey: string }
 export interface TrustRecord { origin: string; fingerprint: string }
+type PasswordKey = [origin: string, serverId: string, channelId: string];
+interface SavedPassword { origin: string; serverId: string; channelId: string; password: string }
 export interface AudioPreferences {
   input: string;
   output: string;
@@ -36,15 +38,30 @@ class Preferences extends Dexie {
   declare trust: Table<TrustRecord, string>;
   declare identities: Table<DeviceIdentity & { id: "default" }, "default">;
   declare local: Table<{ key: string; value: unknown }, string>;
+  declare passwords: Table<SavedPassword, PasswordKey>;
 
   constructor() {
     super("korero-device");
     this.version(1).stores({ servers: "&origin", trust: "&origin", local: "&key" });
     this.version(2).stores({ identities: "&id" });
+    this.version(3).stores({ passwords: "[origin+serverId+channelId], origin" });
   }
 }
 
 export const preferences = new Preferences();
+
+export function getSavedPassword(origin: string, serverId: string, channelId = "") {
+  return preferences.passwords.get([origin, serverId, channelId]).then((record) => record?.password);
+}
+
+export function savePassword(origin: string, serverId: string, password: string, channelId = "") {
+  return preferences.passwords.put({ origin, serverId, channelId, password });
+}
+
+export function forgetPassword(origin: string, serverId: string, channelId = "", rejectedPassword?: string) {
+  const records = preferences.passwords.where("[origin+serverId+channelId]").equals([origin, serverId, channelId]);
+  return records.and(({ password }) => rejectedPassword === undefined || rejectedPassword === password).delete();
+}
 
 export async function getMemberVolumes(serverId: string) {
   const { value } = await preferences.local.get(`member-volumes:${serverId}`) ?? {};

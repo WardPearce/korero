@@ -583,6 +583,7 @@ export class Realtime {
     const canWhisper = canSpeak && this.allowed(account, "whisper", joinedChannel);
     const visible = [...this.catalog.values()].filter((channel) => this.allowed(account, "join", channel));
     const visibleIds = new Set(visible.map(({ id }) => id));
+    const parentIds = new Set([...this.catalog.values()].map(({ parentId }) => parentId));
     const lowerRoles = this.lowerRoles(account);
     const { totalUsers } = this.db.select({ totalUsers: count() }).from(accounts).get()!;
     return { connectionId: peer.id, account, channelId: peer.channelId, totalUsers,
@@ -605,6 +606,7 @@ export class Realtime {
               this.allowed(account, "whisper", channel),
             canSetAudioBitrate: this.allowed(account, "manageSettings") && canEdit,
             canEdit, canReparent: canEdit && id !== LOBBY,
+            canDelete: id !== LOBBY && !parentIds.has(id) && this.allowed(account, "removeChannels", channel),
             canSetPassword: id !== LOBBY && canEdit,
             canMute: this.allowed(account, "mute") && this.allowed(account, "mute", channel) };
         }),
@@ -990,7 +992,7 @@ export class Realtime {
       case "channel.edit": return this.changeChannel(peer, request.payload);
       case "channel.delete": {
         const channel = this.channel(request.payload.channelId);
-        this.require(actor, "deleteChannels", channel);
+        this.require(actor, "removeChannels", channel);
         if (channel.id === LOBBY || [...this.catalog.values()].some(({ parentId }) => parentId === channel.id)) fail("CONFLICT");
         this.removeChannel(channel.id, actor.id);
         break;
@@ -1001,7 +1003,9 @@ export class Realtime {
         const channel = this.channel(channelId);
         this.require(actor, "join", channel);
         if (channel.passwordHash && peer.channelId !== channelId &&
-            (!password || !await this.password(() => Bun.password.verify(password, channel.passwordHash!)))) fail("FORBIDDEN");
+            (!password || !await this.password(() => Bun.password.verify(password, channel.passwordHash!)))) {
+          throw new ProtocolError("FORBIDDEN", "Incorrect channel password.");
+        }
         const current = this.verify(peer);
         if (this.channel(channelId) !== channel) fail("CONFLICT");
         this.require(current, "join", channel);
@@ -1142,17 +1146,16 @@ export class Realtime {
           .orderBy(desc(auditEvents.id)).limit(100).all();
       case "server.settings": {
         this.require(actor, "manageSettings");
-        const { name, registration } = request.payload;
-        if (name !== undefined && process.env.VOICE_SERVER_NAME !== undefined ||
-            registration !== undefined && process.env.VOICE_SERVER_REGISTRATION !== undefined) fail("FORBIDDEN");
+        const trimmed = request.payload.name?.trim();
+        if (trimmed !== undefined && process.env.VOICE_SERVER_NAME !== undefined) fail("FORBIDDEN");
         this.db.transaction((tx) => {
-          for (const [key, value] of Object.entries({ name: name?.trim(), registration })) if (value !== undefined) {
-            tx.insert(settings).values({ key, value }).onConflictDoUpdate({ target: settings.key, set: { value } }).run();
+          if (trimmed !== undefined) {
+            tx.insert(settings).values({ key: "name", value: trimmed })
+              .onConflictDoUpdate({ target: settings.key, set: { value: trimmed } }).run();
           }
           audit(tx, actor.id, "server.settings_changed", null);
         }, { behavior: "immediate" });
-        if (name !== undefined) this.config.server.name = name.trim();
-        if (registration !== undefined) this.config.server.registration = registration;
+        if (trimmed !== undefined) this.config.server.name = trimmed;
         this.broadcastAll("server.changed", { name: this.config.server.name, registration: this.config.server.registration });
         break;
       }

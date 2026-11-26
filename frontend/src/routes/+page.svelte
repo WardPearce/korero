@@ -21,6 +21,7 @@
   import { getAudioSettings } from "#lib/media/audio.svelte";
   import WhisperControls from "#lib/components/media/WhisperControls.svelte";
   import { playUiSound } from "#lib/ui-sounds";
+  import { forgetPassword, getSavedPassword, savePassword } from "#lib/preferences";
   import { nativeApp, type Channel } from "#lib/connection/client";
   import ChatComposer from "#lib/components/chat/ChatComposer.svelte";
   import ChatMessage from "#lib/components/chat/ChatMessage.svelte";
@@ -52,7 +53,9 @@
   let backgroundImageUrl = $state("");
   let passwordOpen = $state(false);
   let channelPassword = $state("");
-  let joining = $state.raw<Channel | null>(null);
+  let joining = $state.raw<{ channel: Channel; connectionId: string } | null>(null);
+  let deleteChannelOpen = $state(false);
+  let deletingChannel = $state.raw<{ channel: Channel; connectionId: string } | null>(null);
   let search = $state("");
   let collapsed = $state<string[]>([]);
   let channelAudioKbps = $state<number | undefined>();
@@ -161,14 +164,31 @@
 
   async function joinChannel(channel: Channel) {
     selectChannel(channel);
-    if (activeChannel?.id === channel.id) return;
-    if (channel.passwordRequired) {
-      joining = channel;
-      channelPassword = "";
-      passwordOpen = true;
-    } else {
+    const connectionId = snapshot?.connectionId;
+    if (!online || !connectionId || pending || activeChannel?.id === channel.id) return;
+    if (!channel.passwordRequired) {
       if (await run("join", "join_channel", { channelId: channel.id, password: null })) playUiSound("channel");
+      return;
     }
+
+    const { serverOrigin, serverId } = workspace;
+    const saved = await getSavedPassword(serverOrigin, serverId, channel.id).catch(() => undefined);
+    if (connectionId !== snapshot?.connectionId || workspace.selectedChannelId !== channel.id || !online || pending) return;
+    if (saved) {
+      if (await run("join", "join_channel", { channelId: channel.id, password: saved })) {
+        playUiSound("channel");
+        return;
+      }
+      // Older servers use the generic FORBIDDEN message for a rejected password.
+      const message = actionError.replace(/^FORBIDDEN: /, "");
+      if (message !== "Incorrect channel password." && message !== "Operation not permitted") return;
+      void forgetPassword(serverOrigin, serverId, channel.id, saved).catch(() => {});
+    }
+
+    if (connectionId !== snapshot?.connectionId) return;
+    joining = { channel, connectionId };
+    channelPassword = "";
+    passwordOpen = true;
   }
 
   async function leaveChannel() {
@@ -177,12 +197,37 @@
 
   async function submitPassword(event: SubmitEvent) {
     event.preventDefault();
-    if (!joining) return;
-    if (await run("join", "join_channel", { channelId: joining.id, password: channelPassword })) {
+    if (!joining || joining.connectionId !== snapshot?.connectionId || !online) return;
+    const { serverOrigin, serverId } = workspace;
+    const { id } = joining.channel;
+    const password = channelPassword;
+    if (await run("join", "join_channel", { channelId: id, password })) {
       playUiSound("channel");
       passwordOpen = false;
       channelPassword = "";
       joining = null;
+      void savePassword(serverOrigin, serverId, password, id).catch(() => {
+        if (serverOrigin === workspace.serverOrigin) workspace.actionError = "This device could not save the channel password.";
+      });
+    }
+  }
+
+  function confirmChannelDeletion(channel: Channel) {
+    if (!snapshot) return;
+    workspace.actionError = "";
+    deletingChannel = { channel, connectionId: snapshot.connectionId };
+    deleteChannelOpen = true;
+  }
+
+  async function deleteChannel() {
+    if (!online || !deletingChannel || deletingChannel.connectionId !== snapshot?.connectionId) return;
+    const { id } = deletingChannel.channel;
+    if (!channelsById.get(id)?.canDelete) return;
+    const { serverOrigin, serverId } = workspace;
+    if (await run("channel-delete", "delete_channel", { channelId: id })) {
+      deleteChannelOpen = false;
+      deletingChannel = null;
+      void forgetPassword(serverOrigin, serverId, id).catch(() => {});
     }
   }
 
@@ -266,9 +311,10 @@
   }
 
   function channelActions(channel: Channel) {
-    if (!channel.canEdit) return [];
-    const actions = [{ label: "Edit channel", onSelect: () => showChannelForm(channel) }];
-    if (!canReorder) return actions;
+    const actions = [];
+    if (channel.canEdit) actions.push({ label: "Edit channel", onSelect: () => showChannelForm(channel) });
+    if (channel.canDelete) actions.push({ label: "Delete channel", onSelect: () => confirmChannelDeletion(channel) });
+    if (!channel.canEdit || !canReorder) return actions;
     const siblings = channelsByParent.get(channel.parentId) ?? [];
     const index = siblings.findIndex(({ id }) => id === channel.id);
     const previous = siblings[index - 1];
@@ -399,7 +445,11 @@
         onclick={() => selectChannel(channel)} ondblclick={() => joinChannel(channel)} draggable={canReorder && channel.canEdit === true}
         ondragstart={(event) => startDrag(event, channel)} ondragend={endDrag}>
         <span class="truncate" title={channel.name}>{channel.name}</span>
-        {#if channel.passwordRequired}<small class="channel-access">Locked</small>{/if}
+        {#if channel.passwordRequired}
+          <span class="channel-access access-lock" title="Password protected">
+            <LockKeyhole size={14} aria-hidden="true" /><span class="sr-only">Password protected</span>
+          </span>
+        {/if}
         {#if isActive}<span class="joined-dot" title="Joined" aria-hidden="true"></span>{/if}
       </button>
     </div>
@@ -625,13 +675,27 @@
   </form>
 </Modal>
 
-<Modal bind:open={passwordOpen} title={joining ? `Join ${joining.name}` : "Join channel"} description="Enter the password for this channel." dismissible={pending !== "join"}>
+<Modal bind:open={() => passwordOpen && joining?.connectionId === snapshot?.connectionId, (open) => {
+  passwordOpen = open;
+  if (!open) { channelPassword = ""; joining = null; }
+}} title={joining ? `Join ${joining.channel.name}` : "Join channel"} description="Enter the password for this channel." dismissible={pending !== "join"}>
   {#snippet icon()}<LockKeyhole size={21} />{/snippet}
   {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}
   <form class="dialog-form" onsubmit={submitPassword}>
-    <label>Channel password<Input type="password" required bind:value={channelPassword} /></label>
+    <label>Channel password<Input type="password" required maxlength={128} bind:value={channelPassword} /></label>
     <Button variant="default" type="submit" disabled={Boolean(pending)}>{pending === "join" ? "Joining…" : voiceAvailable ? "Join voice" : "Join channel"}</Button>
   </form>
+</Modal>
+
+<Modal bind:open={() => deleteChannelOpen && deletingChannel?.connectionId === snapshot?.connectionId, (open) => { deleteChannelOpen = open; }}
+  title="Delete channel?" description={deletingChannel ? `This permanently deletes ${deletingChannel.channel.name} and its messages.` : "This permanently deletes the channel and its messages."}
+  dismissible={pending !== "channel-delete"}>
+  {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}
+  <div class="dialog-actions">
+    <Button variant="outline" disabled={pending === "channel-delete"} onclick={() => { deleteChannelOpen = false; }}>Cancel</Button>
+    <Button variant="destructive" disabled={Boolean(pending) || !deletingChannel || !channelsById.get(deletingChannel.channel.id)?.canDelete}
+      onclick={deleteChannel}>{pending === "channel-delete" ? "Deleting…" : "Delete channel"}</Button>
+  </div>
 </Modal>
 
 {#snippet channelFormFields()}

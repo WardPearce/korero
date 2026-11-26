@@ -872,7 +872,8 @@
                     "attachFiles",
                     "shareScreen",
                     "useCamera",
-                    "whisper"
+                    "whisper",
+                    "removeChannels"
                   ]
                 },
                 "allow": {
@@ -1551,16 +1552,6 @@
                   "maxLength": 80,
                   "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
                   "type": "string"
-                },
-                "registration": {
-                  "default": "open",
-                  "type": "string",
-                  "enum": [
-                    "open",
-                    "invitation",
-                    "admin",
-                    "disabled"
-                  ]
                 }
               }
             }
@@ -3622,7 +3613,7 @@
         },
         "permissions": {
           "minItems": 0,
-          "maxItems": 19,
+          "maxItems": 20,
           "type": "array",
           "items": {
             "default": "join",
@@ -3646,7 +3637,8 @@
               "sendDirectMessages",
               "shareScreen",
               "useCamera",
-              "whisper"
+              "whisper",
+              "removeChannels"
             ]
           }
         }

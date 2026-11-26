@@ -369,6 +369,11 @@ async fn save_channel(payload: Value, state: State<'_, AppState>) -> CommandResu
 }
 
 #[tauri::command]
+async fn delete_channel(channel_id: String, state: State<'_, AppState>) -> CommandResult<()> {
+    dispatch(&state, Action::DeleteChannel(channel_id)).await
+}
+
+#[tauri::command]
 async fn member_action(kind: String, payload: Value, state: State<'_, AppState>) -> CommandResult<()> {
     let kind = match kind.as_str() {
         "moderation.mute" => "moderation.mute",
@@ -580,6 +585,7 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             open_browser_media,
             save_channel,
+            delete_channel,
             member_action,
             set_member_volume,
             get_audio_devices,

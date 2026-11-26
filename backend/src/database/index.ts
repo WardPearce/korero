@@ -17,10 +17,10 @@ export const editableBuiltInRoles = ["Guest", "Member", "Moderator"] as const;
 export type Role = string;
 export const permissions = ["join", "speak", "text", "createChannels", "editChannels", "deleteChannels", "move", "mute", "kick",
   "ban", "manageRoles", "manageInvitations", "manageSettings", "viewAdmin", "attachFiles", "sendDirectMessages",
-  "shareScreen", "useCamera", "whisper"] as const;
+  "shareScreen", "useCamera", "whisper", "removeChannels"] as const;
 export type Permission = typeof permissions[number];
 export const channelPermissions = ["join", "speak", "text", "createChannels", "editChannels", "deleteChannels", "move", "mute",
-  "attachFiles", "shareScreen", "useCamera", "whisper"] as const;
+  "attachFiles", "shareScreen", "useCamera", "whisper", "removeChannels"] as const;
 export const memberPermissions = ["join", "speak", "text", "attachFiles", "sendDirectMessages", "shareScreen", "useCamera", "whisper"] as const;
 export const defaultPermissions: Record<typeof roles[number], readonly Permission[]> = {
   Guest: ["join"], Member: memberPermissions, Moderator: [...memberPermissions, "move", "mute", "kick", "manageInvitations"],

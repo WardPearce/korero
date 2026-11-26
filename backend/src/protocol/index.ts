@@ -141,7 +141,7 @@ export const payloads = {
   "invitation.revoke": object({ invitationId: id }),
   "admin.diagnostics": empty,
   "admin.audit": object({ before: optional(int(1, Number.MAX_SAFE_INTEGER)) }),
-  "server.settings": object({ name: optional(displayName), registration: optional(t.UnionEnum(["open", "invitation", "admin", "disabled"])) }),
+  "server.settings": object({ name: optional(displayName) }),
   "message.send": object({ channelId: id, text: text(8192), html: richMessageHtml }),
   "message.history": object({ channelId: id, before: optional(int(1, Number.MAX_SAFE_INTEGER)) }),
   "message.delete": object({ messageId: id }),

@@ -53,12 +53,10 @@ function parse(args: string[]) {
 }
 
 function applySettings(db: Store, config: Config) {
-  const value = (key: string) => db.select({ value: settings.value }).from(settings).where(eq(settings.key, key)).get()?.value;
-  const name = value("name");
-  const mode = value("registration");
-  const registration = (["open", "invitation", "admin", "disabled"] as const).find((entry) => entry === mode);
+  const name = db.select({ value: settings.value }).from(settings).where(eq(settings.key, "name")).get()?.value;
   if (name && !process.env.VOICE_SERVER_NAME) config.server.name = name;
-  if (registration && !process.env.VOICE_SERVER_REGISTRATION) config.server.registration = registration;
+  // Registration and max_users are host-only settings; discard any legacy saved value.
+  db.delete(settings).where(eq(settings.key, "registration")).run();
 }
 
 function terminalStyle(style: Parameters<typeof styleText>[0], value: string) {

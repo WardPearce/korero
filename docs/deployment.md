@@ -54,10 +54,12 @@ CLI path or data directory, then `VOICE_CONFIG` or `VOICE_DATA_DIR`, then
 `[storage].directory` if specified in the selected TOML, then `./data`.
 Otherwise the server reads `server.toml` from the selected data directory if it exists.
 Ordinary settings use `VOICE_<SECTION>_<KEY>` over TOML over defaults. Supply JSON for
-environment booleans, numbers, lists and tables. Server name and registration can also
-be persisted via the authorised WebSocket API. On restart, those saved values override
-TOML unless explicitly set by environment. Environment-managed values cannot be
-changed through the API.
+environment booleans, numbers, lists and tables. Server name can also be persisted
+via the authorised WebSocket API. On restart, that saved value overrides TOML unless
+explicitly set by environment. Registration and `server.max_users` are host-only:
+set them in TOML or with `VOICE_SERVER_REGISTRATION` / `VOICE_SERVER_MAX_USERS`.
+The API cannot change them. Environment-managed values cannot be changed through
+the API.
 
 Edit the TOML on the host and restart to apply it. Set `VOICE_SERVER_PASSWORD` to
 manage the shared password on the host. An explicitly empty value disables the shared

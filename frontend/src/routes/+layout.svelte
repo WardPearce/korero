@@ -8,11 +8,11 @@
   import { goto } from "$app/navigation";
   import { asset, resolve } from "$app/paths";
   import { page } from "$app/state";
-  import { ArrowRight, AudioLines, Bookmark, Cable, ListTree, Plus, Server, Settings2, X } from "@lucide/svelte";
+  import { ArrowRight, AudioLines, Bookmark, Cable, ListTree, LockKeyhole, Plus, Server, Settings2, X } from "@lucide/svelte";
   import { onMount } from "svelte";
   import { AudioSettings, setAudioSettings } from "#lib/media/audio.svelte";
   import PaneDivider from "#lib/components/PaneDivider.svelte";
-  import { getMemberVolumes, getUsername, migrateSavedServers, preferences, saveMemberVolumes, type SavedServer } from "#lib/preferences";
+  import { forgetPassword, getMemberVolumes, getSavedPassword, getUsername, migrateSavedServers, preferences, saveMemberVolumes, savePassword, type SavedServer } from "#lib/preferences";
   import Avatar from "#lib/components/Avatar.svelte";
   import ContextActions from "#lib/components/ContextActions.svelte";
   import IdentitySetup from "#lib/components/IdentitySetup.svelte";
@@ -80,6 +80,7 @@
   let setupToken = $state("");
   let serverCode = $state("");
   let serverPassword = $state("");
+  let savedServerPassword = $state<string>();
   let removingServer = $state.raw<SavedServer | null>(null);
   let removeServerOpen = $state(false);
   let removing = $state(false);
@@ -105,7 +106,7 @@
   let serverTitle = $derived(serverInfo?.name ?? (serverOrigin ? shortHost(serverOrigin) : online ? "Connected server" : "No server connected"));
   let bannerImageUrl = $derived(view.snapshot?.bannerImageUrl === undefined ? serverInfo?.bannerImageUrl ?? null : view.snapshot.bannerImageUrl);
   let claimOwnership = $derived(Boolean(discovery?.info.setupRequired && setupToken.trim()));
-  let needsPassword = $derived(Boolean(discovery?.info.passwordRequired &&
+  let needsPassword = $derived(Boolean(discovery?.info.passwordRequired && !savedServerPassword &&
     !(discovery.info.invitationPasswordBypass && serverCode.trim())));
   let status = $derived(
     view.phase === "online" ? "Connected" : view.phase === "connecting" ? "Connecting" :
@@ -236,6 +237,7 @@
     setupToken = "";
     serverCode = "";
     serverPassword = "";
+    savedServerPassword = undefined;
     remembered = true;
     bookmarkOrigin = "";
   }
@@ -274,6 +276,9 @@
     if (!target.info.identityAuthentication || !target.info.identityEnrollment) {
       throw new Error("Update this server to a VNX.chat version that supports identity sign-in.");
     }
+    if (target.info.passwordRequired) {
+      savedServerPassword = await getSavedPassword(origin, target.info.serverId).catch(() => undefined);
+    }
     if (target.info.setupRequired || needsPassword) {
       accessPrompt = true;
       connectOpen = true;
@@ -290,13 +295,30 @@
     return result.data;
   }
 
-  async function signIn(target: Target) {
-    const password = serverPassword || undefined;
-    const login = await authenticateIdentity(target.origin, target.info.serverId, deviceName, { operation: "login", password });
-    if (login.status === 200) {
-      await finishConnection(target);
-      return;
+  function promptServerPassword(target: Target, rejectedPassword?: string) {
+    if (rejectedPassword && rejectedPassword === savedServerPassword) {
+      savedServerPassword = undefined;
+      void forgetPassword(target.origin, target.info.serverId, "", rejectedPassword).catch(() => {});
     }
+    serverCode = "";
+    accessPrompt = true;
+    connectOpen = true;
+  }
+
+  async function loginIdentity(target: Target) {
+    const password = target.info.passwordRequired ? serverPassword || savedServerPassword : undefined;
+    const login = await authenticateIdentity(target.origin, target.info.serverId, deviceName, { operation: "login", password });
+    if (login.status === 200) await finishConnection(target, password);
+    else if (login.status === 401 && target.info.passwordRequired) {
+      promptServerPassword(target, password);
+      throw identityError(login);
+    }
+    return login;
+  }
+
+  async function signIn(target: Target) {
+    const login = await loginIdentity(target);
+    if (login.status === 200) return;
     if (login.status !== 404) throw identityError(login);
     if (target.info.registration === "disabled") {
       throw new Error("This server has closed registration for new identities.");
@@ -380,7 +402,8 @@
 
   async function enroll(target: Target) {
     const code = serverCode.trim();
-    const password = serverPassword || undefined;
+    const password = target.info.passwordRequired && (!code || !target.info.invitationPasswordBypass)
+      ? serverPassword || savedServerPassword : undefined;
     const bootstrap = claimOwnership;
     if (!bootstrap && target.info.registration === "disabled") {
       throw new Error("This server has closed registration for new identities.");
@@ -395,26 +418,22 @@
         const updated = { ...target, info: response.data };
         setupToken = "";
         discovery = updated;
-        if (!updated.info.passwordRequired || serverPassword) await signIn(updated);
+        if (!needsPassword) await signIn(updated);
         return;
       }
     }
     if (result.status === 409) {
-      if (code && target.info.passwordRequired && !password) {
-        serverCode = "";
-        accessPrompt = true;
-        connectOpen = true;
+      if (code && target.info.passwordRequired && !serverPassword && !savedServerPassword) {
+        promptServerPassword(target);
         connectError = "This identity already has an account. Enter the server password to sign in.";
         return;
       }
-      const login = await authenticateIdentity(target.origin, target.info.serverId, deviceName, { operation: "login", password });
-      if (login.status === 200) {
-        await finishConnection(target);
-        return;
-      }
+      const login = await loginIdentity(target);
+      if (login.status === 200) return;
     }
-    if (!bootstrap && code && result.status === 401 && !needsPassword) {
-      throw new Error("This invitation is invalid, expired, or out of uses.");
+    if (!bootstrap && result.status === 401) {
+      if (code && !needsPassword) throw new Error("This invitation is invalid, expired, or out of uses.");
+      if (!code && target.info.passwordRequired) promptServerPassword(target, password);
     }
     if (result.status !== 201) throw identityError(result);
     const account = result.body;
@@ -426,10 +445,10 @@
       discovery = target;
       setupToken = "";
     }
-    await finishConnection(target);
+    await finishConnection(target, bootstrap ? undefined : password);
   }
 
-  async function finishConnection(target: Target) {
+  async function finishConnection(target: Target, password?: string) {
     serverInfo = target.info;
     serverOrigin = target.origin;
     try {
@@ -443,8 +462,13 @@
       actionError = messageFrom(error);
     }
     if (view.phase === "online") playUiSound("connect");
+    if (password && password !== savedServerPassword) {
+      await savePassword(target.origin, target.info.serverId, password).catch(() => {
+        actionError = "This device could not save the server password.";
+      });
+    }
     if (remembered) {
-      const entry = { name: target.info.name, origin: target.origin };
+      const entry = { name: target.info.name, origin: target.origin, passwordRequired: target.info.passwordRequired };
       savedServers = [entry, ...savedServers.filter(({ origin }) => origin !== target.origin)];
       await preferences.servers.put(entry).catch((error) => { actionError = messageFrom(error); });
     }
@@ -455,6 +479,7 @@
     serverCode = "";
     setupToken = "";
     serverPassword = "";
+    savedServerPassword = undefined;
   }
 
   async function runAction(action: string, work: () => Promise<unknown>) {
@@ -477,6 +502,7 @@
       if (nativeApp()) return call(command, args);
       if (command === "disconnect") return browserSession.disconnect();
       if (command === "save_channel") return browserSession.saveChannel(args?.payload as Record<string, unknown>);
+      if (command === "delete_channel") return browserSession.deleteChannel(args?.channelId as string);
       if (command === "join_channel") return browserSession.joinChannel(args?.channelId as string, (args?.password as string | null) ?? undefined);
       if (command === "leave_channel") return browserSession.leaveChannel();
       if (command === "send_message") return browserSession.sendMessage(args?.channelId as string, args?.text as string, args?.html as string | undefined);
@@ -568,7 +594,10 @@
     removeError = "";
     try {
       if (origin === serverOrigin && !await disconnect()) throw new Error(actionError || "Could not disconnect from the server.");
-      await preferences.servers.delete(origin);
+      await preferences.transaction("rw", preferences.servers, preferences.passwords, async () => {
+        await preferences.servers.delete(origin);
+        await preferences.passwords.where("origin").equals(origin).delete();
+      });
       savedServers = savedServers.filter((server) => server.origin !== origin);
       removeServerOpen = false;
     } catch (error) {
@@ -600,6 +629,7 @@
               {#snippet trigger(props)}
                 <button {...props} type="button" class="rail-server" onclick={() => openWorkspace("channels")}>
                   <span class="shrinkable"><strong class="truncate">{serverTitle}</strong><small class="truncate">{shortHost(serverOrigin)}</small></span>
+                  {#if serverInfo?.passwordRequired}{@render serverLock()}{/if}
                   <span class="connection-dot" data-online={online}></span>
                 </button>
               {/snippet}
@@ -617,6 +647,7 @@
             <span class="shrinkable"><strong class="truncate">{entry.name}</strong>
               {#if connectBusy && bookmarkOrigin === entry.origin && !connectOpen}<small role="status">Connecting…</small>{/if}
             </span>
+            {#if entry.passwordRequired}{@render serverLock()}{/if}
           </button>
             {/snippet}
           </ContextActions>
@@ -654,7 +685,7 @@
   oncomplete={(name) => { username = name; identityReady = true; identitySetupOpen = false; }} />
 
 <Modal bind:open={connectOpen} title={trustPrompt ? (trustPrompt.previous ? "Server certificate changed" : "Trust this server?") : discovery ? discovery.info.name : "Connect to a server"} description={discovery ? shortHost(discovery.origin) : "Paste an invitation link or enter a server address."} dismissible={!connectBusy}>
-  {#snippet icon()}<Cable size={21} />{/snippet}
+  {#snippet icon()}{#if discovery?.info.passwordRequired}<LockKeyhole size={21} />{:else}<Cable size={21} />{/if}{/snippet}
   {#if connectError}<p class="form-error" role="alert">{connectError}</p>{/if}
   {#if trustPrompt}
     <div class="dialog-form">
@@ -699,6 +730,12 @@
   {/if}
 </Modal>
 
+{#snippet serverLock()}
+  <span class="access-lock" title="Password protected">
+    <LockKeyhole size={14} aria-hidden="true" /><span class="sr-only">Password protected</span>
+  </span>
+{/snippet}
+
 {#if connectionInfo && online && connectionInfo.origin === serverOrigin && connectionInfo.viewerId === view.snapshot?.connectionId}
   {#key connectionInfo}
     <Modal bind:open={() => true, (open) => { if (!open) connectionInfo = null; }}
@@ -724,6 +761,11 @@
         bannerSupported={serverInfo.bannerImageUrl !== undefined} {bannerImageUrl} onclose={showChat}
         passwordRequired={Boolean(serverInfo.passwordRequired)} onPasswordChange={(origin, passwordRequired) => {
           if (serverInfo && origin === serverOrigin) serverInfo = { ...serverInfo, passwordRequired };
+          const entry = savedServers.find((server) => server.origin === origin);
+          if (entry) {
+            entry.passwordRequired = passwordRequired;
+            void preferences.servers.put({ ...entry }).catch((error) => { actionError = messageFrom(error); });
+          }
         }} />
     {/key}
   {/if}

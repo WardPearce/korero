@@ -85,6 +85,13 @@
       "when": 1795678033915,
       "tag": "0011_account_badges",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1795678033916,
+      "tag": "0012_remove_channels_permission",
+      "breakpoints": true
     }
   ]
 }

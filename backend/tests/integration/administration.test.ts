@@ -221,6 +221,47 @@ test("custom role grants, server presentation, and channel order are enforced an
   } finally { await server.cleanup(); }
 });
 
+test("channel deletion uses its own grant and respects inherited overrides", async () => {
+  const server = await fixture();
+  try {
+    const owner = await server.owner();
+    const member = await server.register("Channel moderator");
+    const roles = "/api/v1/admin/roles";
+    const name = "Channel moderator";
+    const permissions = ["join", "deleteChannels"];
+    expect((await server.call(roles, { name, permissions }, owner.accessToken)).response.status).toBe(200);
+    expect((await server.call(roles, { accountId: member.account.id, role: name }, owner.accessToken, "PATCH")).response.status).toBe(200);
+
+    const ownerWs = await server.ws(owner);
+    const memberWs = await server.ws(member);
+    const { channelId: parent } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Parent" });
+    const { channelId: child } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Child", parentId: parent });
+    const getState = () => memberWs.rpc<Snapshot & { channels: { id: string; canDelete: boolean }[] }>("state.get");
+    const capability = async (id: string) => (await getState()).channels.find((channel) => channel.id === id);
+    expect(await capability(child)).toMatchObject({ canDelete: false });
+    await expect(memberWs.rpc("channel.delete", { channelId: child })).rejects.toThrow("FORBIDDEN");
+
+    expect((await server.call(`${roles}/definition`, { name, permissions: ["join", "removeChannels"] }, owner.accessToken, "PATCH")).response.status).toBe(200);
+    expect(await capability(child)).toMatchObject({ canDelete: true, canEdit: false });
+    for (const channelId of [LOBBY, parent]) {
+      expect(await capability(channelId)).toMatchObject({ canDelete: false });
+      await expect(memberWs.rpc("channel.delete", { channelId })).rejects.toThrow("CONFLICT");
+    }
+    const override = (allow: boolean) => ownerWs.rpc("channel.override", { channelId: parent, role: name, permission: "removeChannels", allow });
+    await override(false);
+    expect(await capability(child)).toMatchObject({ canDelete: false });
+    await expect(memberWs.rpc("channel.delete", { channelId: child })).rejects.toThrow("FORBIDDEN");
+    await override(true);
+    await memberWs.rpc("channel.join", { channelId: child });
+    await memberWs.rpc("channel.delete", { channelId: child });
+    expect(await capability(child)).toBeUndefined();
+    expect(await getState()).toMatchObject({ channelId: null });
+    expect(await capability(parent)).toMatchObject({ canDelete: true });
+    ownerWs.close();
+    memberWs.close();
+  } finally { await server.cleanup(); }
+});
+
 test("channel moves preserve subtrees and enforce destination permissions and depth", async () => {
   const server = await fixture();
   try {
