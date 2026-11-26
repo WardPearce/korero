@@ -146,6 +146,10 @@
     }
   }
 
+  async function leaveChannel() {
+    if (await run("leave", "leave_channel")) playUiSound("disconnect");
+  }
+
   async function submitPassword(event: SubmitEvent) {
     event.preventDefault();
     if (!joining) return;
@@ -445,8 +449,10 @@
     {#if currentChannel?.canEdit}
       <IconButton label="Edit channel" disabled={!online || Boolean(pending)} onclick={() => showChannelForm(currentChannel)}><Pencil size={19} aria-hidden="true" /></IconButton>
     {/if}
-    {#if currentChannel && !isInRoom}
-      <Button onclick={() => joinChannel(currentChannel!)} disabled={!online || Boolean(pending)}><Headphones size={16} /> Join voice</Button>
+    {#if currentChannel}
+      <Button onclick={() => isInRoom ? leaveChannel() : joinChannel(currentChannel!)} disabled={!online || Boolean(pending)}>
+        {#if isInRoom}<DoorOpen size={16} /> Leave voice{:else}<Headphones size={16} /> Join voice{/if}
+      </Button>
     {/if}
   </header>
 
