@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { sveltekit } from "@sveltejs/kit/vite";
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 function defaultServer() {
@@ -14,7 +15,7 @@ function defaultServer() {
 }
 
 export default defineConfig({
-  plugins: [sveltekit()],
+  plugins: [tailwindcss(), sveltekit()],
   clearScreen: false,
   define: {
     "import.meta.env.VITE_DEFAULT_SERVER": JSON.stringify(defaultServer()),

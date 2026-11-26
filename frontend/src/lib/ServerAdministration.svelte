@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Button, Checkbox, Input, SelectField, Textarea } from "gridworkdesign";
+  import { Button } from "#lib/components/ui/button/index.js";
+  import Checkbox from "#lib/components/LabeledCheckbox.svelte";
+  import { Input } from "#lib/components/ui/input/index.js";
+  import SelectField from "#lib/components/SelectField.svelte";
+  import { Textarea } from "#lib/components/ui/textarea/index.js";
   import { onMount } from "svelte";
   import { Settings2, X } from "@lucide/svelte";
   import IconButton from "./IconButton.svelte";
@@ -312,7 +316,7 @@
   <div class="server-admin">
     <div class="admin-tabs" aria-label="Administration sections">
       {#each availableTabs as section (section.id)}
-        <Button aria-pressed={tab === section.id} disabled={busy} onclick={() => selectTab(section.id)}>
+        <Button variant="outline" aria-pressed={tab === section.id} disabled={busy} onclick={() => selectTab(section.id)}>
           {section.label}
         </Button>
       {/each}
@@ -327,7 +331,7 @@
           <section class="role-settings" aria-label="Custom roles">
             <div class="role-heading">
               <h3>Custom roles</h3>
-              {#if !roleEditing}<Button disabled={busy} onclick={() => editRole()}>Create role</Button>{/if}
+              {#if !roleEditing}<Button variant="outline" disabled={busy} onclick={() => editRole()}>Create role</Button>{/if}
             </div>
             {#if roleEditing}
               <form class="dialog-form" onsubmit={saveRole}>
@@ -340,15 +344,15 @@
                   {/each}
                 </fieldset>
                 <div class="dialog-actions">
-                  <Button type="button" disabled={busy} onclick={() => { roleEditing = false; }}>Cancel</Button>
-                  <Button variant="alternate" type="submit" disabled={busy}>{editedRole ? "Save permissions" : "Create role"}</Button>
+                  <Button variant="outline" type="button" disabled={busy} onclick={() => { roleEditing = false; }}>Cancel</Button>
+                  <Button variant="default" type="submit" disabled={busy}>{editedRole ? "Save permissions" : "Create role"}</Button>
                 </div>
               </form>
             {:else if members.customRoles.length}
               <ul class="admin-members">
                 {#each members.customRoles as role (role.name)}
                   <li><span class="truncate">{role.name}</span>
-                    <Button aria-label={`Edit permissions for ${role.name}`} disabled={busy} onclick={() => editRole(role)}>Edit</Button>
+                    <Button variant="outline" aria-label={`Edit permissions for ${role.name}`} disabled={busy} onclick={() => editRole(role)}>Edit</Button>
                   </li>
                 {/each}
               </ul>
@@ -377,19 +381,19 @@
         </ul>
         {#if pages.length > 1 || members.next}
           <div class="dialog-actions">
-            <Button disabled={busy || pages.length < 2} onclick={() => loadMembers(pages.slice(0, -1))}>Previous</Button>
-            <Button disabled={busy || !members.next} onclick={() => loadMembers([...pages, members?.next ?? undefined])}>Next</Button>
+            <Button variant="outline" disabled={busy || pages.length < 2} onclick={() => loadMembers(pages.slice(0, -1))}>Previous</Button>
+            <Button variant="outline" disabled={busy || !members.next} onclick={() => loadMembers([...pages, members?.next ?? undefined])}>Next</Button>
           </div>
         {/if}
       {:else if !busy}
-        <Button onclick={() => loadMembers(pages)}>Load accounts</Button>
+        <Button variant="outline" onclick={() => loadMembers(pages)}>Load accounts</Button>
       {/if}
     {:else if tab === "banner" && permissions.includes("manageSettings")}
       <form class="dialog-form" onsubmit={saveBanner}>
         <label>Banner image URL<Input type="url" pattern="https://.+" maxlength={512} placeholder="https://example.com/banner.jpg"
           disabled={busy} bind:value={bannerUrl} /></label>
         <p class="field-hint">Clear the URL to remove the banner.</p>
-        <div class="dialog-actions"><Button variant="alternate" type="submit" disabled={busy}>Save banner</Button></div>
+        <div class="dialog-actions"><Button variant="default" type="submit" disabled={busy}>Save banner</Button></div>
       </form>
     {:else if tab === "configuration" && permissions.includes("manageSettings")}
       {#if configuration}
@@ -400,15 +404,15 @@
           {/if}
           <label>server.toml<Textarea class="config-editor" rows={16} maxlength={65536} spellcheck="false" disabled={busy} bind:value={toml} /></label>
           <div class="dialog-actions">
-            <Button type="button" disabled={busy || toml !== configuration.toml} onclick={loadConfiguration}>Reload file</Button>
+            <Button variant="outline" type="button" disabled={busy || toml !== configuration.toml} onclick={loadConfiguration}>Reload file</Button>
             {#if toml !== configuration.toml}
-              <Button type="button" disabled={busy} onclick={() => { toml = configuration?.toml ?? ""; }}>Discard edits</Button>
+              <Button variant="outline" type="button" disabled={busy} onclick={() => { toml = configuration?.toml ?? ""; }}>Discard edits</Button>
             {/if}
-            <Button variant="alternate" type="submit" disabled={busy || toml === configuration.toml}>Save configuration</Button>
+            <Button variant="default" type="submit" disabled={busy || toml === configuration.toml}>Save configuration</Button>
           </div>
         </form>
       {:else if !busy}
-        <Button onclick={loadConfiguration}>Load configuration</Button>
+        <Button variant="outline" onclick={loadConfiguration}>Load configuration</Button>
       {/if}
     {:else if tab === "password" && permissions.includes("manageSettings")}
       <form class="dialog-form" onsubmit={savePassword}>
@@ -418,7 +422,7 @@
         {#if passwordRequired}
           <Checkbox label="Remove server password" disabled={busy} bind:checked={removePassword} />
         {/if}
-        <div class="dialog-actions"><Button variant="alternate" type="submit" disabled={busy}>Save password</Button></div>
+        <div class="dialog-actions"><Button variant="default" type="submit" disabled={busy}>Save password</Button></div>
       </form>
     {:else if tab === "invitation" && permissions.includes("manageInvitations")}
       <form class="dialog-form" onsubmit={saveInvitation}>
@@ -431,9 +435,9 @@
         <p class="field-hint">Leave the use limit blank for unlimited uses. Three months is calculated from today.</p>
         <div class="dialog-actions">
           {#if editedInvitation}
-            <Button type="button" disabled={busy} onclick={() => editInvitation(null)}>Cancel</Button>
+            <Button variant="outline" type="button" disabled={busy} onclick={() => editInvitation(null)}>Cancel</Button>
           {/if}
-          <Button variant="alternate" type="submit"
+          <Button variant="default" type="submit"
             disabled={busy || Boolean(editedInvitation && !invitationChanged)}>
             {editedInvitation ? "Save changes" : "Create invitation"}
           </Button>
@@ -445,7 +449,7 @@
         <div class="dialog-form invite-link">
           <label>Invitation link<Input value={url} readonly /></label>
           <p class="field-hint">Copy this link before creating another invitation or leaving server settings.</p>
-          <Button class="fit-action" disabled={busy} onclick={() => copyInvitation(url)}>Copy link</Button>
+          <Button variant="outline" class="fit-action" disabled={busy} onclick={() => copyInvitation(url)}>Copy link</Button>
         </div>
       {/if}
       <section class="existing-invites"><div class="section-heading"><div><span class="invite-eyebrow">LINK MANAGEMENT</span><h3>Existing invitations</h3></div><span class="invite-count">{invitations?.length ?? 0}</span></div>
@@ -463,11 +467,11 @@
               </div>
               <div class="dialog-actions">
                 {#if deletingInvitation === invitation.id}
-                  <Button disabled={busy} onclick={() => { deletingInvitation = ""; }}>Cancel</Button>
-                  <Button variant="alternate" disabled={busy} onclick={() => deleteInvitation(invitation.id)}>Confirm deletion</Button>
+                  <Button variant="outline" disabled={busy} onclick={() => { deletingInvitation = ""; }}>Cancel</Button>
+                  <Button variant="default" disabled={busy} onclick={() => deleteInvitation(invitation.id)}>Confirm deletion</Button>
                 {:else}
-                  <Button aria-label={`Edit ${label.toLowerCase()}`} disabled={busy} onclick={() => editInvitation(invitation)}>Edit</Button>
-                  <Button aria-label={`Delete ${label.toLowerCase()}`} disabled={busy} onclick={() => { deletingInvitation = invitation.id; }}>Delete</Button>
+                  <Button variant="outline" aria-label={`Edit ${label.toLowerCase()}`} disabled={busy} onclick={() => editInvitation(invitation)}>Edit</Button>
+                  <Button variant="outline" aria-label={`Delete ${label.toLowerCase()}`} disabled={busy} onclick={() => { deletingInvitation = invitation.id; }}>Delete</Button>
                 {/if}
               </div>
             </li>
@@ -476,7 +480,7 @@
       {:else if invitations}
         <p class="field-hint">No invitations yet.</p>
       {:else if !busy}
-        <Button class="fit-action" onclick={loadInvitations}>Load invitations</Button>
+        <Button variant="outline" class="fit-action" onclick={loadInvitations}>Load invitations</Button>
       {/if}
       </section>
     {/if}
@@ -484,11 +488,11 @@
 </div>
 
 <style>
-  .invite-panel, .existing-invites { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid var(--border); background: var(--surface-subtle); margin-block: 1rem; }
+  .invite-panel, .existing-invites { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid var(--border); background: var(--muted); margin-block: 1rem; }
   .invite-heading, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
   .invite-heading h3, .section-heading h3 { margin: .2rem 0; }
-  .invite-eyebrow { color: var(--foreground-muted); font-size: .72rem; font-weight: 700; letter-spacing: .12em; }
-  .invite-count { min-width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: 999px; background: var(--surface-muted); color: var(--foreground-muted); }
-  .invite-link { padding: 1rem; border: 1px solid var(--border-subtle); }
+  .invite-eyebrow { color: var(--muted-foreground); font-size: .72rem; font-weight: 700; letter-spacing: .12em; }
+  .invite-count { min-width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: 999px; background: var(--muted); color: var(--muted-foreground); }
+  .invite-link { padding: 1rem; border: 1px solid var(--border); }
 
 </style>

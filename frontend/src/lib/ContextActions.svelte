@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ContextMenu } from "gridworkdesign";
+  import * as ContextMenu from "#lib/components/ui/context-menu/index.js";
   import type { Snippet } from "svelte";
 
   type Action = { label: string; onSelect: () => void; disabled?: boolean };
@@ -35,8 +35,15 @@
   {@render trigger({})}
 {:else}
   <div class="context-row">
-    <ContextMenu items={actions}>
-      {@render trigger({ onkeydown: openFromKeyboard, onclick: openOnClick ? openFromClick : undefined })}
-    </ContextMenu>
+    <ContextMenu.Root>
+      <ContextMenu.Trigger>
+        {@render trigger({ onkeydown: openFromKeyboard, onclick: openOnClick ? openFromClick : undefined })}
+      </ContextMenu.Trigger>
+      <ContextMenu.Content class="max-w-[calc(100vw-1rem)]">
+        {#each actions as action (action.label)}
+          <ContextMenu.Item disabled={action.disabled} onSelect={action.onSelect}>{action.label}</ContextMenu.Item>
+        {/each}
+      </ContextMenu.Content>
+    </ContextMenu.Root>
   </div>
 {/if}

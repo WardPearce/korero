@@ -1,31 +1,34 @@
 import { browser } from "$app/environment";
-import type { ThemeSelector } from "gridworkdesign";
-import type { ComponentProps } from "svelte";
 import logo from "../../static/vnx-logo.svg?raw";
 
-type Theme = NonNullable<ComponentProps<typeof ThemeSelector>["value"]>;
-const themes: readonly Theme[] = ["Gridwork", "NewsPaper", "BurntWood", "Hacker", "PurpleDaydream", "BloodRed"];
+export const themeOptions = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+] as const;
+
+type Theme = (typeof themeOptions)[number]["value"];
 const storageKey = "vnx.chat:theme";
+const legacyDarkThemes = new Set(["BurntWood", "Hacker", "PurpleDaydream", "BloodRed"]);
 
 export function readTheme(): Theme {
   if (browser) {
     try {
       const saved = localStorage.getItem(storageKey);
-      return themes.find((theme) => theme === saved) ?? "Gridwork";
+      if (saved === "dark" || (saved && legacyDarkThemes.has(saved))) return "dark";
     } catch {
       // Storage may be unavailable in a restricted webview.
     }
   }
-  return "Gridwork";
+  return "light";
 }
 
 export function applyTheme(theme: Theme) {
   const root = document.documentElement;
-  if (root.dataset.theme !== theme) root.dataset.theme = theme;
+  root.classList.toggle("dark", theme === "dark");
   const favicon = document.querySelector<HTMLLinkElement>("#app-favicon");
   if (favicon) {
-    const primary = getComputedStyle(root).getPropertyValue("--foreground").trim();
-    if (primary) favicon.href = `data:image/svg+xml,${encodeURIComponent(logo.replace(/fill="[^"]*"/, `fill="${primary}"`))}`;
+    const foreground = getComputedStyle(root).getPropertyValue("--foreground").trim();
+    if (foreground) favicon.href = `data:image/svg+xml,${encodeURIComponent(logo.replace(/fill="[^"]*"/, `fill="${foreground}"`))}`;
   }
 }
 

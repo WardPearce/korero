@@ -1,10 +1,13 @@
 <script lang="ts">
-  import { Button, Card, Input, ThemeSelector } from "gridworkdesign";
+  import { Button } from "#lib/components/ui/button/index.js";
+  import * as Card from "#lib/components/ui/card/index.js";
+  import SelectField from "#lib/components/SelectField.svelte";
+  import { Input } from "#lib/components/ui/input/index.js";
   import { resolve } from "$app/paths";
   import { ArrowDownLeft, ArrowLeft, Settings2 } from "@lucide/svelte";
-  import { apiFor, messageFrom, requestError } from "$lib/client";
-  import { readTheme, saveTheme } from "$lib/theme";
-  import { getWorkspace } from "$lib/workspace";
+  import { apiFor, messageFrom, requestError } from "#lib/client";
+  import { readTheme, saveTheme, themeOptions } from "#lib/theme";
+  import { getWorkspace } from "#lib/workspace";
 
   const workspace = getWorkspace();
   let theme = $state(readTheme());
@@ -60,16 +63,18 @@
         <label>Display name<Input required maxlength={80} bind:value={accountName} /></label>
         {#if status}<p class="form-status" role="status">{status}</p>{/if}
         <div class="dialog-actions">
-          <Button type="button" disabled={saving || Boolean(workspace.pending)} onclick={disconnect}><ArrowDownLeft size={15} /> Disconnect</Button>
-          <Button type="submit" variant="alternate" disabled={saving || Boolean(workspace.pending)}>Save name</Button>
+          <Button variant="outline" type="button" disabled={saving || Boolean(workspace.pending)} onclick={disconnect}><ArrowDownLeft size={15} /> Disconnect</Button>
+          <Button type="submit" variant="default" disabled={saving || Boolean(workspace.pending)}>Save name</Button>
         </div>
       </form>
     {:else}
       <p>Connect to a server to manage your account.</p>
     {/if}
-    <Card class="appearance-card">
-      {#snippet header()}<h2>Appearance</h2>{/snippet}
-      <ThemeSelector mode="dropdown" bind:value={() => theme, changeTheme} />
-    </Card>
+    <Card.Root class="appearance-card">
+      <Card.Header><Card.Title><h2>Appearance</h2></Card.Title></Card.Header>
+      <Card.Content>
+        <SelectField label="Theme" options={themeOptions} bind:value={() => theme, changeTheme} />
+      </Card.Content>
+    </Card.Root>
   </div>
 </main>

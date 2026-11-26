@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { playUiSound } from "$lib/ui-sounds";
-  import { Button, Checkbox, Input, Root } from "gridworkdesign";
+  import { playUiSound } from "#lib/ui-sounds";
+  import { Button } from "#lib/components/ui/button/index.js";
+  import Checkbox from "#lib/components/LabeledCheckbox.svelte";
+  import { Input } from "#lib/components/ui/input/index.js";
   import "../app.css";
 
   import { goto } from "$app/navigation";
@@ -8,23 +10,23 @@
   import { page } from "$app/state";
   import { ArrowRight, AudioLines, Bookmark, Cable, ListTree, Plus, Server, Settings2, X } from "@lucide/svelte";
   import { onMount } from "svelte";
-  import { AudioSettings, setAudioSettings } from "$lib/audio.svelte";
-  import PaneDivider from "$lib/PaneDivider.svelte";
-  import { getMemberVolumes, getUsername, migrateSavedServers, preferences, saveMemberVolumes, type SavedServer } from "$lib/preferences";
-  import Avatar from "$lib/Avatar.svelte";
-  import ContextActions from "$lib/ContextActions.svelte";
-  import IdentitySetup from "$lib/IdentitySetup.svelte";
-  import IconButton from "$lib/IconButton.svelte";
-  import Modal from "$lib/Modal.svelte";
-  import ServerAdministration from "$lib/ServerAdministration.svelte";
+  import { AudioSettings, setAudioSettings } from "#lib/audio.svelte";
+  import PaneDivider from "#lib/PaneDivider.svelte";
+  import { getMemberVolumes, getUsername, migrateSavedServers, preferences, saveMemberVolumes, type SavedServer } from "#lib/preferences";
+  import Avatar from "#lib/Avatar.svelte";
+  import ContextActions from "#lib/ContextActions.svelte";
+  import IdentitySetup from "#lib/IdentitySetup.svelte";
+  import IconButton from "#lib/IconButton.svelte";
+  import Modal from "#lib/Modal.svelte";
+  import ServerAdministration from "#lib/ServerAdministration.svelte";
   import {
     apiFor, call, messageFrom, nativeApp, offline, requestError, shortHost, watchVoice,
     type MemberRequest, type ServerInfo, type VoiceState,
-  } from "$lib/client";
-  import { authenticateIdentity, identityError, loadIdentity } from "$lib/identity";
-  import { browserServerOrigin, browserSession } from "$lib/browser-session";
-  import { applyTheme, readTheme } from "$lib/theme";
-  import { setWorkspace, type MobilePane, type RoomView } from "$lib/workspace";
+  } from "#lib/client";
+  import { authenticateIdentity, identityError, loadIdentity } from "#lib/identity";
+  import { browserServerOrigin, browserSession } from "#lib/browser-session";
+  import { applyTheme, readTheme } from "#lib/theme";
+  import { setWorkspace, type MobilePane, type RoomView } from "#lib/workspace";
 
   let { children } = $props();
   const audio = setAudioSettings(new AudioSettings());
@@ -520,130 +522,127 @@
 
 <svelte:window bind:innerWidth={viewport} onkeydown={audio.talkKeyDown} onkeyup={audio.talkKeyUp} onblur={audio.stopTalking} />
 
-<Root>
-  <div class="shell" data-pane={onWorkspace ? mobilePane : "room"} data-workspace={onWorkspace} style:--rail-width={railWidth + "px"} style:--channel-width={channelWidth + "px"}>
-    <aside id="server-rail" class="server-rail" aria-label="Servers">
-      <div class="rail-top">
-        <div class="brand" role="img" aria-label="VNX.chat">
-          <span class="brand-logo" style:--brand-logo={`url("${asset("/vnx-logo.svg")}")`}></span><span class="brand-domain">.chat</span>
-        </div>
-        <Button class="rail-connect" disabled={!identityReady || connectBusy || Boolean(pending)} onclick={() => showConnect()}><Plus size={18} /> Connect to server</Button>
-        <section class="rail-section">
-          <div class="rail-section-label"><span>Servers</span></div>
-          {#if serverOrigin}
-            <div class="active-server">
-              <ContextActions actions={serverActions({ origin: serverOrigin, name: serverTitle })} disabled={connectBusy || Boolean(pending)}>
-                {#snippet trigger(props)}
-                  <button {...props} type="button" class="rail-server" onclick={() => openWorkspace("channels")}>
-                    <span class="shrinkable"><strong class="truncate">{serverTitle}</strong><small class="truncate">{shortHost(serverOrigin)}</small></span>
-                    <span class="connection-dot" data-online={online}></span>
-                  </button>
-                {/snippet}
-              </ContextActions>
-              <button type="button" class="disconnect-server" aria-label={`Disconnect from ${serverTitle}`} title="Disconnect"
-                disabled={connectBusy || Boolean(pending)} onclick={() => { void disconnect(); }}>
-                <X size={16} aria-hidden="true" />
-              </button>
-            </div>
-          {/if}
-          {#each savedServers.filter((entry) => entry.origin !== serverOrigin) as entry (entry.origin)}
-            <ContextActions actions={serverActions(entry)} disabled={connectBusy || Boolean(pending)}>
+<div class="shell" data-pane={onWorkspace ? mobilePane : "room"} data-workspace={onWorkspace} style:--rail-width={railWidth + "px"} style:--channel-width={channelWidth + "px"}>
+  <aside id="server-rail" class="server-rail" aria-label="Servers">
+    <div class="rail-top">
+      <div class="brand" role="img" aria-label="VNX.chat">
+        <span class="brand-logo" style:--brand-logo={`url("${asset("/vnx-logo.svg")}")`}></span><span class="brand-domain">.chat</span>
+      </div>
+      <Button variant="outline" class="rail-connect" disabled={!identityReady || connectBusy || Boolean(pending)} onclick={() => showConnect()}><Plus size={18} /> Connect to server</Button>
+      <section class="rail-section">
+        <div class="rail-section-label"><span>Servers</span></div>
+        {#if serverOrigin}
+          <div class="active-server">
+            <ContextActions actions={serverActions({ origin: serverOrigin, name: serverTitle })} disabled={connectBusy || Boolean(pending)}>
               {#snippet trigger(props)}
-            <button {...props} tabindex="0" class="rail-server" onclick={() => selectBookmark(entry.origin)}>
-              <span class="shrinkable"><strong class="truncate">{entry.name}</strong>
-                {#if connectBusy && bookmarkOrigin === entry.origin && !connectOpen}<small role="status">Connecting…</small>{/if}
-              </span>
-            </button>
+                <button {...props} type="button" class="rail-server" onclick={() => openWorkspace("channels")}>
+                  <span class="shrinkable"><strong class="truncate">{serverTitle}</strong><small class="truncate">{shortHost(serverOrigin)}</small></span>
+                  <span class="connection-dot" data-online={online}></span>
+                </button>
               {/snippet}
             </ContextActions>
-          {:else}
-            {#if !serverOrigin}<p class="rail-empty">No saved servers</p>{/if}
-          {/each}
-        </section>
-      </div>
-      <div class="rail-bottom">
-        <div class="account-line">
-          <Avatar name={me?.displayName ?? username} />
-          <div class="flex-content">
-            <strong class="truncate">{me?.displayName ?? (username || "Guest")}</strong>
-            <span class="account-status"><span class="connection-dot" data-online={online}></span>{status}</span>
+            <button type="button" class="disconnect-server" aria-label={`Disconnect from ${serverTitle}`} title="Disconnect"
+              disabled={connectBusy || Boolean(pending)} onclick={() => { void disconnect(); }}>
+              <X size={16} aria-hidden="true" />
+            </button>
           </div>
-
-          <a class="icon-button rail-icon" href={resolve("/settings")} aria-label="Account settings" aria-current={page.route.id === "/settings" ? "page" : undefined} title="Account settings"><Settings2 size={17} /></a>
-        </div>
-      </div>
-    </aside>
-    <PaneDivider label="Resize server sidebar" controls="server-rail" value={railWidth} min={180} max={railMax} resize={(value, commit) => resizePane("rail", value, commit)} />
-
-
-    {@render children()}
-
-    <nav class="mobile-nav" aria-label="Workspace navigation">
-      <button aria-current={onWorkspace && mobilePane === "servers" ? "page" : undefined} onclick={() => openWorkspace("servers")}><Server size={18} /> Servers</button>
-      <button aria-current={onWorkspace && mobilePane === "channels" ? "page" : undefined} onclick={() => openWorkspace("channels")}><ListTree size={18} /> Channels</button>
-      <button aria-current={onWorkspace && mobilePane === "room" && roomView === "chat" ? "page" : undefined} onclick={showChat}><AudioLines size={18} /> Chat</button>
-      <a href={resolve("/settings")} aria-current={!onWorkspace ? "page" : undefined}><Settings2 size={18} /> Settings</a>
-    </nav>
-  </div>
-
-  <IdentitySetup open={identitySetupOpen} {hasIdentity} migrationError={identityLoadError}
-    oncomplete={(name) => { username = name; identityReady = true; identitySetupOpen = false; }} />
-
-  <Modal bind:open={connectOpen} title={trustPrompt ? (trustPrompt.previous ? "Server certificate changed" : "Trust this server?") : discovery ? discovery.info.name : "Connect to a server"} description={discovery ? shortHost(discovery.origin) : "Paste an invitation link or enter a server address."} dismissible={!connectBusy}>
-    {#snippet icon()}<Cable size={21} />{/snippet}
-    {#if connectError}<p class="form-error" role="alert">{connectError}</p>{/if}
-    {#if trustPrompt}
-      <div class="dialog-form">
-        <p>{trustPrompt.origin}</p>
-        <p>Compare the certificate fingerprint with the one provided by your server operator.</p>
-        {#if trustPrompt.previous}
-          <div><small>Previously trusted SHA-256</small><div class="key-display"><code>{trustPrompt.previous}</code></div></div>
         {/if}
-        <div><small>Presented SHA-256</small><div class="key-display"><code>{trustPrompt.fingerprint}</code></div></div>
-        <div class="dialog-actions">
-          <Button disabled={connectBusy} onclick={() => { trustPrompt = null; }}>Back</Button>
-          <Button variant="alternate" disabled={connectBusy} onclick={approveTrust}>Trust and continue</Button>
-        </div>
-      </div>
-    {:else if discovery && accessPrompt}
-      <form class="dialog-form" onsubmit={submitServerCode}>
-        {#if discovery.info.setupRequired}
-          <label>Server setup token
-            <Input type="password" autocomplete="off" spellcheck="false" bind:value={setupToken} />
-          </label>
-          <p class="field-hint">Enter the token to claim ownership, or leave it blank to connect as a member.</p>
-        {/if}
-        {#if needsPassword && !claimOwnership}
-          <label>Server password<Input type="password" autocomplete="current-password" required maxlength={128} bind:value={serverPassword} /></label>
-        {/if}
-        {#if invitationRequired && !claimOwnership}
-          <label>Invitation code
-            <Input type="password" required autocomplete="off" spellcheck="false" bind:value={serverCode} />
-          </label>
-        {/if}
-        <div class="dialog-actions">
-          <Button type="button" disabled={connectBusy} onclick={() => resetConnect(discoverAddress)}>Back</Button>
-          <Button type="submit" variant="alternate" disabled={connectBusy}>{connectBusy ? "Connecting…" : claimOwnership ? "Set up server" : "Connect"} <ArrowRight size={16} /></Button>
-        </div>
-      </form>
-    {:else}
-      <form class="dialog-form" onsubmit={discover}>
-        <label>Server address or invitation link<Input required autocomplete="off" inputmode="url" placeholder="example.com:8443" spellcheck="false" disabled={connectBusy} bind:value={discoverAddress} /></label>
-        <Checkbox label="Save this server address" bind:checked={remembered} />
-        <Button variant="alternate" type="submit" disabled={connectBusy}>{connectBusy ? "Connecting…" : "Connect"} <ArrowRight size={16} /></Button>
-      </form>
-    {/if}
-  </Modal>
-
-  <Modal bind:open={removeServerOpen} title="Remove server?" description={removingServer?.name ?? "Remove this server from your list."} dismissible={!removing}>
-    {#if removeError}<p class="form-error" role="alert">{removeError}</p>{/if}
-    <div class="dialog-actions">
-      <Button onclick={() => { removeServerOpen = false; }} disabled={removing}>Cancel</Button>
-      <Button variant="alternate" onclick={removeServer} disabled={removing}>{removing ? "Removing…" : "Remove server"}</Button>
+        {#each savedServers.filter((entry) => entry.origin !== serverOrigin) as entry (entry.origin)}
+          <ContextActions actions={serverActions(entry)} disabled={connectBusy || Boolean(pending)}>
+            {#snippet trigger(props)}
+          <button {...props} tabindex="0" class="rail-server" onclick={() => selectBookmark(entry.origin)}>
+            <span class="shrinkable"><strong class="truncate">{entry.name}</strong>
+              {#if connectBusy && bookmarkOrigin === entry.origin && !connectOpen}<small role="status">Connecting…</small>{/if}
+            </span>
+          </button>
+            {/snippet}
+          </ContextActions>
+        {:else}
+          {#if !serverOrigin}<p class="rail-empty">No saved servers</p>{/if}
+        {/each}
+      </section>
     </div>
-  </Modal>
+    <div class="rail-bottom">
+      <div class="account-line">
+        <Avatar name={me?.displayName ?? username} />
+        <div class="flex-content">
+          <strong class="truncate">{me?.displayName ?? (username || "Guest")}</strong>
+          <span class="account-status"><span class="connection-dot" data-online={online}></span>{status}</span>
+        </div>
 
-</Root>
+        <a class="icon-button rail-icon" href={resolve("/settings")} aria-label="Account settings" aria-current={page.route.id === "/settings" ? "page" : undefined} title="Account settings"><Settings2 size={17} /></a>
+      </div>
+    </div>
+  </aside>
+  <PaneDivider label="Resize server sidebar" controls="server-rail" value={railWidth} min={180} max={railMax} resize={(value, commit) => resizePane("rail", value, commit)} />
+
+
+  {@render children()}
+
+  <nav class="mobile-nav" aria-label="Workspace navigation">
+    <button aria-current={onWorkspace && mobilePane === "servers" ? "page" : undefined} onclick={() => openWorkspace("servers")}><Server size={18} /> Servers</button>
+    <button aria-current={onWorkspace && mobilePane === "channels" ? "page" : undefined} onclick={() => openWorkspace("channels")}><ListTree size={18} /> Channels</button>
+    <button aria-current={onWorkspace && mobilePane === "room" && roomView === "chat" ? "page" : undefined} onclick={showChat}><AudioLines size={18} /> Chat</button>
+    <a href={resolve("/settings")} aria-current={!onWorkspace ? "page" : undefined}><Settings2 size={18} /> Settings</a>
+  </nav>
+</div>
+
+<IdentitySetup open={identitySetupOpen} {hasIdentity} migrationError={identityLoadError}
+  oncomplete={(name) => { username = name; identityReady = true; identitySetupOpen = false; }} />
+
+<Modal bind:open={connectOpen} title={trustPrompt ? (trustPrompt.previous ? "Server certificate changed" : "Trust this server?") : discovery ? discovery.info.name : "Connect to a server"} description={discovery ? shortHost(discovery.origin) : "Paste an invitation link or enter a server address."} dismissible={!connectBusy}>
+  {#snippet icon()}<Cable size={21} />{/snippet}
+  {#if connectError}<p class="form-error" role="alert">{connectError}</p>{/if}
+  {#if trustPrompt}
+    <div class="dialog-form">
+      <p>{trustPrompt.origin}</p>
+      <p>Compare the certificate fingerprint with the one provided by your server operator.</p>
+      {#if trustPrompt.previous}
+        <div><small>Previously trusted SHA-256</small><div class="key-display"><code>{trustPrompt.previous}</code></div></div>
+      {/if}
+      <div><small>Presented SHA-256</small><div class="key-display"><code>{trustPrompt.fingerprint}</code></div></div>
+      <div class="dialog-actions">
+        <Button variant="outline" disabled={connectBusy} onclick={() => { trustPrompt = null; }}>Back</Button>
+        <Button variant="default" disabled={connectBusy} onclick={approveTrust}>Trust and continue</Button>
+      </div>
+    </div>
+  {:else if discovery && accessPrompt}
+    <form class="dialog-form" onsubmit={submitServerCode}>
+      {#if discovery.info.setupRequired}
+        <label>Server setup token
+          <Input type="password" autocomplete="off" spellcheck="false" bind:value={setupToken} />
+        </label>
+        <p class="field-hint">Enter the token to claim ownership, or leave it blank to connect as a member.</p>
+      {/if}
+      {#if needsPassword && !claimOwnership}
+        <label>Server password<Input type="password" autocomplete="current-password" required maxlength={128} bind:value={serverPassword} /></label>
+      {/if}
+      {#if invitationRequired && !claimOwnership}
+        <label>Invitation code
+          <Input type="password" required autocomplete="off" spellcheck="false" bind:value={serverCode} />
+        </label>
+      {/if}
+      <div class="dialog-actions">
+        <Button variant="outline" type="button" disabled={connectBusy} onclick={() => resetConnect(discoverAddress)}>Back</Button>
+        <Button type="submit" variant="default" disabled={connectBusy}>{connectBusy ? "Connecting…" : claimOwnership ? "Set up server" : "Connect"} <ArrowRight size={16} /></Button>
+      </div>
+    </form>
+  {:else}
+    <form class="dialog-form" onsubmit={discover}>
+      <label>Server address or invitation link<Input required autocomplete="off" inputmode="url" placeholder="example.com:8443" spellcheck="false" disabled={connectBusy} bind:value={discoverAddress} /></label>
+      <Checkbox label="Save this server address" bind:checked={remembered} />
+      <Button variant="default" type="submit" disabled={connectBusy}>{connectBusy ? "Connecting…" : "Connect"} <ArrowRight size={16} /></Button>
+    </form>
+  {/if}
+</Modal>
+
+<Modal bind:open={removeServerOpen} title="Remove server?" description={removingServer?.name ?? "Remove this server from your list."} dismissible={!removing}>
+  {#if removeError}<p class="form-error" role="alert">{removeError}</p>{/if}
+  <div class="dialog-actions">
+    <Button variant="outline" onclick={() => { removeServerOpen = false; }} disabled={removing}>Cancel</Button>
+    <Button variant="default" onclick={removeServer} disabled={removing}>{removing ? "Removing…" : "Remove server"}</Button>
+  </div>
+</Modal>
 
 {#snippet serverSettings()}
   {#if serverInfo}

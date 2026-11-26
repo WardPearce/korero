@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { SliderField } from "gridworkdesign";
+  import SliderField from "#lib/components/SliderField.svelte";
   import { getAudioSettings } from "./audio.svelte";
 
   let { setting, label, min = 0 }: {
@@ -33,15 +33,10 @@
     if (preview !== undefined && preview !== audio.profile[setting]) await audio.update(setting, preview);
     preview = undefined;
   }
-
-  function labelThumb(element: HTMLElement) {
-    const thumb = element.querySelector('[role="slider"]');
-    thumb?.setAttribute("aria-label", label);
-  }
 </script>
 
 <svelte:window onpointerup={finishDrag} onpointercancel={finishDrag} />
 
-<div class="audio-level" onpointerdowncapture={startDrag} {@attach labelThumb}>
+<div class="audio-level" onpointerdowncapture={startDrag}>
   <SliderField {label} {min} {disabled} bind:value={() => preview ?? audio.profile[setting], update} />
 </div>

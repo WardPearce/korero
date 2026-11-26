@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button } from "gridworkdesign";
+  import { Button } from "#lib/components/ui/button/index.js";
   import type { Snippet } from "svelte";
 
   let {
@@ -19,6 +19,6 @@
   } = $props();
 </script>
 
-<Button type="button" aria-label={label} title={label} aria-pressed={active} {onclick} {disabled} class="icon-button {classes}">
+<Button variant="outline" size="icon" type="button" aria-label={label} title={label} aria-pressed={active} {onclick} {disabled} class="icon-button {classes}">
   {@render children()}
 </Button>

@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { Button, Checkbox, Input } from "gridworkdesign";
+  import { Button } from "#lib/components/ui/button/index.js";
+  import Checkbox from "#lib/components/LabeledCheckbox.svelte";
+  import { Input } from "#lib/components/ui/input/index.js";
   import { Fingerprint } from "@lucide/svelte";
   import { onMount } from "svelte";
-  import { messageFrom, nativeApp } from "$lib/client";
-  import { exportIdentity, generateIdentity, getIdentity, importIdentity } from "$lib/identity";
+  import { messageFrom, nativeApp } from "#lib/client";
+  import { exportIdentity, generateIdentity, getIdentity, importIdentity } from "#lib/identity";
 
   let key = $state<string | null>(null);
   let passphrase = $state("");
@@ -61,7 +63,7 @@
         <p>Ed25519 public key</p>
         <div class="key-display"><code>{key}</code></div>
       {:else}
-        <Button class="fit-action" disabled={!available || busy}
+        <Button variant="outline" class="fit-action" disabled={!available || busy}
           onclick={() => run(async () => { key = (await generateIdentity()).publicKey; })}>Generate identity</Button>
       {/if}
       <label>Export or import passphrase<Input type="password" autocomplete="off" minlength={12} bind:value={passphrase} /></label>
@@ -70,7 +72,7 @@
         <Checkbox label="Allow import to replace this device’s identity" disabled={busy} bind:checked={replacement} />
       {/if}
       <div class="identity-choices">
-        <Button disabled={!key || busy || passphrase.length < 12} onclick={() => run(exportKey)}>Export encrypted identity</Button>
+        <Button variant="outline" disabled={!key || busy || passphrase.length < 12} onclick={() => run(exportKey)}>Export encrypted identity</Button>
         <label class="file-control">Import identity <input type="file" accept=".identity" disabled={!available || busy || passphrase.length < 12} onchange={importKey} /></label>
       </div>
     </section>

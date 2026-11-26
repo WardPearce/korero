@@ -1,11 +1,13 @@
 <script lang="ts">
-  import { Button, Checkbox, SelectField } from "gridworkdesign";
+  import { Button } from "#lib/components/ui/button/index.js";
+  import Checkbox from "#lib/components/LabeledCheckbox.svelte";
+  import SelectField from "#lib/components/SelectField.svelte";
   import { Headphones, Mic, Radio, SlidersHorizontal } from "@lucide/svelte";
   import { onMount } from "svelte";
-  import AudioDeviceFields from "$lib/AudioDeviceFields.svelte";
-  import AudioLevel from "$lib/AudioLevel.svelte";
-  import { getAudioSettings } from "$lib/audio.svelte";
-  import { getWorkspace } from "$lib/workspace";
+  import AudioDeviceFields from "#lib/AudioDeviceFields.svelte";
+  import AudioLevel from "#lib/AudioLevel.svelte";
+  import { getAudioSettings } from "#lib/audio.svelte";
+  import { getWorkspace } from "#lib/workspace";
 
   const audio = getAudioSettings();
   const workspace = getWorkspace();
@@ -46,7 +48,7 @@
     <section class="settings-card audio-card" aria-labelledby="audio-devices">
       <div class="audio-card-heading">
         <h2 id="audio-devices"><Headphones size={16} /> Devices</h2>
-        <Button disabled={!audio.available || audio.testing} onclick={() => audio.refreshDevices()}>Refresh devices</Button>
+        <Button variant="outline" disabled={!audio.available || audio.testing} onclick={() => audio.refreshDevices()}>Refresh devices</Button>
       </div>
       <div class="audio-device-grid">
         <AudioDeviceFields direction="input" />
@@ -57,7 +59,7 @@
           <h3>Microphone test</h3>
           <p>{inVoice ? "Leave the voice channel to run a microphone test." : audio.devices && !audio.devices.micTest ? "Microphone testing is unavailable on this device." : "Speak for two seconds to measure your peak input level."}</p>
         </div>
-        <Button disabled={disabled || inVoice || !audio.devices?.micTest} onclick={() => audio.test()}>
+        <Button variant="outline" disabled={disabled || inVoice || !audio.devices?.micTest} onclick={() => audio.test()}>
           <Mic size={15} /> {audio.testing ? "Listening…" : "Test microphone"}
         </Button>
         {#if audio.peak !== null}

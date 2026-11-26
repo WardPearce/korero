@@ -1,22 +1,27 @@
 <script lang="ts">
   import { BitsConfig } from "bits-ui";
-  import { Button, Checkbox, DropdownMenu, Input, SelectField, Textarea } from "gridworkdesign";
+  import { Button, buttonVariants } from "#lib/components/ui/button/index.js";
+  import Checkbox from "#lib/components/LabeledCheckbox.svelte";
+  import * as DropdownMenu from "#lib/components/ui/dropdown-menu/index.js";
+  import { Input } from "#lib/components/ui/input/index.js";
+  import SelectField from "#lib/components/SelectField.svelte";
+  import { Textarea } from "#lib/components/ui/textarea/index.js";
   import {
     ChevronDown, CircleAlert, DoorOpen, Headphones,
     HeadphoneOff, ListTree, LockKeyhole, MessageCircle, Mic, MicOff, Pencil, Plus, Search,
     Send, Server, Settings2, X,
   } from "@lucide/svelte";
   import { tick } from "svelte";
-  import Avatar from "$lib/Avatar.svelte";
-  import ChannelMember from "$lib/ChannelMember.svelte";
-  import ContextActions from "$lib/ContextActions.svelte";
-  import IconButton from "$lib/IconButton.svelte";
-  import Modal from "$lib/Modal.svelte";
-  import PaneDivider from "$lib/PaneDivider.svelte";
-  import QuickAudio from "$lib/QuickAudio.svelte";
-  import { playUiSound } from "$lib/ui-sounds";
-  import { messageTime, nativeApp, type Channel } from "$lib/client";
-  import { getWorkspace } from "$lib/workspace";
+  import Avatar from "#lib/Avatar.svelte";
+  import ChannelMember from "#lib/ChannelMember.svelte";
+  import ContextActions from "#lib/ContextActions.svelte";
+  import IconButton from "#lib/IconButton.svelte";
+  import Modal from "#lib/Modal.svelte";
+  import PaneDivider from "#lib/PaneDivider.svelte";
+  import QuickAudio from "#lib/QuickAudio.svelte";
+  import { playUiSound } from "#lib/ui-sounds";
+  import { messageTime, nativeApp, type Channel } from "#lib/client";
+  import { getWorkspace } from "#lib/workspace";
 
   const workspace = getWorkspace();
   const voiceAvailable = nativeApp();
@@ -76,15 +81,15 @@
     return true;
   }));
   const topLevel = "Top level";
+  const topLevelValue = "top-level";
   const parentOptions = $derived.by(() => {
-    const options = [{ id: "", label: topLevel, value: topLevel }];
+    const options = [{ id: "", label: topLevel, value: topLevelValue }];
     const labels = new Set([topLevel]);
     for (const parent of possibleParents) {
-      // Gridwork displays the value before its menu items have mounted.
       let label = parent.name;
       for (let number = 2; labels.has(label); number++) label = `${parent.name} (${number})`;
       labels.add(label);
-      options.push({ id: parent.id, label, value: label });
+      options.push({ id: parent.id, label, value: `channel:${parent.id}` });
     }
     return options;
   });
@@ -392,12 +397,15 @@
       </IconButton>
       <QuickAudio direction="output" />
     </div>
-    <fieldset class="afk-menu" disabled={!canSetAfk}>
-      <DropdownMenu label={ownMember?.afk ? "AFK (away)" : "AFK"} items={[
-        { label: ownMember?.afk ? "Return from AFK" : "Mark as AFK", onSelect: toggleAfk },
-        { label: "Set AFK message", onSelect: showAfkForm },
-      ]} />
-    </fieldset>
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger disabled={!canSetAfk} class={buttonVariants({ variant: "outline" })}>
+        {ownMember?.afk ? "AFK (away)" : "AFK"} <ChevronDown aria-hidden="true" />
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Content align="start">
+        <DropdownMenu.Item onSelect={toggleAfk}>{ownMember?.afk ? "Return from AFK" : "Mark as AFK"}</DropdownMenu.Item>
+        <DropdownMenu.Item onSelect={showAfkForm}>Set AFK message</DropdownMenu.Item>
+      </DropdownMenu.Content>
+    </DropdownMenu.Root>
     {#if activeChannel}
       <span class="toolbar-separator"></span>
       <IconButton label="Leave voice channel" disabled={!canVoice || Boolean(pending)} onclick={async () => { if (await run("leave", "leave_channel")) playUiSound("disconnect"); }}><DoorOpen size={18} aria-hidden="true" /></IconButton>
@@ -407,9 +415,8 @@
     {/if}
   </div>
   <div class="channel-search">
-    <Input aria-label="Find a channel" placeholder="Find a channel" bind:value={search} disabled={!snapshot?.channels.length}>
-      {#snippet prefix()}<Search size={16} aria-hidden="true" />{/snippet}
-    </Input>
+    <Search class="pointer-events-none absolute start-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} aria-hidden="true" />
+    <Input class="ps-8" aria-label="Find a channel" placeholder="Find a channel" bind:value={search} disabled={!snapshot?.channels.length} />
   </div>
   <div class="channel-scroll">
     <span id="joined-channel-description" class="sr-only">Joined</span>
@@ -433,7 +440,7 @@
     {/if}
   </div>
   <div class="channel-footer">
-    <Button disabled={!canCreate || Boolean(pending)} onclick={() => showChannelForm()}><Plus size={18} /> Create channel</Button>
+    <Button variant="outline" disabled={!canCreate || Boolean(pending)} onclick={() => showChannelForm()}><Plus size={18} /> Create channel</Button>
   </div>
 </aside>
 
@@ -450,7 +457,7 @@
       <IconButton label="Edit channel" disabled={!online || Boolean(pending)} onclick={() => showChannelForm(currentChannel)}><Pencil size={19} aria-hidden="true" /></IconButton>
     {/if}
     {#if currentChannel}
-      <Button onclick={() => isInRoom ? leaveChannel() : joinChannel(currentChannel!)} disabled={!online || Boolean(pending)}>
+      <Button variant="outline" onclick={() => isInRoom ? leaveChannel() : joinChannel(currentChannel!)} disabled={!online || Boolean(pending)}>
         {#if isInRoom}<DoorOpen size={16} /> Leave voice{:else}<Headphones size={16} /> Join voice{/if}
       </Button>
     {/if}
@@ -484,7 +491,7 @@
         <div class="composer-field">
           <Input aria-label="Channel message" placeholder={canChat ? `Message #${currentChannel?.name}` : "Join a channel to send a message"} disabled={!canChat} maxlength={2000} bind:value={message} />
         </div>
-        <Button type="submit" class="send-button" variant="alternate" aria-label="Send message" disabled={!canChat || !message.trim() || Boolean(pending)}><Send size={17} /></Button>
+        <Button type="submit" class="send-button" variant="default" aria-label="Send message" disabled={!canChat || !message.trim() || Boolean(pending)}><Send size={17} /></Button>
       </form>
     </section>
   </div>
@@ -514,7 +521,7 @@
   {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}
   <form class="dialog-form" onsubmit={saveAfkMessage}>
     <label>Message <Input type="text" maxlength={120} placeholder="Optional" bind:value={afkMessage} /></label>
-    <Button variant="alternate" type="submit" disabled={!canSetAfk || afkFormOrigin !== workspace.serverOrigin}>
+    <Button variant="default" type="submit" disabled={!canSetAfk || afkFormOrigin !== workspace.serverOrigin}>
       {ownMember?.afk ? "Save message" : "Go AFK"}
     </Button>
   </form>
@@ -525,7 +532,7 @@
   {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}
   <form class="dialog-form" onsubmit={submitPassword}>
     <label>Channel password<Input type="password" required bind:value={channelPassword} /></label>
-    <Button variant="alternate" type="submit" disabled={Boolean(pending)}>{pending === "join" ? "Joining…" : "Join voice"}</Button>
+    <Button variant="default" type="submit" disabled={Boolean(pending)}>{pending === "join" ? "Joining…" : "Join voice"}</Button>
   </form>
 </Modal>
 
@@ -555,7 +562,7 @@
         autocomplete="off" spellcheck="false" title="Use an HTTPS image URL" bind:value={backgroundImageUrl} /></label>
       {#if editingChannel}<p class="field-hint">Clear the URL to remove the background.</p>{/if}
     {/if}
-    <Button variant="alternate" type="submit" disabled={Boolean(pending)}>{editingChannel ? "Save changes" : "Create channel"}</Button>
+    <Button variant="default" type="submit" disabled={Boolean(pending)}>{editingChannel ? "Save changes" : "Create channel"}</Button>
   </form>
 {/snippet}
 

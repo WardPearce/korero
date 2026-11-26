@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Button, SliderField } from "gridworkdesign";
+  import { Button } from "#lib/components/ui/button/index.js";
+  import SliderField from "#lib/components/SliderField.svelte";
   import { HeadphoneOff, MicOff, Volume2 } from "@lucide/svelte";
   import { tick } from "svelte";
   import Avatar from "./Avatar.svelte";
@@ -117,8 +118,8 @@
       {/if}
       {#if workspace.actionError}<p class="form-error" role="alert">{workspace.actionError}</p>{/if}
       <div class="dialog-actions">
-        <Button type="button" onclick={() => { dialogOpen = false; }}>Cancel</Button>
-        <Button type="submit" variant="alternate" disabled={Boolean(workspace.pending)}>
+        <Button variant="outline" type="button" onclick={() => { dialogOpen = false; }}>Cancel</Button>
+        <Button type="submit" variant="default" disabled={Boolean(workspace.pending)}>
           {dialog === "volume" ? "Apply" : dialog === "poke" ? "Send poke" : dialog === "kick" ? "Kick" : "Ban"}
         </Button>
       </div>
