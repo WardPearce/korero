@@ -14,7 +14,7 @@ and the native audio test.
 Right-click a connected server and choose **Server administration** to assign
 built-in roles, issue invitations, set a shared sign-in password, or edit its
 active configuration file. The first owner claims the server with its setup
-token. Regular sign-in uses your Kōrero identity and follows the server’s
+token. Regular sign-in uses your VNX.chat identity and follows the server’s
 registration policy. Right-click a channel to edit it, including its password,
 or right-click a server to remove it from your device.
 
@@ -24,7 +24,7 @@ overrides take precedence. Change the storage directory on the host.
 
 To use administration in a browser, serve the frontend over HTTPS or localhost,
 add the frontend’s origin to `server.origins`, and use a server certificate
-trusted by the browser. You can import an existing Kōrero identity backup.
+trusted by the browser. You can import an existing VNX.chat identity backup.
 Voice uses the desktop app.
 
 ## Run a standalone build

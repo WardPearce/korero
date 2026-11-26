@@ -15,7 +15,7 @@
 <span class="quick-audio">
   <Popover.Root>
     <Popover.Trigger aria-label={label} title={label}
-      class={buttonVariants({ variant: "outline", size: "icon", class: "h-[34px] w-7 rounded-s-none" })}>
+      class={buttonVariants({ variant: "outline", size: "icon", class: "h-(--control-height) w-8 rounded-s-none" })}>
       <ChevronDown size={14} aria-hidden="true" />
     </Popover.Trigger>
     <Popover.Content aria-label={label} align="start"

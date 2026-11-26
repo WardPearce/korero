@@ -1,9 +1,9 @@
-# Kōrero client
+# VNX.chat client
 
 The client uses SvelteKit, Svelte 5, Tailwind CSS, and Bits UI. The static adapter
 writes the SPA entry point and assets to `frontend/dist` for Tauri 2. The root
 layout owns the server sidebar and listens for native session updates across
-the workspace and account settings routes. Kōrero connects to a separately
+the workspace and account settings routes. VNX.chat connects to a separately
 deployed Bun/Elysia and mediasoup server using the [v1 protocol](protocol.md).
 
 Eden Treaty type-checks discovery and account requests

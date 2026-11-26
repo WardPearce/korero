@@ -427,7 +427,7 @@
     {:else if tab === "invitation" && permissions.includes("manageInvitations")}
       <form class="dialog-form" onsubmit={saveInvitation}>
         <section class="invite-panel">
-        <div class="invite-heading"><div><span class="invite-eyebrow">SERVER ACCESS</span><h3>{editedInvitation ? `Edit invitation ${editedInvitation.id.slice(0, 8)}` : "Create an invitation"}</h3><p class="field-hint">Choose how many people can join and when this link expires.</p></div></div>
+        <div class="invite-heading"><div><h3>{editedInvitation ? `Edit invitation ${editedInvitation.id.slice(0, 8)}` : "Create an invitation"}</h3><p class="field-hint">Choose how many people can join and when this link expires.</p></div></div>
         <label>{editedInvitation ? "Remaining uses" : "Use limit"}
           <Input type="number" min={editedInvitation ? 0 : 1} max="10000" placeholder="Unlimited" disabled={busy} bind:value={invitationLimit} />
         </label>
@@ -452,7 +452,7 @@
           <Button variant="outline" class="fit-action" disabled={busy} onclick={() => copyInvitation(url)}>Copy link</Button>
         </div>
       {/if}
-      <section class="existing-invites"><div class="section-heading"><div><span class="invite-eyebrow">LINK MANAGEMENT</span><h3>Existing invitations</h3></div><span class="invite-count">{invitations?.length ?? 0}</span></div>
+      <section class="existing-invites"><div class="section-heading"><div><h3>Existing invitations</h3></div><span class="invite-count">{invitations?.length ?? 0}</span></div>
       {#if invitations?.length}
         <ul class="admin-members">
           {#each invitations as invitation (invitation.id)}
@@ -488,11 +488,10 @@
 </div>
 
 <style>
-  .invite-panel, .existing-invites { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid var(--border); background: var(--muted); margin-block: 1rem; }
+  .invite-panel, .existing-invites { display: grid; gap: 1rem; padding: var(--ui-gap); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
   .invite-heading, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
   .invite-heading h3, .section-heading h3 { margin: .2rem 0; }
-  .invite-eyebrow { color: var(--muted-foreground); font-size: .72rem; font-weight: 700; letter-spacing: .12em; }
-  .invite-count { min-width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: 999px; background: var(--muted); color: var(--muted-foreground); }
-  .invite-link { padding: 1rem; border: 1px solid var(--border); }
+  .invite-count { min-width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: var(--radius-md); background: var(--muted); color: var(--muted-foreground); }
+  .invite-link { padding: var(--ui-gap); border: 1px solid var(--border); border-radius: var(--radius-md); }
 
 </style>

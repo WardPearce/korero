@@ -25,7 +25,7 @@
   } from "#lib/client";
   import { authenticateIdentity, identityError, loadIdentity } from "#lib/identity";
   import { browserServerOrigin, browserSession } from "#lib/browser-session";
-  import { applyTheme, readTheme } from "#lib/theme";
+  import { applyTheme, readAppearance, themeFor } from "#lib/theme";
   import { setWorkspace, type MobilePane, type RoomView } from "#lib/workspace";
 
   let { children } = $props();
@@ -129,7 +129,7 @@
   });
 
   onMount(() => {
-    applyTheme(readTheme());
+    applyTheme(themeFor(readAppearance()));
     void audio.load();
     void Promise.all([migrateSavedServers().then(() => preferences.servers.toArray()), preferences.local.bulkGet(["rail", "channel"])])
       .then(([servers, [rail, channel]]) => {

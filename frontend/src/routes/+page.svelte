@@ -456,7 +456,7 @@
     {#if currentChannel?.canEdit}
       <IconButton label="Edit channel" disabled={!online || Boolean(pending)} onclick={() => showChannelForm(currentChannel)}><Pencil size={19} aria-hidden="true" /></IconButton>
     {/if}
-    {#if currentChannel}
+    {#if currentChannel && voiceAvailable}
       <Button variant="outline" onclick={() => isInRoom ? leaveChannel() : joinChannel(currentChannel!)} disabled={!online || Boolean(pending)}>
         {#if isInRoom}<DoorOpen size={16} /> Leave voice{:else}<Headphones size={16} /> Join voice{/if}
       </Button>
@@ -483,16 +483,25 @@
         {:else}
           <div class="chat-empty">
             <MessageCircle size={23} strokeWidth={1.5} />
-            <div><strong>{isInRoom ? "No messages yet" : "Channel messages appear here"}</strong><p>{isInRoom ? "Send a message to start the conversation." : "Join a voice channel to read and send messages."}</p></div>
+            {#if view.phase === "offline" && !workspace.serverOrigin}
+              <div><strong>No server connected</strong><p>Connect to a server to see its channels and messages.</p></div>
+              <Button variant="outline" onclick={() => workspace.showConnect()}>Connect to a server</Button>
+            {:else if !voiceAvailable && currentChannel}
+              <div><strong>Channel chat is available in the desktop app</strong><p>Open VNX.chat to join the voice channel and send messages.</p></div>
+            {:else}
+              <div><strong>{isInRoom ? "No messages yet" : "Channel messages appear here"}</strong><p>{isInRoom ? "Send a message to start the conversation." : "Join a voice channel to read and send messages."}</p></div>
+            {/if}
           </div>
         {/if}
       </div>
-      <form class="composer" onsubmit={sendMessage}>
-        <div class="composer-field">
-          <Input aria-label="Channel message" placeholder={canChat ? `Message #${currentChannel?.name}` : "Join a channel to send a message"} disabled={!canChat} maxlength={2000} bind:value={message} />
-        </div>
-        <Button type="submit" class="send-button" variant="default" aria-label="Send message" disabled={!canChat || !message.trim() || Boolean(pending)}><Send size={17} /></Button>
-      </form>
+      {#if voiceAvailable}
+        <form class="composer" onsubmit={sendMessage}>
+          <div class="composer-field">
+            <Input aria-label="Channel message" placeholder={canChat ? `Message #${currentChannel?.name}` : "Join a channel to send a message"} disabled={!canChat} maxlength={2000} bind:value={message} />
+          </div>
+          <Button type="submit" class="send-button" variant="default" aria-label="Send message" disabled={!canChat || !message.trim() || Boolean(pending)}><Send size={17} /></Button>
+        </form>
+      {/if}
     </section>
   </div>
 {/snippet}
