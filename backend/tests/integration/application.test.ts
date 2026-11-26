@@ -1,6 +1,90 @@
 import { expect, test } from "bun:test";
-import { fixture, type Snapshot, until } from "../server";
+import { fixture, openSocket, type Snapshot, until } from "../server";
 import { LOBBY } from "../../src/database";
+
+test("attachments follow session ownership, channel permissions, history and deletion", async () => {
+  const server = await fixture({ environment: { VOICE_MESSAGING_PERSISTENCE: "true" } });
+  try {
+    const owner = await server.owner();
+    const member = await server.register("Member");
+    const ownerWs = await server.ws(owner);
+    const memberWs = await server.ws(member);
+    const { channelId } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Files", audioBitrate: 56000 });
+    await expect(memberWs.rpc("channel.edit", { channelId, audioBitrate: 32000 })).rejects.toThrow("FORBIDDEN");
+    await expect(ownerWs.rpc("channel.edit", { channelId, audioBitrate: 128001 })).rejects.toThrow("INVALID_REQUEST");
+    await ownerWs.rpc("channel.join", { channelId });
+    await memberWs.rpc("channel.join", { channelId: LOBBY });
+    const connectionId = ownerWs.state.connectionId;
+    const name = "shared.txt";
+    const bytes = Buffer.alloc(5 * 1024 * 1024, 65);
+    const data = bytes.toString("base64");
+    const upload = { connectionId, channelId, name, data, text: "Shared file", html: "<p><em>Shared file</em></p>" };
+    const path = "/api/v1/chat/attachments";
+    expect((await server.fail(path + "/", { data: "invalid" })).status).toBe(401);
+    expect((await server.fail(path, { ...upload, data: "YQ==" }, member.accessToken)).status).toBe(403);
+    expect((await server.fail(path, { ...upload, data: "YQ=" }, owner.accessToken)).status).toBe(400);
+    expect(await server.fail(path, upload, owner.accessToken)).toMatchObject({ status: 429, payload: { error: { code: "LIMIT" } } });
+    const preferences = "/api/v1/admin/preferences";
+    expect((await server.call(preferences, { maxAttachmentMiB: 6 }, owner.accessToken, "PATCH")).response.status).toBe(200);
+    const { response, payload } = await server.call<{ messageId: string }>(path, upload, owner.accessToken);
+    expect(response.status).toBe(200);
+    expect((await server.call(preferences, { maxAttachmentMiB: 1 }, owner.accessToken, "PATCH")).response.status).toBe(200);
+    const download = path + "/" + payload.messageId + "?connectionId=" + memberWs.state.connectionId;
+    expect((await server.fail(download, undefined, member.accessToken)).status).toBe(404);
+    await memberWs.rpc("channel.join", { channelId });
+    expect(await memberWs.rpc("message.history", { channelId })).toMatchObject([
+      { id: payload.messageId, text: upload.text, html: upload.html, attachment: { name, size: bytes.length } },
+    ]);
+    const downloaded = await server.call<{ data: string }>(download, undefined, member.accessToken);
+    expect(downloaded.payload.data === data).toBe(true);
+    for (let index = 0; index < 5; index++) {
+      const response = await fetch(server.origin + download, { tls: server.tls, headers: { authorization: `Bearer ${member.accessToken}` } });
+      expect(response.ok).toBe(true);
+      await response.arrayBuffer();
+    }
+    expect((await server.fail(download, undefined, member.accessToken)).status).toBe(429);
+    await ownerWs.rpc("message.delete", payload);
+    expect((await server.fail(download, undefined, member.accessToken)).status).toBe(404);
+  } finally { await server.cleanup(); }
+});
+
+test("live attachment quotas apply per sender and release capacity on deletion", async () => {
+  const server = await fixture({ environment: { VOICE_MESSAGING_PERSISTENCE: "false" } });
+  try {
+    const alice = await server.register("Alice");
+    const bob = await server.register("Bobby");
+    const aliceWs = await server.ws(alice);
+    const bobWs = await server.ws(bob);
+    await aliceWs.rpc("channel.join", { channelId: LOBBY });
+    await bobWs.rpc("channel.join", { channelId: LOBBY });
+    const data = Buffer.alloc(3 * 1024 * 1024).toString("base64");
+    const upload = (connectionId: string, accessToken: string) => server.call<{ messageId: string }>("/api/v1/chat/attachments",
+      { connectionId, channelId: LOBBY, name: "file.bin", data, text: "" }, accessToken);
+    const aliceUpload = () => upload(aliceWs.state.connectionId, alice.accessToken);
+    const first = await aliceUpload();
+    expect(first.response.status).toBe(200);
+    expect((await aliceUpload()).response.status).toBe(200);
+    expect((await aliceUpload()).response.status).toBe(429);
+    expect((await upload(bobWs.state.connectionId, bob.accessToken)).response.status).toBe(200);
+    await aliceWs.rpc("message.delete", first.payload);
+    expect((await aliceUpload()).response.status).toBe(200);
+  } finally { await server.cleanup(); }
+});
+
+test("WebSocket upgrades share a rate limit across route forms and pending slots are released", async () => {
+  const server = await fixture({ environment: { VOICE_LIMITS_PENDING_CONNECTIONS_PER_IP: "1", VOICE_LIMITS_UPGRADES_PER_MINUTE: "3" } });
+  try {
+    const first = await openSocket(server.origin, server.tls);
+    const second = await openSocket(server.origin, server.tls, undefined, "/api/v1/ws/");
+    expect((await second.closed).code).toBe(4429);
+    first.close();
+    await first.closed;
+    const third = await openSocket(server.origin, server.tls);
+    await expect(openSocket(server.origin, server.tls, undefined, "/api/v1/ws/")).rejects.toThrow("WebSocket upgrade failed");
+    third.close();
+    expect((await third.closed).code).not.toBe(4429);
+  } finally { await server.cleanup(); }
+});
 
 test("channels, inheritance, password membership, moderation and text are permission-scoped", async () => {
   const server = await fixture({ environment: { VOICE_MESSAGING_PERSISTENCE: "true" } });
@@ -37,7 +121,18 @@ test("channels, inheritance, password membership, moderation and text are permis
     await bobWs.rpc("channel.join", { channelId: child.channelId, password: "private phrase" });
     await until(() => aliceWs.received.find((event) => event.type === "channel.userJoined" && event.payload.accountId === bob.account.id), Boolean);
     const sent = await aliceWs.rpc<{ messageId: string }>("message.send", { channelId: child.channelId, text: "Hello" });
-    expect(await bobWs.rpc("message.history", { channelId: child.channelId })).toMatchObject([{ id: sent.messageId, text: "Hello" }]);
+    const history = { channelId: child.channelId };
+    expect(await bobWs.rpc("message.history", history)).toMatchObject([{ id: sent.messageId, text: "Hello" }]);
+    const rich = { channelId: child.channelId, text: "Formatted", html: "<p><strong>Formatted</strong></p>" };
+    const sentRich = await aliceWs.rpc<{ messageId: string }>("message.send", rich);
+    await until(() => bobWs.received.find((event) => event.type === "message.created" && event.payload.id === sentRich.messageId), Boolean);
+    expect(bobWs.received.find((event) => event.payload.id === sentRich.messageId)?.payload).toMatchObject(rich);
+    const messages = await bobWs.rpc<Array<{ id: string; text: string; html?: string }>>("message.history", history);
+    expect(messages.find(({ id }) => id === sentRich.messageId)).toMatchObject(rich);
+    expect(messages.find(({ id }) => id === sent.messageId)).toMatchObject({ text: "Hello" });
+    expect(messages.find(({ id }) => id === sent.messageId)).not.toHaveProperty("html");
+    await expect(aliceWs.rpc("message.send", { ...rich, html: "a".repeat(32769) })).rejects.toThrow("INVALID_REQUEST");
+    await aliceWs.rpc("message.delete", sentRich);
     await expect(bobWs.rpc("message.delete", sent)).rejects.toThrow("FORBIDDEN");
     await aliceWs.rpc("message.delete", sent);
     expect(await bobWs.rpc<unknown[]>("message.history", { channelId: child.channelId })).toEqual([]);

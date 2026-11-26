@@ -1,7 +1,7 @@
 <script lang="ts">
   import { playUiSound } from "#lib/ui-sounds";
   import { Button } from "#lib/components/ui/button/index.js";
-  import Checkbox from "#lib/components/LabeledCheckbox.svelte";
+  import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
   import { Input } from "#lib/components/ui/input/index.js";
   import "../app.css";
 
@@ -10,23 +10,23 @@
   import { page } from "$app/state";
   import { ArrowRight, AudioLines, Bookmark, Cable, ListTree, Plus, Server, Settings2, X } from "@lucide/svelte";
   import { onMount } from "svelte";
-  import { AudioSettings, setAudioSettings } from "#lib/audio.svelte";
-  import PaneDivider from "#lib/PaneDivider.svelte";
+  import { AudioSettings, setAudioSettings } from "#lib/media/audio.svelte";
+  import PaneDivider from "#lib/components/PaneDivider.svelte";
   import { getMemberVolumes, getUsername, migrateSavedServers, preferences, saveMemberVolumes, type SavedServer } from "#lib/preferences";
-  import Avatar from "#lib/Avatar.svelte";
-  import ContextActions from "#lib/ContextActions.svelte";
-  import IdentitySetup from "#lib/IdentitySetup.svelte";
-  import IconButton from "#lib/IconButton.svelte";
-  import Modal from "#lib/Modal.svelte";
-  import ServerAdministration from "#lib/ServerAdministration.svelte";
+  import Avatar from "#lib/components/Avatar.svelte";
+  import ContextActions from "#lib/components/ContextActions.svelte";
+  import IdentitySetup from "#lib/components/IdentitySetup.svelte";
+  import IconButton from "#lib/components/IconButton.svelte";
+  import Modal from "#lib/components/Modal.svelte";
+  import ServerAdministration from "#lib/components/server/ServerAdministration.svelte";
   import {
     apiFor, call, messageFrom, nativeApp, offline, requestError, shortHost, watchVoice,
     type MemberRequest, type ServerInfo, type VoiceState,
-  } from "#lib/client";
-  import { authenticateIdentity, identityError, loadIdentity } from "#lib/identity";
-  import { browserServerOrigin, browserSession } from "#lib/browser-session";
-  import { applyTheme, readAppearance, themeFor } from "#lib/theme";
-  import { setWorkspace, type MobilePane, type RoomView } from "#lib/workspace";
+  } from "#lib/connection/client";
+  import { authenticateIdentity, identityError, loadIdentity } from "#lib/identity/identity";
+  import { browserServerOrigin, browserSession } from "#lib/connection/browser-session";
+  import { applyAppearance, readAppearance } from "#lib/theme";
+  import { setWorkspace, type ChannelPlacement, type MobilePane, type RoomView } from "#lib/workspace";
 
   let { children } = $props();
   const audio = setAudioSettings(new AudioSettings());
@@ -81,12 +81,15 @@
   let selectedChannelId = $state<string | null>(null);
   let mobilePane = $state<MobilePane>("room");
   let roomView = $state<RoomView>("chat");
+  let directAccountId = $state<string | null>(null);
+  let unreadDirectAccounts = $state.raw<ReadonlySet<string>>(new Set());
 
   let me = $derived(view.snapshot?.account);
   let online = $derived(view.phase === "online");
   let serverPermissions = $derived(view.snapshot?.serverPermissions ?? []);
   let canAdminister = $derived(online && Boolean(serverInfo?.serverAdministration) &&
-    ["manageRoles", "manageSettings", "manageInvitations"].some((permission) => serverPermissions.includes(permission)));
+    (["manageRoles", "manageSettings", "manageInvitations"].some((permission) => serverPermissions.includes(permission)) ||
+      Boolean(serverInfo?.extendedServerAdministration && serverPermissions.includes("viewAdmin"))));
   let onWorkspace = $derived(page.route.id === "/");
   let serverTitle = $derived(serverInfo?.name ?? (serverOrigin ? shortHost(serverOrigin) : online ? "Connected server" : "No server connected"));
   let bannerImageUrl = $derived(view.snapshot?.bannerImageUrl === undefined ? serverInfo?.bannerImageUrl ?? null : view.snapshot.bannerImageUrl);
@@ -101,11 +104,17 @@
   setWorkspace({
     get view() { return view; },
     get serverOrigin() { return serverOrigin; },
+    get serverId() { return serverInfo?.serverId ?? ""; },
     get serverTitle() { return serverTitle; },
     get bannerImageUrl() { return bannerImageUrl; },
     get canAdminister() { return canAdminister; },
     get serverSettings() { return roomView === "serverSettings" && canAdminister ? serverSettings : undefined; },
     get channelBackgrounds() { return Boolean(serverInfo?.channelBackgrounds); },
+    get maxAttachmentBytes() { return view.snapshot?.maxAttachmentBytes ?? serverInfo?.maxAttachmentBytes ?? 0; },
+    get richChat() { return serverInfo?.richChat === true; },
+    get maxWebSocketBytes() { return serverInfo?.maxWebSocketBytes; },
+    get screenSharing() { return Boolean(serverInfo?.screenSharing); },
+    get channelAudioQuality() { return Boolean(serverInfo?.channelAudioQuality); },
     get channelWidth() { return channelWidth; },
     get channelMax() { return channelMax; },
     resizeChannel(value, commit) { resizePane("channel", value, commit); },
@@ -118,9 +127,13 @@
     set mobilePane(value) { mobilePane = value; },
     get roomView() { return roomView; },
     set roomView(value) { roomView = value; },
+    get directAccountId() { return directAccountId; },
+    get unreadDirectAccounts() { return unreadDirectAccounts; },
+    showDirectMessages,
     showConnect,
     showServerSettings,
     run,
+    runAction,
     memberAction,
     memberVolume(accountId) { return memberVolumes[accountId] ?? 100; },
     setMemberVolume,
@@ -129,7 +142,7 @@
   });
 
   onMount(() => {
-    applyTheme(themeFor(readAppearance()));
+    applyAppearance(readAppearance());
     void audio.load();
     void Promise.all([migrateSavedServers().then(() => preferences.servers.toArray()), preferences.local.bulkGet(["rail", "channel"])])
       .then(([servers, [rail, channel]]) => {
@@ -170,13 +183,29 @@
     return () => {
       mounted = false;
       unlisten?.();
-      audio.stopTalking();
+      audio.dispose();
     };
   });
 
   function applyView(state: VoiceState) {
     const channel = state.snapshot?.channelId;
+    const connection = state.snapshot?.connectionId;
+    const member = state.snapshot?.members.find(({ connectionId }) => connectionId === connection);
+    audio.setTalkContext(state.phase === "online" && state.voice === "active" && !state.whisperChannelId && connection && channel && member &&
+      !member.muted && !member.adminMuted && !member.deafened && !member.adminDeafened && !member.afk
+      ? { channelId: channel, connectionId: connection } : undefined);
     if (channel && channel !== view.snapshot?.channelId) selectedChannelId = channel;
+    if (connection !== view.snapshot?.connectionId) unreadDirectAccounts = new Set();
+    if (state.directMessages?.at(-1)?.id !== view.directMessages?.at(-1)?.id) {
+      const previous = new Set(view.directMessages?.map(({ id }) => id));
+      const unread = new Set(unreadDirectAccounts);
+      for (const message of state.directMessages ?? []) {
+        if (message.recipientId !== state.snapshot?.account.id || previous.has(message.id)) continue;
+        if (onWorkspace && mobilePane === "room" && roomView === "directMessages" && directAccountId === message.senderId) continue;
+        unread.add(message.senderId);
+      }
+      unreadDirectAccounts = unread;
+    }
     view = state;
   }
 
@@ -224,6 +253,7 @@
 
   async function discoverServerInfo(origin: string) {
     roomView = "chat";
+    directAccountId = null;
     serverInfo = null;
     serverOrigin = "";
     selectedChannelId = null;
@@ -435,13 +465,16 @@
       if (nativeApp()) return call(command, args);
       if (command === "disconnect") return browserSession.disconnect();
       if (command === "save_channel") return browserSession.saveChannel(args?.payload as Record<string, unknown>);
+      if (command === "join_channel") return browserSession.joinChannel(args?.channelId as string, (args?.password as string | null) ?? undefined);
+      if (command === "leave_channel") return browserSession.leaveChannel();
+      if (command === "send_message") return browserSession.sendMessage(args?.channelId as string, args?.text as string, args?.html as string | undefined);
       throw new Error("Open VNX.chat in the desktop app to use voice.");
     });
   }
 
-  function reorderChannel(channelId: string, targetId: string, placement: "before" | "after") {
+  function reorderChannel(channelId: string, targetId: string, placement: ChannelPlacement, parentId?: string | null) {
     return runAction("channel-order", async () => {
-      const response = await apiFor(serverOrigin).channels.order.patch({ channelId, targetId, placement });
+      const response = await apiFor(serverOrigin).channels.order.patch({ channelId, targetId, placement, parentId });
       if (response.error) throw requestError(response.error);
     });
   }
@@ -470,6 +503,7 @@
     serverInfo = null;
     serverOrigin = "";
     selectedChannelId = null;
+    directAccountId = null;
     openWorkspace("room");
     return true;
   }
@@ -482,6 +516,16 @@
 
   function showChat() {
     roomView = "chat";
+    openWorkspace("room");
+  }
+
+  function showDirectMessages(accountId?: string) {
+    if (!online || !view.snapshot?.directMessages || !serverInfo?.serverId) return;
+    directAccountId = accountId ?? null;
+    if (accountId && unreadDirectAccounts.has(accountId)) {
+      unreadDirectAccounts = new Set([...unreadDirectAccounts].filter((id) => id !== accountId));
+    }
+    roomView = "directMessages";
     openWorkspace("room");
   }
 
@@ -520,7 +564,7 @@
   <title>VNX.chat</title>
 </svelte:head>
 
-<svelte:window bind:innerWidth={viewport} onkeydown={audio.talkKeyDown} onkeyup={audio.talkKeyUp} onblur={audio.stopTalking} />
+<svelte:window bind:innerWidth={viewport} onkeydown={audio.talkKeyDown} onkeyup={audio.talkKeyUp} onblur={audio.talkWindowBlur} />
 
 <div class="shell" data-pane={onWorkspace ? mobilePane : "room"} data-workspace={onWorkspace} style:--rail-width={railWidth + "px"} style:--channel-width={channelWidth + "px"}>
   <aside id="server-rail" class="server-rail" aria-label="Servers">
@@ -648,6 +692,7 @@
   {#if serverInfo}
     {#key serverOrigin}
       <ServerAdministration origin={serverOrigin} title={serverTitle} permissions={serverPermissions}
+        extended={Boolean(serverInfo.extendedServerAdministration)}
         bannerSupported={serverInfo.bannerImageUrl !== undefined} {bannerImageUrl} onclose={showChat}
         passwordRequired={Boolean(serverInfo.passwordRequired)} onPasswordChange={(origin, passwordRequired) => {
           if (serverInfo && origin === serverOrigin) serverInfo = { ...serverInfo, passwordRequired };

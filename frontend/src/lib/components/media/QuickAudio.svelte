@@ -4,7 +4,7 @@
   import * as Popover from "#lib/components/ui/popover/index.js";
   import { buttonVariants } from "#lib/components/ui/button/index.js";
   import { untrack } from "svelte";
-  import { getAudioSettings } from "./audio.svelte";
+  import { getAudioSettings } from "#lib/media/audio.svelte";
   import AudioDeviceFields from "./AudioDeviceFields.svelte";
 
   let { direction }: { direction: "input" | "output" } = $props();

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import SelectField from "#lib/components/SelectField.svelte";
+  import SelectField from "#lib/components/fields/SelectField.svelte";
   import AudioLevel from "./AudioLevel.svelte";
-  import { getAudioSettings } from "./audio.svelte";
+  import { getAudioSettings } from "#lib/media/audio.svelte";
 
   let { direction }: { direction: "input" | "output" } = $props();
   const audio = getAudioSettings();

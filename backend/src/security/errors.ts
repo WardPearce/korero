@@ -24,7 +24,7 @@ export function errorResponse(error: unknown) {
 export class RateLimit {
   private readonly buckets = new Map<string, { available: number; updated: number }>();
   constructor(private readonly capacity: number, private readonly maxBuckets = 8192) {}
-  take(key: string) {
+  take(key: string, cost = 1) {
     const now = performance.now();
     let bucket = this.buckets.get(key);
     if (!bucket) {
@@ -41,7 +41,7 @@ export class RateLimit {
     bucket.updated = now;
     this.buckets.delete(key);
     this.buckets.set(key, bucket);
-    if (bucket.available < 1) fail("RATE_LIMITED");
-    bucket.available--;
+    if (bucket.available < cost) fail("RATE_LIMITED");
+    bucket.available -= cost;
   }
 }

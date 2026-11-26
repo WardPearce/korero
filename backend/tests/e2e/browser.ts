@@ -25,6 +25,8 @@ let sink: GainNode;
 let element: HTMLAudioElement;
 let sender: Transport;
 let receiver: Transport | undefined;
+type VideoSource = "screen" | "camera";
+const videoSenders = new Map<VideoSource, Transport>();
 let lobby: string;
 let lastClose = 0;
 const pending = new Map<number, { resolve: (payload: unknown) => void; reject: (reason: Error) => void }>();
@@ -89,16 +91,20 @@ async function join(channelId = lobby) {
   await device.load({ routerRtpCapabilities: await rpc("media.capabilities") });
 }
 
-async function transport(direction: "send" | "receive", forceTcp: boolean) {
-  const options = await rpc<Parameters<Device["createSendTransport"]>[0]>("media.transport.create", { direction, forceTcp });
-  const rtc = direction === "send" ? device.createSendTransport(options) : device.createRecvTransport(options);
+type WhisperTarget = { channelId: string; password?: string };
+async function transport(direction: "send" | "receive", forceTcp: boolean, mediaDevice = device, source?: VideoSource, whisper?: WhisperTarget) {
+  const options = await rpc<Parameters<Device["createSendTransport"]>[0]>("media.transport.create", {
+    direction, forceTcp, kind: source ? "video" : undefined, videoSource: source === "camera" ? source : undefined,
+    whisperChannelId: whisper?.channelId, whisperPassword: whisper?.password,
+  });
+  const rtc = direction === "send" ? mediaDevice.createSendTransport(options) : mediaDevice.createRecvTransport(options);
   rtc.on("connect", ({ dtlsParameters }, ok, fail) => {
     rpc("media.transport.connect", { transportId: rtc.id, dtlsParameters }).then(ok, fail);
   });
   return rtc;
 }
-async function publish(forceTcp: boolean) {
-  sender = await transport("send", forceTcp);
+async function publish(forceTcp: boolean, whisper?: WhisperTarget) {
+  sender = await transport("send", forceTcp, device, undefined, whisper);
   sender.on("produce", ({ kind, rtpParameters }, ok, fail) => {
     rpc<{ id: string }>("media.producer.create", { transportId: sender.id, kind, rtpParameters }).then(ok, fail);
   });
@@ -153,6 +159,64 @@ async function consume(producerId: string, forceTcp: boolean) {
   }
   throw new Error("No decoded synthetic audio was received");
 }
+async function screenDevice() {
+  const screen = await Device.factory();
+  await screen.load({ routerRtpCapabilities: await rpc("media.capabilities", { kind: "video" }) });
+  return screen;
+}
+async function publishVideo(forceTcp: boolean, source: VideoSource) {
+  const rtc = await transport("send", forceTcp, await screenDevice(), source);
+  videoSenders.set(source, rtc);
+  rtc.on("produce", ({ kind, rtpParameters }, ok, fail) => {
+    rpc<{ id: string }>("media.producer.create", { transportId: rtc.id, kind, rtpParameters }).then(ok, fail);
+  });
+  if (source === "camera") {
+    const media = await navigator.mediaDevices.getUserMedia({ video: { width: { exact: 640 }, height: { exact: 360 } }, audio: false });
+    const track = media.getVideoTracks()[0]!;
+    rtc.observer.once("close", () => track.stop());
+    return (await rtc.produce({ track, encodings: [{ maxBitrate: 500000 }] })).id;
+  }
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d")!;
+  const track = canvas.captureStream(10).getVideoTracks()[0]!;
+  let alternate = false;
+  const timer = setInterval(() => {
+    context.fillStyle = alternate ? "blue" : "red";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    alternate = !alternate;
+  }, 100);
+  rtc.observer.once("close", () => { clearInterval(timer); track.stop(); });
+  return (await rtc.produce({ track })).id;
+}
+async function stopVideo(source: VideoSource) {
+  const rtc = videoSenders.get(source);
+  if (!rtc) return;
+  try { await rpc("media.transport.close", { transportId: rtc.id }); }
+  finally { rtc.close(); videoSenders.delete(source); }
+}
+async function consumeVideo(producerId: string, forceTcp: boolean, source: VideoSource) {
+  const screen = await screenDevice();
+  const rtc = await transport("receive", forceTcp, screen, source);
+  try {
+    const parameters = await rpc<Parameters<Transport["consume"]>[0]>("media.consumer.create", {
+      transportId: rtc.id, producerId, rtpCapabilities: screen.recvRtpCapabilities,
+    });
+    const viewer = await rtc.consume(parameters);
+    const video = document.createElement("video");
+    video.muted = true;
+    video.srcObject = new MediaStream([viewer.track]);
+    await rpc("media.consumer.resume", { consumerId: viewer.id });
+    const frame = new Promise<number>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`Timed out waiting for a ${source} video frame`)), 4000);
+      video.requestVideoFrameCallback(() => { clearTimeout(timeout); resolve(video.videoWidth); });
+    });
+    const [, width] = await Promise.all([video.play(), frame]);
+    return width;
+  } finally {
+    await rpc("media.transport.close", { transportId: rtc.id });
+    rtc.close();
+  }
+}
 function stats() { return consumer.getStats().then((report) =>
   ([...report.values()].find((row) => row.type === "inbound-rtp")?.packetsReceived ?? 0) as number); }
 
@@ -160,5 +224,6 @@ async function counters() {
   const rows = await rpc<{ bytesSent: number; bytesReceived: number }[]>("media.transport.stats", { transportId: (receiver ?? sender).id });
   return { bytesSent: rows[0]!.bytesSent, bytesReceived: rows[0]!.bytesReceived };
 }
-export const harness = { counters, initialize, join, publish, consume, subscribe, rpc, stats, events: () => observed, closeCode: () => lastClose };
+export const harness = { counters, initialize, join, publish, consume, subscribe, publishVideo, stopVideo, consumeVideo,
+  rpc, stats, events: () => observed, closeCode: () => lastClose };
 Object.assign(window, { harness });

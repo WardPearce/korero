@@ -1,5 +1,5 @@
-A self-hosted, voice-first server with direct-IP HTTPS and WebSocket signalling, an Opus SFU,
-public-key accounts, persistent device sessions, hierarchical channels, moderation, and basic text.
+A self-hosted, voice-first server with direct-IP HTTPS and WebSocket signalling, a WebRTC SFU,
+public-key accounts, persistent device sessions, hierarchical channels, moderation, and chat.
 The [v1 protocol](docs/protocol.md) is open to independent clients. The Bun/Elysia server lives in
 [`backend/`](backend/). The SvelteKit and Tauri desktop client lives in [`frontend/`](frontend/).
 
@@ -11,21 +11,66 @@ and the native audio test.
 
 ## Manage a server
 
-Right-click a connected server and choose **Server administration** to assign
-built-in roles, issue invitations, set a shared sign-in password, or edit its
-active configuration file. The first owner claims the server with its setup
-token. Regular sign-in uses your VNX.chat identity and follows the server’s
-registration policy. Right-click a channel to edit it, including its password,
-or right-click a server to remove it from your device.
+Right-click a connected server and choose **Server administration**. Use
+**Overview** to set the message of the day, the default role for new accounts,
+and the default Opus bitrate for voice channels. Use **Roles** to manage custom
+roles and assign them to accounts. **Audit log** shows account activity,
+connections, voice channel joins and leaves, moderation, and server changes.
+Filter by event type or actor account ID.
 
-Start the server with `--config ./server.toml` from `backend/` to manage that
-file specifically. Saved TOML changes apply after a restart. Environment
-overrides take precedence. Change the storage directory on the host.
+The first owner claims the server with its setup token. Regular sign-in uses
+your VNX.chat identity and follows the server’s registration policy. Right-click
+a channel to change its password or bitrate. Leave the channel bitrate blank to
+inherit the server default.
+
+Start the server with `--config ./server.toml` from `backend/` to use that
+file. Host-side TOML changes apply after a restart. Environment overrides take
+precedence.
 
 To use administration in a browser, serve the frontend over HTTPS or localhost,
 add the frontend’s origin to `server.origins`, and use a server certificate
 trusted by the browser. You can import an existing VNX.chat identity backup.
-Voice uses the desktop app.
+
+See the [TeamSpeak 6 and Discord comparison](docs/server-feature-research.md)
+for possible additions to server administration and voice.
+
+## Share and chat
+
+Join a channel to format messages with the rich-text composer, pick emoji,
+and attach a file. The default
+limit is 4 MiB per file. Admins can set a limit from 1 to 32 MiB in
+**Server settings → Overview**.
+Attachments follow message retention when persistence is enabled. With persistence
+disabled, the server keeps attachments in memory for up to one hour.
+
+Open **Direct messages** from the channel sidebar or a member’s menu. Before
+you can read or send messages in a conversation on this device, compare safety
+codes with your contact in person or over a trusted channel. Both accounts use
+the same server. The server relays encrypted messages and holds them for offline
+delivery only when message persistence is enabled.
+
+Choose **Share screen**, set resolution, frame rate, video bitrate and optional source
+audio, then choose a window, browser tab or full display in the system picker.
+The preview stays local until you choose **Go live**. Available sources and source
+audio depend on your browser and operating system. On Linux, the desktop webview
+uses WebKitGTK and the desktop screen-sharing portal. Microphone voice uses the
+desktop app.
+
+Choose **Turn on camera** in your current channel. Set resolution, frame rate
+and bitrate, then preview the camera and choose **Start camera**. Other channel
+members can select your camera to watch it. Camera and screen video can run at
+the same time. Your camera preview uses no microphone audio.
+
+In **Settings → Audio → Transmission**, choose **Push-to-talk** or
+**Toggle-to-talk** and record a shortcut. Hold it for push-to-talk. Press it
+once to start and again to stop for toggle-to-talk. Enable **System-wide talk
+shortcut** to use it while other apps are focused on supported desktops.
+Linux Wayland sessions use the focused-window shortcut.
+
+Use **Whisper to another channel** in the voice toolbar to select an occupied
+channel you can speak in. Choose push-to-talk or toggle-to-talk and record a
+separate shortcut. The default is **Alt+B** while VNX.chat is focused. Whisper
+audio goes only to the selected channel while you stay in your current room.
 
 ## Run a standalone build
 

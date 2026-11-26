@@ -2,10 +2,10 @@
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
   import { Fingerprint, Import, KeyRound } from "@lucide/svelte";
-  import { messageFrom } from "./client";
-  import { generateIdentity, importIdentity } from "./identity";
+  import { messageFrom } from "#lib/connection/client";
+  import { generateIdentity, importIdentity } from "#lib/identity/identity";
   import Modal from "./Modal.svelte";
-  import { saveUsername } from "./preferences";
+  import { saveUsername } from "#lib/preferences";
 
   let { open, hasIdentity, migrationError, oncomplete }: {
     open: boolean; hasIdentity: boolean; migrationError: string; oncomplete: (username: string) => void;

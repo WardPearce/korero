@@ -72,8 +72,12 @@ export async function fixture(options: {
   const server = Bun.spawn(command, { env: defaultEnv, stdin: "ignore", stdout: "pipe", stderr: "inherit" });
   let setupToken = "";
   const output = (async () => {
-    for await (const line of server.stdout.pipeThrough(new TextDecoderStream())) {
-      setupToken ||= line.match(/First-owner setup token .*?: ([A-Za-z0-9_-]{43})/)?.[1] ?? "";
+    let pending = "";
+    for await (const chunk of server.stdout.pipeThrough(new TextDecoderStream())) {
+      if (setupToken) continue;
+      pending += chunk;
+      setupToken = pending.match(/^(?:ADMIN SETUP TOKEN\r?\n  |First-owner setup token .*?: )([A-Za-z0-9_-]{43})\r?$/m)?.[1] ?? "";
+      pending = pending.slice(-256);
     }
   })();
   const stop = async () => {
@@ -147,8 +151,8 @@ export async function fixture(options: {
   } catch (error) { await cleanup().catch(() => {}); throw error; }
 }
 
-export async function openSocket(origin: string, tls: ReturnType<typeof trusted>, headers?: Record<string, string>) {
-  const raw = new (WebSocket as unknown as new (url: string, options: Bun.WebSocketOptions) => WebSocket)(origin.replace("https:", "wss:") + "/api/v1/ws", { tls, headers: headers ?? {} });
+export async function openSocket(origin: string, tls: ReturnType<typeof trusted>, headers?: Record<string, string>, path = "/api/v1/ws") {
+  const raw = new (WebSocket as unknown as new (url: string, options: Bun.WebSocketOptions) => WebSocket)(origin.replace("https:", "wss:") + path, { tls, headers: headers ?? {} });
   const received: Event[] = [];
   const callbacks = new Map<number, (data: { success: boolean; payload?: unknown; error?: { code: string } }) => void>();
   let nextId = 0;

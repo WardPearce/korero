@@ -1,15 +1,16 @@
 <script lang="ts">
   import { Button } from "#lib/components/ui/button/index.js";
-  import Checkbox from "#lib/components/LabeledCheckbox.svelte";
+  import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
   import { Input } from "#lib/components/ui/input/index.js";
-  import SelectField from "#lib/components/SelectField.svelte";
+  import SelectField from "#lib/components/fields/SelectField.svelte";
   import { Textarea } from "#lib/components/ui/textarea/index.js";
   import { onMount } from "svelte";
   import { Settings2, X } from "@lucide/svelte";
-  import IconButton from "./IconButton.svelte";
-  import { apiFor, messageFrom, requestError } from "./client";
+  import IconButton from "#lib/components/IconButton.svelte";
+  import ServerAuditLog from "./ServerAuditLog.svelte";
+  import { apiFor, messageFrom, requestError } from "#lib/connection/client";
 
-  let { origin, title, permissions, passwordRequired, onPasswordChange, bannerSupported, bannerImageUrl, onclose }: {
+  let { origin, title, permissions, passwordRequired, onPasswordChange, bannerSupported, bannerImageUrl, extended, onclose }: {
     origin: string;
     title: string;
     permissions: string[];
@@ -18,12 +19,14 @@
     onclose: () => void;
     bannerSupported: boolean;
     bannerImageUrl: string | null;
+    extended: boolean;
   } = $props();
 
   const tabs = [
+    { id: "overview", label: "Overview", permission: "manageSettings" },
     { id: "roles", label: "Roles", permission: "manageRoles" },
+    { id: "audit", label: "Audit log", permission: "viewAdmin" },
     { id: "banner", label: "Banner", permission: "manageSettings" },
-    { id: "configuration", label: "Configuration", permission: "manageSettings" },
     { id: "password", label: "Password", permission: "manageSettings" },
     { id: "invitation", label: "Invitations", permission: "manageInvitations" },
   ] as const;
@@ -37,18 +40,18 @@
     kick: "Kick members", ban: "Ban members", manageRoles: "Manage role assignments", manageInvitations: "Manage invitations",
     manageSettings: "Manage server settings", viewAdmin: "View diagnostics and audit log",
   };
-  type Configuration = Extract<Awaited<ReturnType<ReturnType<typeof apiFor>["admin"]["configuration"]["get"]>>["data"], { toml: string }>;
+  type ServerPreferences = Extract<Awaited<ReturnType<ReturnType<typeof apiFor>["admin"]["preferences"]["get"]>>["data"], { motd: string }>;
   type InvitationList = Extract<Awaited<ReturnType<ReturnType<typeof apiFor>["admin"]["invitations"]["get"]>>["data"], { invitations: unknown }>;
   type Invitation = InvitationList["invitations"][number];
   let tab = $state<Tab>("roles");
-  let availableTabs = $derived(tabs.filter(({ id, permission }) => permissions.includes(permission) && (id !== "banner" || bannerSupported)));
+  let availableTabs = $derived(tabs.filter(({ id, permission }) => permissions.includes(permission) &&
+    (id !== "banner" || bannerSupported) && (id !== "overview" && id !== "audit" || extended)));
   let busy = $state(false);
   let error = $state("");
   let notice = $state("");
   let members = $state.raw<Roles | null>(null);
   let pages = $state<(string | undefined)[]>([undefined]);
-  let configuration = $state.raw<Configuration | null>(null);
-  let toml = $state("");
+  let passwordLocked = $state<boolean | null>(null);
   let password = $state("");
   let removePassword = $state(false);
   let invitations = $state.raw<Invitation[] | null>(null);
@@ -68,8 +71,20 @@
   let bannerUrl = $state("");
   let roleEditing = $state(false);
   let editedRole = $state("");
+  let deletingRole = $state("");
   let roleName = $state("");
   let rolePermissions = $state<Permission[]>([]);
+  let serverPreferences = $state.raw<ServerPreferences | null>(null);
+  let motd = $state("");
+  let defaultRole = $state("");
+  let voiceKbps = $state<number | undefined>();
+  let attachmentMiB = $state<number | undefined>();
+  let defaultRoleOptions = $derived([...new Set([...(serverPreferences?.defaultRoles ?? []), serverPreferences?.defaultRole ?? ""])]
+    .filter(Boolean).map((role) => ({ value: role, label: role })));
+  let voiceBitrate = $derived(voiceKbps === undefined ? null : Math.round(voiceKbps * 1000));
+  let preferencesChanged = $derived(serverPreferences && (motd.trim() !== serverPreferences.motd ||
+    defaultRole !== serverPreferences.defaultRole || voiceBitrate !== serverPreferences.defaultAudioBitrate ||
+    attachmentMiB !== serverPreferences.maxAttachmentMiB));
   let heading: HTMLHeadingElement;
 
   onMount(() => {
@@ -116,8 +131,9 @@
     tab = next;
     error = "";
     notice = "";
+    if (next === "overview") await loadPreferences();
     if (next === "roles" && !members) await loadMembers(pages);
-    if (next === "configuration" && !configuration) await loadConfiguration();
+    if (next === "password") await loadPassword();
     if (next === "banner") bannerUrl = bannerImageUrl ?? "";
     if (next === "invitation") await loadInvitations();
   }
@@ -137,10 +153,57 @@
   }
 
   function editRole(role?: RoleDefinition) {
+    deletingRole = "";
     editedRole = role?.name ?? "";
     roleName = editedRole;
     rolePermissions = [...role?.permissions ?? []];
     roleEditing = true;
+  }
+
+  function deleteRole(name: string) {
+    void run(async () => {
+      const response = await apiFor(origin).admin.roles.definition.delete({ name });
+      if (response.error) throw requestError(response.error);
+      if (members) members = { ...members, roles: members.roles.filter((role) => role !== name),
+        customRoles: members.customRoles.filter((role) => role.name !== name) };
+      deletingRole = "";
+      notice = `Deleted ${name}.`;
+    });
+  }
+
+  function applyPreferences(preferences: ServerPreferences) {
+    serverPreferences = preferences;
+    motd = preferences.motd;
+    defaultRole = preferences.defaultRole;
+    voiceKbps = preferences.defaultAudioBitrate === null ? undefined : preferences.defaultAudioBitrate / 1000;
+    attachmentMiB = preferences.maxAttachmentMiB;
+  }
+
+  function loadPreferences() {
+    return run(async () => {
+      const response = await apiFor(origin).admin.preferences.get();
+      if (response.error) throw requestError(response.error);
+      if (!response.data || !("motd" in response.data)) throw requestError({ value: response.data });
+      applyPreferences(response.data);
+    });
+  }
+
+  function savePreferences(event: SubmitEvent) {
+    event.preventDefault();
+    const current = serverPreferences;
+    if (!current || !preferencesChanged) return;
+    void run(async () => {
+      const response = await apiFor(origin).admin.preferences.patch({
+        motd: motd.trim() === current.motd ? undefined : motd.trim(),
+        defaultRole: defaultRole === current.defaultRole ? undefined : defaultRole,
+        defaultAudioBitrate: voiceBitrate === current.defaultAudioBitrate ? undefined : voiceBitrate,
+        maxAttachmentMiB: attachmentMiB === current.maxAttachmentMiB ? undefined : attachmentMiB,
+      });
+      if (response.error) throw requestError(response.error);
+      if (!response.data || !("motd" in response.data)) throw requestError({ value: response.data });
+      applyPreferences(response.data);
+      notice = "Server settings saved.";
+    });
   }
 
   function setRolePermission(permission: Permission, checked: boolean) {
@@ -182,32 +245,25 @@
     });
   }
 
-  async function loadConfiguration() {
-    await run(async () => {
-      const response = await apiFor(origin).admin.configuration.get();
+  function loadPassword() {
+    const requestOrigin = origin;
+    return run(async () => {
+      passwordLocked = null;
+      const response = await apiFor(requestOrigin).admin.password.get();
+      if (response.status === 404) {
+        passwordLocked = false;
+        return;
+      }
       if (response.error) throw requestError(response.error);
-      if (!response.data || !("toml" in response.data)) throw requestError({ value: response.data });
-      configuration = response.data;
-      toml = response.data.toml;
-    });
-  }
-
-  function saveConfiguration(event: SubmitEvent) {
-    event.preventDefault();
-    const current = configuration;
-    if (!current) return;
-    void run(async () => {
-      const response = await apiFor(origin).admin.configuration.patch({ toml, revision: current.revision });
-      if (response.error) throw requestError(response.error);
-      if (!response.data || !("toml" in response.data)) throw requestError({ value: response.data });
-      configuration = response.data;
-      toml = response.data.toml;
-      notice = "Configuration saved. Restart the server to apply it.";
+      if (!response.data || !("passwordLocked" in response.data)) throw requestError({ value: response.data });
+      passwordLocked = response.data.passwordLocked;
+      if (passwordRequired !== response.data.passwordRequired) onPasswordChange(requestOrigin, response.data.passwordRequired);
     });
   }
 
   function savePassword(event: SubmitEvent) {
     event.preventDefault();
+    if (passwordLocked !== false) return;
     const requestOrigin = origin;
     void run(async () => {
       const response = await apiFor(requestOrigin).admin.password.patch({ password: removePassword ? null : password });
@@ -325,7 +381,42 @@
     {#if notice}<p class="field-hint" role="status">{notice}</p>{/if}
     {#if busy}<p class="field-hint" role="status">Working…</p>{/if}
 
-    {#if tab === "roles" && permissions.includes("manageRoles")}
+    {#if tab === "overview" && extended && permissions.includes("manageSettings")}
+      {#if serverPreferences}
+        <form class="dialog-form" onsubmit={savePreferences}>
+          <label>Message of the day
+            <Textarea rows={4} maxlength={1000} disabled={busy} bind:value={motd} placeholder="Leave blank to hide the message" />
+          </label>
+          <p class="field-hint">Appears above the chat for connected members.</p>
+          <label>Default voice bitrate (kbps)
+            {#if serverPreferences.audioBitrateLocked}
+              <Input type="number" value={serverPreferences.configuredAudioBitrate / 1000} disabled />
+            {:else}
+              <Input type="number" min="32" max="128" step="0.001" disabled={busy} bind:value={voiceKbps}
+                placeholder={String(serverPreferences.configuredAudioBitrate / 1000)} />
+            {/if}
+          </label>
+          <p class="field-hint">{serverPreferences.audioBitrateLocked ? "The server environment sets this value." :
+            "Used by voice channels that inherit the default. Clear the field to use the server configuration."}</p>
+          {#if serverPreferences.maxSupportedAttachmentMiB !== undefined}
+            <label>Maximum chat attachment size (MiB)
+              <Input type="number" min="1" max={serverPreferences.maxSupportedAttachmentMiB} step="1" required
+                disabled={busy} bind:value={attachmentMiB} />
+            </label>
+          {/if}
+          <SelectField label="Default role for new members" options={defaultRoleOptions} bind:value={defaultRole}
+            disabled={busy || !serverPreferences.canSetDefaultRole || defaultRoleOptions.length < 2} />
+          <p class="field-hint">New accounts get this role when they register.</p>
+          <div class="dialog-actions">
+            <Button variant="default" type="submit" disabled={busy || !preferencesChanged}>Save settings</Button>
+          </div>
+        </form>
+      {:else if !busy}
+        <Button variant="outline" onclick={loadPreferences}>Load server settings</Button>
+      {/if}
+    {:else if tab === "audit" && extended && permissions.includes("viewAdmin")}
+      <ServerAuditLog {origin} />
+    {:else if tab === "roles" && permissions.includes("manageRoles")}
       {#if members}
         {#if members.canDefineRoles}
           <section class="role-settings" aria-label="Custom roles">
@@ -352,7 +443,17 @@
               <ul class="admin-members">
                 {#each members.customRoles as role (role.name)}
                   <li><span class="truncate">{role.name}</span>
-                    <Button variant="outline" aria-label={`Edit permissions for ${role.name}`} disabled={busy} onclick={() => editRole(role)}>Edit</Button>
+                    <div class="dialog-actions">
+                      {#if deletingRole === role.name}
+                        <Button variant="outline" disabled={busy} onclick={() => { deletingRole = ""; }}>Cancel</Button>
+                        <Button variant="default" disabled={busy} onclick={() => deleteRole(role.name)}>Confirm deletion</Button>
+                      {:else}
+                        <Button variant="outline" aria-label={`Edit permissions for ${role.name}`} disabled={busy} onclick={() => editRole(role)}>Edit</Button>
+                        {#if extended}
+                          <Button variant="outline" aria-label={`Delete ${role.name}`} disabled={busy} onclick={() => { deletingRole = role.name; }}>Delete</Button>
+                        {/if}
+                      {/if}
+                    </div>
                   </li>
                 {/each}
               </ul>
@@ -395,35 +496,22 @@
         <p class="field-hint">Clear the URL to remove the banner.</p>
         <div class="dialog-actions"><Button variant="default" type="submit" disabled={busy}>Save banner</Button></div>
       </form>
-    {:else if tab === "configuration" && permissions.includes("manageSettings")}
-      {#if configuration}
-        <form class="dialog-form" onsubmit={saveConfiguration}>
-          <p class="field-hint">Restart the server after saving. Environment overrides still take precedence.</p>
-          {#if configuration.overrides.length}
-            <p class="field-hint">Saving replaces existing in-app overrides for {configuration.overrides.join(" and ")} with values from this file.</p>
+    {:else if tab === "password" && permissions.includes("manageSettings")}
+      {#if passwordLocked}
+        <p class="field-hint">The server environment manages the shared password.</p>
+      {:else if passwordLocked === false}
+        <form class="dialog-form" onsubmit={savePassword}>
+          <p class="field-hint">{passwordRequired ? "A password is required for new sign-ins." : "Set a shared password to require it for new sign-ins."}</p>
+          <label>Server password<Input type="password" autocomplete="new-password" maxlength={128} required={!removePassword}
+            disabled={busy || removePassword} bind:value={password} /></label>
+          {#if passwordRequired}
+            <Checkbox label="Remove server password" disabled={busy} bind:checked={removePassword} />
           {/if}
-          <label>server.toml<Textarea class="config-editor" rows={16} maxlength={65536} spellcheck="false" disabled={busy} bind:value={toml} /></label>
-          <div class="dialog-actions">
-            <Button variant="outline" type="button" disabled={busy || toml !== configuration.toml} onclick={loadConfiguration}>Reload file</Button>
-            {#if toml !== configuration.toml}
-              <Button variant="outline" type="button" disabled={busy} onclick={() => { toml = configuration?.toml ?? ""; }}>Discard edits</Button>
-            {/if}
-            <Button variant="default" type="submit" disabled={busy || toml === configuration.toml}>Save configuration</Button>
-          </div>
+          <div class="dialog-actions"><Button variant="default" type="submit" disabled={busy}>Save password</Button></div>
         </form>
       {:else if !busy}
-        <Button variant="outline" onclick={loadConfiguration}>Load configuration</Button>
+        <Button variant="outline" onclick={loadPassword}>Load password settings</Button>
       {/if}
-    {:else if tab === "password" && permissions.includes("manageSettings")}
-      <form class="dialog-form" onsubmit={savePassword}>
-        <p class="field-hint">{passwordRequired ? "A password is required for new sign-ins." : "Set a shared password to require it for new sign-ins."}</p>
-        <label>Server password<Input type="password" autocomplete="new-password" maxlength={128} required={!removePassword}
-          disabled={busy || removePassword} bind:value={password} /></label>
-        {#if passwordRequired}
-          <Checkbox label="Remove server password" disabled={busy} bind:checked={removePassword} />
-        {/if}
-        <div class="dialog-actions"><Button variant="default" type="submit" disabled={busy}>Save password</Button></div>
-      </form>
     {:else if tab === "invitation" && permissions.includes("manageInvitations")}
       <form class="dialog-form" onsubmit={saveInvitation}>
         <section class="invite-panel">

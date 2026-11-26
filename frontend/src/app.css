@@ -298,9 +298,19 @@ body {
 .channel-row:hover, .channel-row[data-selected="true"] { background: var(--background); }
 .channel-row[data-selected="true"] { border-color: var(--accent); box-shadow: inset 3px 0 var(--accent); font-weight: 700; }
 .channel-background, .channel-row::before { border-radius: inherit; }
-.channel-row[data-drop]::after { content: ""; position: absolute; inset-inline: 0; height: 3px; background: currentColor; }
-.channel-row[data-drop="before"]::after { top: 0; }
-.channel-row[data-drop="after"]::after { bottom: 0; }
+.channel-row[data-dragging] { opacity: 0.55; }
+.channel-row[data-drop="before"]::after, .channel-row[data-drop="after"]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.channel-row[data-drop="before"]::after { top: -3px; }
+.channel-row[data-drop="after"]::after { bottom: -3px; }
+.channel-row[data-drop="inside"] { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tree-expander { display: grid; place-items: center; border-radius: var(--radius-sm); }
 .tree-expander, .channel-target, .tree-member {
   appearance: none;
@@ -416,7 +426,7 @@ a.icon-button:hover, .file-control:hover { box-shadow: var(--shadow-hover); }
   border-top: 1px solid var(--border);
   background: var(--card);
 }
-.composer-field { display: grid; min-width: 0; }
+[data-slot="button"].chat-attachment { max-width: 100%; margin-top: 4px; }
 [data-slot="button"].send-button { width: var(--control-height); height: var(--control-height); }
 
 .app-dialog {
@@ -511,7 +521,6 @@ a.icon-button:hover, .file-control:hover { box-shadow: var(--shadow-hover); }
   max-height: min(18rem, var(--bits-select-content-available-height, 18rem));
 }
 
-.config-editor { field-sizing: fixed; font-family: var(--font-mono); white-space: pre; }
 
 .settings-shell {
   display: grid;

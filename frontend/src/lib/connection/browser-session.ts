@@ -1,4 +1,4 @@
-import { offline, requestError, messageFrom, type MemberRequest, type RelayResponse, type Snapshot, type VoiceState } from "./client";
+import { offline, requestError, messageFrom, type DirectMessage, type DirectOperation, type MemberRequest, type Message, type RelayResponse, type ScreenShare, type Snapshot, type VoiceState } from "./client";
 
 type Credentials = { accessToken: string; refreshToken: string; accessExpiresAt: number };
 type Reply = { type: string; id: number; success: boolean; payload: unknown; error?: unknown };
@@ -21,6 +21,11 @@ class BrowserSession {
   private nextId = 0;
   private pending = new Map<number, (reply: Reply | null) => void>();
   private update: (view: VoiceState) => void = () => {};
+  private snapshot: Snapshot | null = null;
+  private messages: Message[] = [];
+  private directMessages: DirectMessage[] = [];
+  private historyRequest = 0;
+  private deletedDuringHistory?: Set<string>;
 
   watch(update: (view: VoiceState) => void) {
     this.update = update;
@@ -81,7 +86,8 @@ class BrowserSession {
       if (origin !== this.origin) throw new Error("The selected server changed.");
       headers.set("authorization", `Bearer ${token}`);
     }
-    return fetch(request, { headers, signal: AbortSignal.timeout(8000), redirect: "error" });
+    const attachment = path === "/api/v1/chat/attachments" || path.startsWith("/api/v1/chat/attachments/");
+    return fetch(request, { headers, signal: AbortSignal.timeout(attachment ? 120000 : 8000), redirect: "error" });
   }
 
   private async ticket() {
@@ -109,9 +115,7 @@ class BrowserSession {
         if (socket !== this.socket) return;
         const reply = JSON.parse(data) as Reply;
         if (reply.type === "response") this.pending.get(reply.id)?.(reply);
-        if (authorized && ["state.invalidated", "presence.changed", "presence.offline", "channel.member"].includes(reply.type)) {
-          void this.rpc<Snapshot>("state.get").then((state) => this.showSnapshot(state)).catch(() => {});
-        }
+        else if (authorized) this.event(reply);
       };
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("The server connection timed out.")), 8000);
@@ -161,7 +165,92 @@ class BrowserSession {
   }
 
   private showSnapshot(snapshot: Snapshot) {
-    this.update({ ...offline, phase: "online", snapshot });
+    const previous = this.snapshot?.channelId;
+    this.snapshot = snapshot;
+    if (previous !== snapshot.channelId) {
+      this.messages = [];
+      const request = ++this.historyRequest;
+      this.deletedDuringHistory = snapshot.channelId ? new Set() : undefined;
+      if (snapshot.channelId) {
+        void this.rpc<Message[]>("message.history", { channelId: snapshot.channelId }).then((history) => {
+          if (request !== this.historyRequest) return;
+          const entries = new Map(history.reverse().map((message) => [message.id, message]));
+          for (const message of this.messages) entries.set(message.id, message);
+          for (const id of this.deletedDuringHistory ?? []) entries.delete(id);
+          this.messages = [...entries.values()].slice(-200);
+          this.show();
+        }).catch(() => {}).finally(() => {
+          if (request === this.historyRequest) this.deletedDuringHistory = undefined;
+        });
+      }
+    }
+    this.show();
+  }
+
+  private show() {
+    this.update({ ...offline, phase: "online", snapshot: this.snapshot, messages: this.messages, directMessages: this.directMessages });
+  }
+
+  private event({ type, payload }: Reply) {
+    const snapshot = this.snapshot;
+    if (!snapshot) return;
+    if (["state.invalidated", "presence.changed", "presence.offline", "channel.member", "channel.userChanged", "channel.changed"].includes(type)) {
+      const socket = this.socket;
+      void this.rpc<Snapshot>("state.get").then((state) => {
+        if (socket === this.socket) this.showSnapshot(state);
+      }).catch(() => {});
+    } else if (type === "message.created") {
+      const message = payload as Message;
+      if (!message.channelId || message.channelId !== snapshot.channelId || this.messages.some(({ id }) => id === message.id)) return;
+      this.messages = [...this.messages, message].slice(-200);
+      this.show();
+    } else if (type === "direct.created") {
+      const message = payload as DirectMessage;
+      if (message.senderId !== snapshot.account.id && message.recipientId !== snapshot.account.id) return;
+      if (this.directMessages.some(({ id }) => id === message.id)) return;
+      this.directMessages = [...this.directMessages, message].slice(-50);
+      this.show();
+    } else if (type === "message.deleted") {
+      const { messageId } = payload as { messageId: string };
+      this.deletedDuringHistory?.add(messageId);
+      this.messages = this.messages.filter(({ id }) => id !== messageId);
+      this.show();
+    } else if (type === "media.reset") {
+      if ((payload as { channelId: string }).channelId !== snapshot.channelId) return;
+      this.showSnapshot({ ...snapshot, screens: [], cameras: snapshot.cameras && [] });
+    } else if (type === "media.screenAvailable" || type === "media.screenClosed"
+      || type === "media.cameraAvailable" || type === "media.cameraClosed") {
+      const share = payload as ScreenShare & { channelId: string };
+      if (share.channelId !== snapshot.channelId) return;
+      const source = type.startsWith("media.camera") ? "cameras" : "screens";
+      const shares = (snapshot[source] ?? []).filter(({ producerId }) => producerId !== share.producerId);
+      if (type.endsWith("Available")) shares.push(share);
+      this.showSnapshot({ ...snapshot, [source]: shares });
+    }
+  }
+
+  async joinChannel(channelId: string, password?: string) {
+    this.showSnapshot(await this.rpc<Snapshot>("channel.join", { channelId, password }));
+  }
+
+  async leaveChannel() {
+    this.showSnapshot(await this.rpc<Snapshot>("channel.leave"));
+  }
+
+  async sendMessage(channelId: string, text: string, html?: string) {
+    await this.rpc("message.send", { channelId, text, html });
+  }
+
+  screenRequest<T>(connectionId: string, channelId: string, kind: string, payload: unknown) {
+    if (this.snapshot?.connectionId !== connectionId || this.snapshot?.channelId !== channelId) {
+      return Promise.reject(new Error("The active channel changed."));
+    }
+    return this.rpc<T>(kind, payload);
+  }
+
+  directRequest<T>(connectionId: string, kind: DirectOperation, payload: unknown) {
+    if (this.snapshot?.connectionId !== connectionId) return Promise.reject(new Error("The server connection changed."));
+    return this.rpc<T>(kind, payload);
   }
 
   async saveChannel(payload: Record<string, unknown>) {
@@ -176,6 +265,11 @@ class BrowserSession {
   private closeSocket() {
     const socket = this.socket;
     this.socket = undefined;
+    this.snapshot = null;
+    this.messages = [];
+    this.directMessages = [];
+    this.historyRequest++;
+    this.deletedDuringHistory = undefined;
     clearInterval(this.heartbeat);
     socket?.close();
     for (const settle of this.pending.values()) settle(null);

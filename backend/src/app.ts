@@ -4,7 +4,7 @@ import type { Config } from "./config";
 import type { Auth } from "./modules/auth";
 import type { Media } from "./modules/media";
 import type { Realtime } from "./modules/realtime";
-import { httpBodies, id, payloads, version } from "./protocol";
+import { attachmentDataLength, auditQuery, bytesPerMiB, httpBodies, id, maxSupportedAttachmentMiB, payloads, version } from "./protocol";
 import { errorResponse, fail, ProtocolError, RateLimit } from "./security/errors";
 import { version as serverVersion } from "../package.json";
 
@@ -13,11 +13,18 @@ const normalizeIp = (address: string) => {
   return SocketAddress.parse(isIP(unwrapped) === 6 ? `[${unwrapped}]:0` : `${unwrapped}:0`)?.address ?? "unknown";
 };
 
+// Allow worst-case JSON escaping of the caption, formatting and filename.
+const attachmentBodyLimit = (bytes: number) => attachmentDataLength(bytes) + 262144;
+
 export function createApp(config: Config, auth: Auth, media: Media, realtime: Realtime, info: { serverId: string; fingerprint?: string }) {
   const upgrades = new RateLimit(config.limits.upgrades_per_minute);
   const authentication = new RateLimit(config.limits.auth_per_minute);
   const registration = new RateLimit(config.limits.registration_per_minute);
   const globalAuth = new RateLimit(Math.max(240, config.limits.auth_per_minute * 8), 1);
+  const attachmentRequests = new RateLimit(30);
+  const attachmentDownloads = new RateLimit(60);
+  const attachmentUploadsInProgress = new Set<string>();
+  const attachmentPath = "/api/v1/chat/attachments";
   const proxyIps = new Set(config.server.trusted_proxies.map(normalizeIp));
   const origins = new Set(config.server.origins);
   function source(request: Request, direct: string) {
@@ -28,22 +35,51 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
   const app = new Elysia({
     name: "voice-api",
     normalize: false,
-    serve: { maxRequestBodySize: 393728, idleTimeout: 30 },
+    serve: { maxRequestBodySize: attachmentBodyLimit(maxSupportedAttachmentMiB * bytesPerMiB), idleTimeout: 30 },
     websocket: { maxPayloadLength: config.limits.websocket_bytes,
       idleTimeout: 60, backpressureLimit: 262144, closeOnBackpressureLimit: true, perMessageDeflate: false },
   });
   const ip = (request: Request) => normalizeIp(app.server?.requestIP(request)?.address ?? "");
+  const clientIp = (request: Request) => source(request, ip(request));
   const limit = (request: Request, register = false) => {
-    const client = source(request, ip(request));
+    const client = clientIp(request);
     (register ? registration : authentication).take(client);
     globalAuth.take("auth");
   };
   const bearer = (request: Request) => auth.access(request.headers.get("authorization"));
-  const requireSettings = (request: Request) => () => realtime.authorize(bearer(request).accountId, "manageSettings");
+  const manageSettings = (request: Request) => realtime.authorize(bearer(request).accountId, "manageSettings");
   const manageInvitations = (request: Request) => realtime.authorize(bearer(request).accountId, "manageInvitations");
+  const parseAttachment = async ({ request }: { request: Request }) => {
+    const { accountId } = bearer(request);
+    attachmentRequests.take(accountId);
+    const limit = attachmentBodyLimit(realtime.maxAttachmentBytes);
+    if (Number(request.headers.get("content-length")) > limit) realtime.attachmentTooLarge();
+    if (attachmentUploadsInProgress.has(accountId) || attachmentUploadsInProgress.size >= 8) fail("RATE_LIMITED");
+    const reader = request.body?.getReader() ?? fail("INVALID_REQUEST");
+    attachmentUploadsInProgress.add(accountId);
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    let length = 0;
+    let body = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        length += value.byteLength;
+        if (length > limit) {
+          void reader.cancel().catch(() => {});
+          realtime.attachmentTooLarge();
+        }
+        body += decoder.decode(value, { stream: true });
+      }
+      return JSON.parse(body + decoder.decode());
+    } finally {
+      reader.releaseLock();
+      attachmentUploadsInProgress.delete(accountId);
+    }
+  };
   return app
     .onRequest(({ request, set }) => {
-      const path = new URL(request.url).pathname;
+      const path = new URL(request.url).pathname.replace(/\/$/, "");
       if (path === "/health" || path === "/ready") return;
       if (config.tls.mode === "proxy" && !proxyIps.has(ip(request))) fail("FORBIDDEN");
       set.headers["cache-control"] = "no-store";
@@ -59,11 +95,13 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
           return new Response(null, { status: 204, headers: set.headers as HeadersInit });
         }
       }
-      if (path === "/api/v1/ws") upgrades.take(source(request, ip(request)));
+      if ((path !== attachmentPath || request.method !== "POST") && Number(request.headers.get("content-length")) > 393728) fail("LIMIT");
     })
     .onError(({ code, error, set }) => {
+      const parseCause = code === "PARSE" && error.cause instanceof ProtocolError ? error.cause : undefined;
       const response = code === "NOT_FOUND" ? errorResponse(new ProtocolError("NOT_FOUND")) :
-        code === "VALIDATION" || code === "PARSE" ? { status: 400, error: { code: "INVALID_REQUEST", message: "Invalid request" } } : errorResponse(error);
+        code === "VALIDATION" || code === "PARSE" && !parseCause ? { status: 400, error: { code: "INVALID_REQUEST", message: "Invalid request" } } :
+        errorResponse(parseCause ?? error);
       set.status = response.status;
       return { error: response.error };
     })
@@ -74,12 +112,15 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
     })
     .get("/api/v1/server/info", () => ({ ...info, name: config.server.name, version: serverVersion, protocolVersions: [version],
       registration: config.server.registration, setupRequired: !auth.hasOwner(), identityAuthentication: true,
-      identityEnrollment: true, channelBackgrounds: true, serverAdministration: true, passwordRequired: auth.passwordRequired(),
-      invitationPasswordBypass: true, bannerImageUrl: realtime.bannerImageUrl }))
+      identityEnrollment: true, channelBackgrounds: true, serverAdministration: true, extendedServerAdministration: true,
+      passwordRequired: auth.passwordRequired(),
+      invitationPasswordBypass: true, bannerImageUrl: realtime.bannerImageUrl,
+      screenSharing: true, richChat: true, channelAudioQuality: true,
+      maxWebSocketBytes: config.limits.websocket_bytes, maxAttachmentBytes: realtime.maxAttachmentBytes }))
     .get("/api/v1/server/capabilities", ({ request }) => {
       const access = request.headers.get("authorization");
       if (access) bearer(request);
-      return { protocolVersions: [version], websocketPath: "/api/v1/ws", audio: "opus", targetAudioBitrate: config.media.target_audio_bitrate,
+      return { protocolVersions: [version], websocketPath: "/api/v1/ws", audio: "opus", targetAudioBitrate: realtime.targetAudioBitrate,
         heartbeatSeconds: 25, maxWebSocketBytes: config.limits.websocket_bytes,
         udp: config.media.enable_udp, tcp: config.media.enable_tcp, textPersistence: config.messaging.persistence,
         ...(access ? { iceServers: config.media.ice_servers } : {}) };
@@ -118,6 +159,15 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
       return auth.ticket(bearer(request));
     })
     .get("/api/v1/account", ({ request }) => auth.account(bearer(request).accountId))
+    .post(attachmentPath, ({ request, body }) => realtime.uploadAttachment(bearer(request), body), {
+      body: httpBodies.attachmentUpload,
+      parse: parseAttachment,
+    })
+    .get("/api/v1/chat/attachments/:messageId", ({ request, params, query }) => {
+      const session = bearer(request);
+      attachmentDownloads.take(session.accountId);
+      return realtime.downloadAttachment(session, query.connectionId, params.messageId);
+    }, { params: t.Object({ messageId: id }), query: t.Object({ connectionId: id }) })
     .patch("/api/v1/account", ({ request, body }) => auth.updateAccount(bearer(request).accountId, body.displayName.trim()), { body: httpBodies.account })
     .get("/api/v1/account/sessions", ({ request }) => auth.listSessions(bearer(request).accountId))
     .delete("/api/v1/account/sessions/:id", ({ request, params }) => {
@@ -141,10 +191,17 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
       realtime.defineRole(bearer(request).accountId, body.name.trim(), body.permissions, true), { body: httpBodies.roleDefinition })
     .patch("/api/v1/admin/roles/definition", ({ request, body }) =>
       realtime.defineRole(bearer(request).accountId, body.name.trim(), body.permissions, false), { body: httpBodies.roleDefinition })
+    .delete("/api/v1/admin/roles/definition", ({ request, body }) =>
+      realtime.deleteRole(bearer(request).accountId, body.name.trim()), { body: httpBodies.deleteRole })
+    .get("/api/v1/admin/audit", ({ request, query }) =>
+      realtime.listAudit(bearer(request).accountId, query), { query: auditQuery })
+    .get("/api/v1/admin/preferences", ({ request }) => realtime.serverPreferences(bearer(request).accountId))
+    .patch("/api/v1/admin/preferences", ({ request, body }) =>
+      realtime.saveServerPreferences(bearer(request).accountId, body), { body: httpBodies.serverPreferences })
     .patch("/api/v1/admin/banner", ({ request, body }) =>
       realtime.setBanner(bearer(request).accountId, body.bannerImageUrl), { body: httpBodies.serverBanner })
     .patch("/api/v1/channels/order", ({ request, body }) =>
-      realtime.reorderChannel(bearer(request).accountId, body.channelId, body.targetId, body.placement), { body: httpBodies.channelOrder })
+      realtime.reorderChannel(bearer(request).accountId, body), { body: httpBodies.channelOrder })
     .get("/api/v1/admin/invitations", ({ request }) => ({ invitations: auth.invitations(manageInvitations(request), false) }))
     .post("/api/v1/admin/invitations", ({ request, body: { expiresInSeconds, uses, expiresAt } }) =>
       auth.invitation(manageInvitations(request), expiresInSeconds, uses, expiresAt),
@@ -156,18 +213,18 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
       auth.revokeInvitation(manageInvitations(request), params.id);
       return {};
     }, { params: t.Object({ id }) })
+    .get("/api/v1/admin/password", ({ request }) => {
+      manageSettings(request);
+      return { passwordRequired: auth.passwordRequired(), passwordLocked: auth.passwordLocked };
+    })
     .patch("/api/v1/admin/password", ({ request, body }) => {
-      const authorize = requireSettings(request);
+      const authorize = () => manageSettings(request);
       authorize();
       return auth.setServerPassword(authorize, body.password);
     }, { body: httpBodies.serverPassword })
-    .get("/api/v1/admin/configuration", ({ request }) => realtime.configuration(requireSettings(request)))
-    .patch("/api/v1/admin/configuration", ({ request, body }) => {
-      if (Buffer.byteLength(body.toml) > 65536) fail("LIMIT");
-      return realtime.saveConfiguration(requireSettings(request), body.toml, body.revision);
-    }, { body: httpBodies.serverConfiguration })
     .ws("/api/v1/ws", {
-      open: (ws) => realtime.open(ws.id, ws),
+      upgrade: ({ request }) => { upgrades.take(clientIp(request)); },
+      open: (ws) => realtime.open(ws.id, ws, source(ws.data.request, normalizeIp(ws.remoteAddress))),
       message: (ws, message) => realtime.receive(ws.id, message),
       close: (ws) => realtime.closed(ws.id),
     });

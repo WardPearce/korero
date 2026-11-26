@@ -1,11 +1,11 @@
 <script lang="ts">
   import { Button } from "#lib/components/ui/button/index.js";
-  import Checkbox from "#lib/components/LabeledCheckbox.svelte";
+  import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
   import { Input } from "#lib/components/ui/input/index.js";
   import { Fingerprint } from "@lucide/svelte";
   import { onMount } from "svelte";
-  import { messageFrom, nativeApp } from "#lib/client";
-  import { exportIdentity, generateIdentity, getIdentity, importIdentity } from "#lib/identity";
+  import { messageFrom, nativeApp } from "#lib/connection/client";
+  import { exportIdentity, generateIdentity, getIdentity, importIdentity } from "#lib/identity/identity";
 
   let key = $state<string | null>(null);
   let passphrase = $state("");

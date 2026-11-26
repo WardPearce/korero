@@ -25,6 +25,10 @@ test("Drizzle migrations, server ID, account and channels survive restart and a 
       user = await original.owner(key);
       const ws = await original.ws(user);
       await ws.rpc("channel.create", { name: "Saved room", backgroundImageUrl });
+      const settings = await original.call("/api/v1/admin/preferences", {
+        motd: "Saved welcome", defaultRole: "Guest", defaultAudioBitrate: 128000, maxAttachmentMiB: 12,
+      }, user.accessToken, "PATCH");
+      expect(settings.response.status).toBe(200);
       const conflict = Bun.spawn([...original.command, "backup", "--output", backup], { env: original.defaultEnv, stderr: "pipe" });
       expect(await conflict.exited).toBe(1);
       expect(await new Response(conflict.stderr).text()).toContain("already in use");
@@ -38,7 +42,7 @@ test("Drizzle migrations, server ID, account and channels survive restart and a 
     const restored = await fixture({ directory: backup, port: original.port, environment: { VOICE_TLS_NAMES: '["renewed.example"]' } });
     try {
       const info = await restored.call<{ serverId: string; setupRequired: boolean }>("/api/v1/server/info");
-      expect(info.payload).toMatchObject({ serverId: id, setupRequired: false });
+      expect(info.payload).toMatchObject({ serverId: id, setupRequired: false, maxAttachmentBytes: 12 * 1024 * 1024 });
       expect(restored.setupToken).toBe("");
       expect(fingerprint(restored.ca)).toBe(fingerprint(original.ca));
       expect(new X509Certificate(restored.ca).checkHost("renewed.example")).toBe("renewed.example");
@@ -48,6 +52,12 @@ test("Drizzle migrations, server ID, account and channels survive restart and a 
       expect(signedIn.payload.account.id).toEqual(user.account.id);
       const ws = await restored.ws(signedIn.payload);
       expect(ws.state.channels).toContainEqual(expect.objectContaining({ name: "Saved room", backgroundImageUrl }));
+      expect(ws.state).toMatchObject({ motd: "Saved welcome", targetAudioBitrate: 128000, maxAttachmentBytes: 12 * 1024 * 1024 });
+      expect((await restored.register("New guest")).account.role).toBe("Guest");
+      const audit = await restored.call("/api/v1/admin/audit?prefix=server", undefined, user.accessToken);
+      expect(audit.payload).toMatchObject({ events: expect.arrayContaining([
+        expect.objectContaining({ action: "server.voice_quality_changed", details: { previousBitrate: null, bitrate: 128000 } }),
+      ]) });
       const proof = await restored.proof("login", key, "Untrusted");
       await expect(fetch(restored.origin + "/api/v1/auth/identity/login", { method: "POST", tls: trusted(restored.ca, "unexpected"),
         headers: { "content-type": "application/json" }, body: JSON.stringify(proof) })).rejects.toThrow();

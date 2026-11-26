@@ -28,6 +28,11 @@ custom-protocol = ["tauri/custom-protocol"]
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-korero-audio = { path = "plugins/android-audio" }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2"
+
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+tauri-plugin-global-shortcut = "2"
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "ios"))'.dependencies]
 keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }

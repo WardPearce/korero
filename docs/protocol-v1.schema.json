@@ -322,6 +322,29 @@
                     }
                   ]
                 },
+                "audioBitrate": {
+                  "anyOf": [
+                    {
+                      "minimum": 32000,
+                      "maximum": 128000,
+                      "anyOf": [
+                        {
+                          "format": "integer",
+                          "default": 0,
+                          "type": "string"
+                        },
+                        {
+                          "minimum": 32000,
+                          "maximum": 128000,
+                          "type": "integer"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "temporary": {
                   "type": "boolean"
                 }
@@ -447,6 +470,29 @@
                       "minLength": 1,
                       "maxLength": 512,
                       "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "audioBitrate": {
+                  "anyOf": [
+                    {
+                      "minimum": 32000,
+                      "maximum": 128000,
+                      "anyOf": [
+                        {
+                          "format": "integer",
+                          "default": 0,
+                          "type": "string"
+                        },
+                        {
+                          "minimum": 32000,
+                          "maximum": 128000,
+                          "type": "integer"
+                        }
+                      ]
                     },
                     {
                       "type": "null"
@@ -1552,6 +1598,7 @@
               "additionalProperties": false,
               "type": "object",
               "required": [
+                "channelId",
                 "text"
               ],
               "properties": {
@@ -1559,13 +1606,14 @@
                   "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
                   "type": "string"
                 },
-                "accountId": {
-                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
-                  "type": "string"
-                },
                 "text": {
                   "minLength": 1,
                   "maxLength": 8192,
+                  "type": "string"
+                },
+                "html": {
+                  "minLength": 1,
+                  "maxLength": 32768,
                   "type": "string"
                 }
               }
@@ -1607,12 +1655,11 @@
             "payload": {
               "additionalProperties": false,
               "type": "object",
+              "required": [
+                "channelId"
+              ],
               "properties": {
                 "channelId": {
-                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
-                  "type": "string"
-                },
-                "accountId": {
                   "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
                   "type": "string"
                 },
@@ -1713,12 +1760,253 @@
               ]
             },
             "type": {
-              "const": "media.capabilities"
+              "const": "direct.peer"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "accountId"
+              ],
+              "properties": {
+                "accountId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
+              "const": "direct.inbox"
             },
             "payload": {
               "additionalProperties": false,
               "type": "object",
               "properties": {}
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
+              "const": "direct.history"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "accountId"
+              ],
+              "properties": {
+                "accountId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "before": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "createdAt"
+                  ],
+                  "properties": {
+                    "id": {
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "minimum": 1,
+                      "maximum": 9007199254740991,
+                      "anyOf": [
+                        {
+                          "format": "integer",
+                          "default": 0,
+                          "type": "string"
+                        },
+                        {
+                          "minimum": 1,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
+              "const": "direct.send"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "accountId",
+                "id",
+                "nonce",
+                "ciphertext",
+                "signature"
+              ],
+              "properties": {
+                "accountId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "id": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "nonce": {
+                  "minLength": 16,
+                  "maxLength": 16,
+                  "pattern": "^[A-Za-z0-9_-]+$",
+                  "type": "string"
+                },
+                "ciphertext": {
+                  "minLength": 23,
+                  "maxLength": 10944,
+                  "pattern": "^[A-Za-z0-9_-]+$",
+                  "type": "string"
+                },
+                "signature": {
+                  "minLength": 86,
+                  "maxLength": 86,
+                  "pattern": "^[A-Za-z0-9_-]+$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
+              "const": "media.capabilities"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "video",
+                  "type": "string"
+                }
+              }
             }
           }
         },
@@ -1771,6 +2059,23 @@
                 },
                 "forceTcp": {
                   "type": "boolean"
+                },
+                "kind": {
+                  "const": "video",
+                  "type": "string"
+                },
+                "videoSource": {
+                  "const": "camera",
+                  "type": "string"
+                },
+                "whisperChannelId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "whisperPassword": {
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "type": "string"
                 }
               }
             }
@@ -2100,8 +2405,12 @@
                   "type": "string"
                 },
                 "kind": {
-                  "const": "audio",
-                  "type": "string"
+                  "default": "audio",
+                  "type": "string",
+                  "enum": [
+                    "audio",
+                    "video"
+                  ]
                 },
                 "rtpParameters": {
                   "additionalProperties": false,
@@ -2122,7 +2431,7 @@
                     },
                     "codecs": {
                       "minItems": 1,
-                      "maxItems": 1,
+                      "maxItems": 2,
                       "type": "array",
                       "items": {
                         "additionalProperties": false,
@@ -2150,12 +2459,16 @@
                             ]
                           },
                           "mimeType": {
-                            "pattern": "^[aA][uU][dD][iI][oO]/[oO][pP][uU][sS]$",
+                            "pattern": "^([aA][uU][dD][iI][oO]/[oO][pP][uU][sS]|[vV][iI][dD][eE][oO]/([vV][pP]8|[rR][tT][xX]))$",
                             "type": "string"
                           },
                           "clockRate": {
-                            "const": 48000,
-                            "type": "number"
+                            "default": 48000,
+                            "type": "number",
+                            "enum": [
+                              48000,
+                              90000
+                            ]
                           },
                           "channels": {
                             "minimum": 1,
@@ -2338,6 +2651,34 @@
                               }
                             ]
                           },
+                          "rtx": {
+                            "additionalProperties": false,
+                            "type": "object",
+                            "required": [
+                              "ssrc"
+                            ],
+                            "properties": {
+                              "ssrc": {
+                                "minimum": 1,
+                                "maximum": 4294967295,
+                                "anyOf": [
+                                  {
+                                    "format": "integer",
+                                    "default": 0,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "minimum": 1,
+                                    "maximum": 4294967295,
+                                    "type": "integer"
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          "active": {
+                            "type": "boolean"
+                          },
                           "dtx": {
                             "type": "boolean"
                           },
@@ -2347,7 +2688,7 @@
                           },
                           "maxBitrate": {
                             "minimum": 1,
-                            "maximum": 1000000,
+                            "maximum": 12000000,
                             "anyOf": [
                               {
                                 "format": "integer",
@@ -2356,7 +2697,7 @@
                               },
                               {
                                 "minimum": 1,
-                                "maximum": 1000000,
+                                "maximum": 12000000,
                                 "type": "integer"
                               }
                             ]
@@ -2599,8 +2940,12 @@
                         ],
                         "properties": {
                           "kind": {
-                            "const": "audio",
-                            "type": "string"
+                            "default": "audio",
+                            "type": "string",
+                            "enum": [
+                              "audio",
+                              "video"
+                            ]
                           },
                           "preferredPayloadType": {
                             "minimum": 0,
@@ -2619,12 +2964,16 @@
                             ]
                           },
                           "mimeType": {
-                            "pattern": "^[aA][uU][dD][iI][oO]/[oO][pP][uU][sS]$",
+                            "pattern": "^([aA][uU][dD][iI][oO]/[oO][pP][uU][sS]|[vV][iI][dD][eE][oO]/([vV][pP]8|[rR][tT][xX]))$",
                             "type": "string"
                           },
                           "clockRate": {
-                            "const": 48000,
-                            "type": "number"
+                            "default": 48000,
+                            "type": "number",
+                            "enum": [
+                              48000,
+                              90000
+                            ]
                           },
                           "channels": {
                             "minimum": 1,
@@ -3253,25 +3602,6 @@
         }
       }
     },
-    "serverConfiguration": {
-      "additionalProperties": false,
-      "type": "object",
-      "required": [
-        "toml",
-        "revision"
-      ],
-      "properties": {
-        "toml": {
-          "minLength": 0,
-          "maxLength": 65536,
-          "type": "string"
-        },
-        "revision": {
-          "pattern": "^[a-f0-9]{64}$",
-          "type": "string"
-        }
-      }
-    },
     "roleDefinition": {
       "additionalProperties": false,
       "type": "object",
@@ -3313,6 +3643,77 @@
         }
       }
     },
+    "deleteRole": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^(?=.*\\S)[^/\\u0000-\\u001f\\u007f]+$",
+          "type": "string"
+        }
+      }
+    },
+    "serverPreferences": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "motd": {
+          "maxLength": 1000,
+          "pattern": "^[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]*$",
+          "type": "string"
+        },
+        "defaultRole": {
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^(?=.*\\S)[^/\\u0000-\\u001f\\u007f]+$",
+          "type": "string"
+        },
+        "defaultAudioBitrate": {
+          "anyOf": [
+            {
+              "minimum": 32000,
+              "maximum": 128000,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 32000,
+                  "maximum": 128000,
+                  "type": "integer"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maxAttachmentMiB": {
+          "minimum": 1,
+          "maximum": 32,
+          "anyOf": [
+            {
+              "format": "integer",
+              "default": 0,
+              "type": "string"
+            },
+            {
+              "minimum": 1,
+              "maximum": 32,
+              "type": "integer"
+            }
+          ]
+        }
+      }
+    },
     "channelOrder": {
       "additionalProperties": false,
       "type": "object",
@@ -3335,7 +3736,19 @@
           "type": "string",
           "enum": [
             "before",
-            "after"
+            "after",
+            "inside"
+          ]
+        },
+        "parentId": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       }
@@ -3358,6 +3771,49 @@
               "type": "null"
             }
           ]
+        }
+      }
+    },
+    "attachmentUpload": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "connectionId",
+        "channelId",
+        "text",
+        "name",
+        "data"
+      ],
+      "properties": {
+        "connectionId": {
+          "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+          "type": "string"
+        },
+        "channelId": {
+          "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 0,
+          "maxLength": 8192,
+          "type": "string"
+        },
+        "html": {
+          "minLength": 1,
+          "maxLength": 32768,
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\u0000-\\u001f\\u007f/:\\\\]+$",
+          "type": "string"
+        },
+        "data": {
+          "minLength": 4,
+          "maxLength": 44739244,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+          "type": "string"
         }
       }
     }

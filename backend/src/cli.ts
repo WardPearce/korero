@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { eq } from "drizzle-orm";
 import { constants } from "node:crypto";
+import { styleText } from "node:util";
 import { createApp } from "./app";
 import { defaultToml, endpoint, loadConfig, localAddresses, type Config } from "./config";
 import { lockDirectory, openDatabase, audit, snapshotDatabase, type Store } from "./database";
@@ -60,15 +61,44 @@ function applySettings(db: Store, config: Config) {
   if (registration && !process.env.VOICE_SERVER_REGISTRATION) config.server.registration = registration;
 }
 
-function applyServerPassword(db: Store, auth: Auth, config: Config) {
-  if (process.env.VOICE_SERVER_PASSWORD !== undefined) return;
-  const password = config.server.password;
-  if (!password) return;
-  auth.syncConfiguredServerPassword(password);
+function terminalStyle(style: Parameters<typeof styleText>[0], value: string) {
+  return process.stdout.isTTY && !process.env.NO_COLOR ? styleText(style, value) : value;
 }
 
-function printSetup(setup: { token: string; expiresAt: number }) {
-  console.log(`First-owner setup token (expires ${new Date(setup.expiresAt).toISOString()}): ${setup.token}`);
+function formatSetup(setup: { token: string; expiresAt: number }) {
+  return [
+    terminalStyle(["bold", "yellow"], "ADMIN SETUP TOKEN"),
+    `  ${terminalStyle("bold", setup.token)}`,
+    "  Use this one-time token to create the first owner.",
+    `  Expires ${new Date(setup.expiresAt).toISOString()}`,
+  ].join("\n");
+}
+
+function printStartup(config: Config, serverId: string, fingerprint: string | undefined, setup: ReturnType<Auth["issueSetup"]>) {
+  const local = config.server.host === "::" ? localAddresses() :
+    config.server.host === "0.0.0.0" ? localAddresses().filter((ip) => !ip.includes(":")) : [config.server.host];
+  const signalling = local.map((address) => endpoint(address, config.server.port));
+  const publicAddresses = config.server.public_addresses.map((address) => endpoint(address, config.server.port));
+  const ports = config.media.workers > 1 ? `${config.media.port}–${config.media.port + config.media.workers - 1}` : `${config.media.port}`;
+  const protocols = [config.media.enable_udp && "UDP", config.media.enable_tcp && "TCP"].filter(Boolean).join("/");
+  const field = (label: string, ...values: string[]) => {
+    const width = "TLS key fingerprint".length + 2;
+    return values.map((value, index) => `  ${(index === 0 ? label : "").padEnd(width)}${value}`);
+  };
+
+  console.log([
+    terminalStyle("bold", `${config.server.name} v${version}`),
+    "",
+    ...(setup ? [formatSetup(setup), ""] : []),
+    ...field("Signalling", ...signalling),
+    ...field("Public", ...(publicAddresses.length ? publicAddresses : ["none configured"])),
+    ...field("Media", `${ports} ${protocols}`),
+    "",
+    ...(fingerprint ? field("TLS key fingerprint", fingerprint) : []),
+    ...field("Server ID", serverId),
+    ...field("Data directory", config.directory),
+    ...field("Registration", config.server.registration),
+  ].join("\n"));
 }
 
 async function prepareDirectory(directory: string) {
@@ -147,19 +177,10 @@ async function start(db: Store, auth: Auth, config: Config) {
     }
     realtime = new Realtime(db, auth, media, config);
     const app = createApp(config, auth, media, realtime, { serverId, fingerprint: tls?.fingerprint });
-    const setup = auth.issueSetup();
-    if (setup) printSetup(setup);
     app.listen({ hostname: config.server.host, port: config.server.port, reusePort: false,
       ...(tls ? { tls: { key: tls.key, cert: tls.cert, secureOptions: constants.SSL_OP_NO_TLSv1 | constants.SSL_OP_NO_TLSv1_1 } } : {}) });
     stopListener = () => app.stop(true);
-    const local = config.server.host === "::" ? localAddresses() :
-      config.server.host === "0.0.0.0" ? localAddresses().filter((ip) => !ip.includes(":")) : [config.server.host];
-    console.log(`${config.server.name} v${version} (${serverId})`);
-    console.log(`Signalling: ${local.map((address) => endpoint(address, config.server.port)).join(", ")}`);
-    console.log(`Public: ${config.server.public_addresses.map((address) => endpoint(address, config.server.port)).join(", ") || "none configured"}`);
-    console.log(`Media: ${config.media.port}${config.media.workers > 1 ? `–${config.media.port + config.media.workers - 1}` : ""} ${[config.media.enable_udp && "UDP", config.media.enable_tcp && "TCP"].filter(Boolean).join("/")}`);
-    if (tls) console.log(`TLS public-key fingerprint: ${tls.fingerprint}`);
-    console.log(`Data directory: ${config.directory}\nRegistration: ${config.server.registration}`);
+    printStartup(config, serverId, tls?.fingerprint, auth.issueSetup());
     await stopping;
   } finally {
     process.removeListener("SIGINT", resolveStop!);
@@ -193,13 +214,13 @@ export async function cli(args: string[]) {
     const initialized = !!db.select({ id: accounts.id }).from(accounts).limit(1).get();
     const auth = new Auth(db, await loadCredentials(config.directory, initialized), config);
     applySettings(db, config);
-    applyServerPassword(db, auth, config);
+    if (!auth.passwordLocked && config.server.password) auth.syncConfiguredServerPassword(config.server.password);
     switch (options.command) {
       case "start":
         if (!existsSync(config.file)) await atomicWrite(config.file, defaultToml);
         await start(db, auth, config);
         break;
-      case "admin setup-token": printSetup(auth.issueSetup(true)!); break;
+      case "admin setup-token": console.log(formatSetup(auth.issueSetup(true)!)); break;
       case "identity fingerprint":
       case "identity export":
       case "identity rotate": {

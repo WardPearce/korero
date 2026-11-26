@@ -1,29 +1,37 @@
 <script lang="ts">
   import { BitsConfig } from "bits-ui";
   import { Button, buttonVariants } from "#lib/components/ui/button/index.js";
-  import Checkbox from "#lib/components/LabeledCheckbox.svelte";
+  import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
   import * as DropdownMenu from "#lib/components/ui/dropdown-menu/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
-  import SelectField from "#lib/components/SelectField.svelte";
+  import SelectField from "#lib/components/fields/SelectField.svelte";
   import { Textarea } from "#lib/components/ui/textarea/index.js";
   import {
     ChevronDown, CircleAlert, DoorOpen, Headphones,
     HeadphoneOff, ListTree, LockKeyhole, MessageCircle, Mic, MicOff, Pencil, Plus, Search,
-    Send, Server, Settings2, X,
+    Download, Mail, Server, Settings2, X,
   } from "@lucide/svelte";
   import { tick } from "svelte";
-  import Avatar from "#lib/Avatar.svelte";
-  import ChannelMember from "#lib/ChannelMember.svelte";
-  import ContextActions from "#lib/ContextActions.svelte";
-  import IconButton from "#lib/IconButton.svelte";
-  import Modal from "#lib/Modal.svelte";
-  import PaneDivider from "#lib/PaneDivider.svelte";
-  import QuickAudio from "#lib/QuickAudio.svelte";
+  import Avatar from "#lib/components/Avatar.svelte";
+  import ChannelMember from "#lib/components/server/ChannelMember.svelte";
+  import ContextActions from "#lib/components/ContextActions.svelte";
+  import IconButton from "#lib/components/IconButton.svelte";
+  import Modal from "#lib/components/Modal.svelte";
+  import PaneDivider from "#lib/components/PaneDivider.svelte";
+  import QuickAudio from "#lib/components/media/QuickAudio.svelte";
+  import { getAudioSettings } from "#lib/media/audio.svelte";
+  import WhisperControls from "#lib/components/media/WhisperControls.svelte";
   import { playUiSound } from "#lib/ui-sounds";
-  import { messageTime, nativeApp, type Channel } from "#lib/client";
-  import { getWorkspace } from "#lib/workspace";
+  import { messageTime, nativeApp, type Channel } from "#lib/connection/client";
+  import ChatComposer from "#lib/components/chat/ChatComposer.svelte";
+  import DirectMessages from "#lib/components/chat/DirectMessages.svelte";
+  import RichMessage from "#lib/components/chat/RichMessage.svelte";
+  import ScreenSharing from "#lib/components/media/ScreenSharing.svelte";
+  import { downloadAttachment } from "#lib/chat/chat-attachments";
+  import { getWorkspace, type ChannelPlacement } from "#lib/workspace";
 
   const workspace = getWorkspace();
+  const audio = getAudioSettings();
   const voiceAvailable = nativeApp();
   const { run } = workspace;
   const view = $derived(workspace.view);
@@ -46,7 +54,7 @@
   let joining = $state.raw<Channel | null>(null);
   let search = $state("");
   let collapsed = $state<string[]>([]);
-  let message = $state("");
+  let channelAudioKbps = $state<number | undefined>();
   let afkFormOpen = $state(false);
   let afkMessage = $state("");
   let afkFormOrigin = $state("");
@@ -54,11 +62,20 @@
   let lastChatChannel: string | null | undefined;
   let knownMessageIds = new Set<string>();
   let initializedMessages = false;
-  type Placement = "before" | "after";
-  let draggedChannel = $state<{ id: string; origin: string } | null>(null);
-  let dropTarget = $state<{ id: string; placement: Placement } | null>(null);
+  let draggedChannel = $state.raw<{ id: string; origin: string } | null>(null);
+  let dropTarget = $state.raw<{ id: string; placement: ChannelPlacement } | null>(null);
 
   let snapshot = $derived(view.snapshot);
+  let channelsById = $derived(new Map(snapshot?.channels.map((channel) => [channel.id, channel])));
+  let channelsByParent = $derived.by(() => {
+    const groups = new Map<string | null, Channel[]>();
+    for (const channel of snapshot?.channels ?? []) {
+      const siblings = groups.get(channel.parentId);
+      if (siblings) siblings.push(channel);
+      else groups.set(channel.parentId, [channel]);
+    }
+    return groups;
+  });
   let me = $derived(snapshot?.account);
   let ownMember = $derived(snapshot?.members.find((member) => member.connectionId === snapshot?.connectionId));
   let online = $derived(view.phase === "online");
@@ -70,7 +87,10 @@
   );
   let canCreate = $derived(online && Boolean(snapshot?.serverPermissions.includes("createChannels")));
   let canReorder = $derived(online && Boolean(snapshot?.canReorderChannels) && !search.trim() && !pending);
-  let canChat = $derived(online && isInRoom);
+  let canChat = $derived(online && isInRoom && snapshot?.canSendText !== false);
+  let canSetAudioBitrate = $derived(workspace.channelAudioQuality && (editingChannel
+    ? editingChannel.canSetAudioBitrate
+    : snapshot?.serverPermissions.includes("manageSettings")));
   let canVoice = $derived(voiceAvailable && online && Boolean(activeChannel));
   let canSetAfk = $derived(canVoice && ownMember?.afk !== undefined && !pending);
   let canSetChannelAccess = $derived(editingChannel?.canSetPassword !== false);
@@ -140,7 +160,6 @@
 
   async function joinChannel(channel: Channel) {
     selectChannel(channel);
-    if (!voiceAvailable) return;
     if (activeChannel?.id === channel.id) return;
     if (channel.passwordRequired) {
       joining = channel;
@@ -177,6 +196,7 @@
     newChannelName = channel?.name ?? "";
     channelDescription = channel?.description ?? "";
     channelCapacity = channel?.capacity ?? undefined;
+    channelAudioKbps = channel?.audioBitrate == null ? undefined : channel.audioBitrate / 1000;
     parentChannelId = channel?.parentId ?? "";
     newChannelPassword = "";
     removeChannelPassword = false;
@@ -203,6 +223,8 @@
     }
     const payload: Record<string, unknown> = { name: newChannelName.trim(), description: channelDescription };
     if (editingChannel) payload.channelId = editingChannel.id;
+    const bitrate = channelAudioKbps === undefined ? null : Math.round(channelAudioKbps * 1000);
+    if (canSetAudioBitrate && bitrate !== (editingChannel?.audioBitrate ?? null)) payload.audioBitrate = bitrate;
     if (workspace.channelBackgrounds) payload.backgroundImageUrl = backgroundImageUrl.trim() || null;
     if (canSetChannelAccess) {
       if (parentChannelId !== (editingChannel?.parentId ?? "")) payload.parentId = parentChannelId || null;
@@ -214,14 +236,6 @@
       createChannelOpen = false;
       closeChannelSettings();
     }
-  }
-
-  async function sendMessage(event: SubmitEvent) {
-    event.preventDefault();
-    const text = message.trim();
-    if (!text || !canChat || pending) return;
-    message = "";
-    if (!(await run("message", "send_message", { text })) && !message) message = text;
   }
 
   async function toggleAfk() {
@@ -254,13 +268,44 @@
     if (!channel.canEdit) return [];
     const actions = [{ label: "Edit channel", onSelect: () => showChannelForm(channel) }];
     if (!canReorder) return actions;
-    const siblings = snapshot?.channels.filter((item) => item.parentId === channel.parentId) ?? [];
+    const siblings = channelsByParent.get(channel.parentId) ?? [];
     const index = siblings.findIndex(({ id }) => id === channel.id);
     const previous = siblings[index - 1];
     const next = siblings[index + 1];
-    if (previous?.canEdit) actions.push({ label: "Move up", onSelect: () => { void workspace.reorderChannel(channel.id, previous.id, "before"); } });
-    if (next?.canEdit) actions.push({ label: "Move down", onSelect: () => { void workspace.reorderChannel(channel.id, next.id, "after"); } });
+    const parent = channel.parentId ? channelsById.get(channel.parentId) : undefined;
+    if (previous?.canEdit) actions.push({ label: "Move up", onSelect: () => { void placeChannel(channel, previous, "before"); } });
+    if (next?.canEdit) actions.push({ label: "Move down", onSelect: () => { void placeChannel(channel, next, "after"); } });
+    if (previous && canPlaceChannel(channel, previous, "inside")) {
+      actions.push({ label: "Move into previous channel", onSelect: () => { void placeChannel(channel, previous, "inside"); } });
+    }
+    if (parent && canPlaceChannel(channel, parent, "after")) {
+      actions.push({ label: "Move out of parent", onSelect: () => { void placeChannel(channel, parent, "after"); } });
+    }
     return actions;
+  }
+
+  function canPlaceChannel(source: Channel, target: Channel, placement: ChannelPlacement) {
+    if (!source.canEdit || !target.canEdit || source.id === target.id) return false;
+    const parentId = placement === "inside" ? target.id : target.parentId;
+    if (placement !== "inside" && source.parentId === parentId) return true;
+    if (!source.canReparent) return false;
+    if (!parentId) return true;
+    const parent = channelsById.get(parentId);
+    if (!parent?.canEdit || parent.temporary) return false;
+    for (let ancestor: Channel | undefined = parent; ancestor; ancestor = channelsById.get(ancestor.parentId ?? "")) {
+      if (ancestor.id === source.id) return false;
+    }
+    return true;
+  }
+
+  async function placeChannel(source: Channel, target: Channel, placement: ChannelPlacement) {
+    if (!canReorder || !canPlaceChannel(source, target, placement)) return;
+    const origin = workspace.serverOrigin;
+    const parentId = placement === "inside" ? target.id : target.parentId;
+    if (await workspace.reorderChannel(source.id, target.id, placement, parentId === source.parentId ? undefined : parentId) &&
+      parentId && workspace.serverOrigin === origin) {
+      collapsed = collapsed.filter((id) => id !== parentId);
+    }
   }
 
   function startDrag(event: DragEvent, channel: Channel) {
@@ -269,21 +314,29 @@
       return;
     }
     event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", channel.id);
+    event.dataTransfer.setData("application/x-korero-channel", channel.id);
     draggedChannel = { id: channel.id, origin: workspace.serverOrigin };
   }
 
-  function dragPlacement(event: DragEvent & { currentTarget: HTMLButtonElement }, channel: Channel): Placement | null {
-    if (!canReorder || !channel.canEdit || draggedChannel?.origin !== workspace.serverOrigin) return null;
-    const source = snapshot?.channels.find(({ id }) => id === draggedChannel?.id);
-    if (!source?.canEdit || source.id === channel.id || source.parentId !== channel.parentId) return null;
+  function dragPlacement(event: DragEvent & { currentTarget: HTMLDivElement }, source: Channel, target: Channel): ChannelPlacement | null {
     const bounds = event.currentTarget.getBoundingClientRect();
-    return event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+    const offset = (event.clientY - bounds.top) / bounds.height;
+    let placement: ChannelPlacement = offset < 0.5 ? "before" : "after";
+    if (source.canReparent !== undefined && offset >= 0.25 && offset <= 0.75) placement = "inside";
+    return canPlaceChannel(source, target, placement) ? placement : null;
   }
 
-  function dragOver(event: DragEvent & { currentTarget: HTMLButtonElement }, channel: Channel) {
-    const placement = dragPlacement(event, channel);
-    if (!placement) return;
+  function dragSource() {
+    if (canReorder && draggedChannel?.origin === workspace.serverOrigin) return channelsById.get(draggedChannel.id);
+  }
+
+  function dragOver(event: DragEvent & { currentTarget: HTMLDivElement }, channel: Channel) {
+    const source = dragSource();
+    const placement = source && dragPlacement(event, source, channel);
+    if (!placement) {
+      dropTarget = null;
+      return;
+    }
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
     if (dropTarget?.id !== channel.id || dropTarget.placement !== placement) dropTarget = { id: channel.id, placement };
@@ -294,13 +347,14 @@
     dropTarget = null;
   }
 
-  function dropChannel(event: DragEvent & { currentTarget: HTMLButtonElement }, channel: Channel) {
-    const placement = dragPlacement(event, channel);
-    if (!placement || !draggedChannel) return;
-    event.preventDefault();
-    const { id } = draggedChannel;
+  function dropChannel(event: DragEvent & { currentTarget: HTMLDivElement }, channel: Channel) {
+    const source = dragSource();
+    if (!source) return;
+    const placement = dragPlacement(event, source, channel);
     endDrag();
-    void workspace.reorderChannel(id, channel.id, placement);
+    if (!placement) return;
+    event.preventDefault();
+    void placeChannel(source, channel, placement);
   }
 
   function senderName(id: string) {
@@ -311,7 +365,7 @@
 </script>
 
 {#snippet channelRow(channel: Channel, depth: number, nested: boolean)}
-  {@const children = nested ? (snapshot?.channels ?? []).filter((item) => item.parentId === channel.id) : []}
+  {@const children = nested ? channelsByParent.get(channel.id) ?? [] : []}
   {@const members = snapshot?.channelMembers?.[channel.id] ?? (snapshot?.channelId === channel.id ? snapshot?.members ?? [] : [])}
   {@const expandable = children.length > 0 || members.length > 0}
   {@const isActive = activeChannel?.id === channel.id}
@@ -320,7 +374,13 @@
   <li>
     <ContextActions disabled={!online || Boolean(pending)} actions={channelActions(channel)}>
       {#snippet trigger(props)}
-    <div class="channel-row" data-selected={isSelected} data-drop={dropTarget?.id === channel.id ? dropTarget.placement : undefined}
+    <div class="channel-row" role="group" data-selected={isSelected} data-drop={dropTarget?.id === channel.id ? dropTarget.placement : undefined}
+      data-dragging={draggedChannel?.id === channel.id ? "" : undefined}
+      ondragover={(event) => dragOver(event, channel)}
+      ondragleave={(event) => {
+        if (dropTarget?.id === channel.id && !(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) dropTarget = null;
+      }}
+      ondrop={(event) => dropChannel(event, channel)}
       style:--depth={Math.min(depth, 6)}>
       {#if image}
         {#key image}
@@ -336,12 +396,7 @@
       <button {...props} type="button" class="channel-target" data-leaf={expandable ? undefined : ""}
         aria-current={isSelected ? "true" : undefined} aria-describedby={isActive ? "joined-channel-description" : undefined}
         onclick={() => selectChannel(channel)} ondblclick={() => joinChannel(channel)} draggable={canReorder && channel.canEdit === true}
-        ondragstart={(event) => startDrag(event, channel)} ondragend={endDrag}
-        ondragover={(event) => dragOver(event, channel)}
-        ondragleave={(event) => {
-          if (dropTarget?.id === channel.id && !(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) dropTarget = null;
-        }}
-        ondrop={(event) => dropChannel(event, channel)}>
+        ondragstart={(event) => startDrag(event, channel)} ondragend={endDrag}>
         <span class="truncate" title={channel.name}>{channel.name}</span>
         {#if channel.passwordRequired}<small class="channel-access">Locked</small>{/if}
         {#if isActive}<span class="joined-dot" title="Joined" aria-hidden="true"></span>{/if}
@@ -388,6 +443,7 @@
       </IconButton>
       <QuickAudio direction="input" />
     </div>
+    {#if audio.talking}<span class="text-xs font-medium text-[var(--success)]" role="status">Transmitting</span>{/if}
     <div class="voice-split" role="group" aria-label="Playback">
       <IconButton label={ownMember?.adminDeafened ? "Server deafened" : ownMember?.deafened ? "Undeafen" : "Deafen"}
         disabled={!canVoice || Boolean(pending) || ownMember?.afk || ownMember?.adminDeafened}
@@ -406,6 +462,9 @@
         <DropdownMenu.Item onSelect={showAfkForm}>Set AFK message</DropdownMenu.Item>
       </DropdownMenu.Content>
     </DropdownMenu.Root>
+    {#if voiceAvailable && snapshot?.whispers}
+      <WhisperControls />
+    {/if}
     {#if activeChannel}
       <span class="toolbar-separator"></span>
       <IconButton label="Leave voice channel" disabled={!canVoice || Boolean(pending)} onclick={async () => { if (await run("leave", "leave_channel")) playUiSound("disconnect"); }}><DoorOpen size={18} aria-hidden="true" /></IconButton>
@@ -418,6 +477,15 @@
     <Search class="pointer-events-none absolute start-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} aria-hidden="true" />
     <Input class="ps-8" aria-label="Find a channel" placeholder="Find a channel" bind:value={search} disabled={!snapshot?.channels.length} />
   </div>
+  {#if snapshot?.directMessages && workspace.serverId}
+    <div class="channel-search">
+      <Button variant={workspace.roomView === "directMessages" ? "secondary" : "outline"} class="w-full justify-start"
+        aria-pressed={workspace.roomView === "directMessages"} onclick={() => workspace.showDirectMessages()}>
+        <Mail size={16} /> Direct messages
+        {#if workspace.unreadDirectAccounts.size}<span class="ms-auto">{workspace.unreadDirectAccounts.size}<span class="sr-only"> unread conversations</span></span>{/if}
+      </Button>
+    </div>
+  {/if}
   <div class="channel-scroll">
     <span id="joined-channel-description" class="sr-only">Joined</span>
     <div class="section-label"><span><ListTree size={15} /> Channels</span>{#if snapshot}<small>{snapshot.channels.length}</small>{/if}</div>
@@ -430,7 +498,7 @@
             <li class="channel-empty">No matching channels.</li>
           {/each}
         {:else}
-          {#each snapshot.channels.filter((channel) => channel.parentId === null) as channel (channel.id)}
+          {#each channelsByParent.get(null) ?? [] as channel (channel.id)}
             {@render channelRow(channel, 0, true)}
           {/each}
         {/if}
@@ -456,16 +524,29 @@
     {#if currentChannel?.canEdit}
       <IconButton label="Edit channel" disabled={!online || Boolean(pending)} onclick={() => showChannelForm(currentChannel)}><Pencil size={19} aria-hidden="true" /></IconButton>
     {/if}
-    {#if currentChannel && voiceAvailable}
+    {#if currentChannel}
       <Button variant="outline" onclick={() => isInRoom ? leaveChannel() : joinChannel(currentChannel!)} disabled={!online || Boolean(pending)}>
-        {#if isInRoom}<DoorOpen size={16} /> Leave voice{:else}<Headphones size={16} /> Join voice{/if}
+        {#if isInRoom}<DoorOpen size={16} /> {voiceAvailable ? "Leave voice" : "Leave channel"}
+        {:else}<Headphones size={16} /> {voiceAvailable ? "Join voice" : "Join channel"}{/if}
       </Button>
     {/if}
   </header>
 
   <div class="workspace chat-workspace">
+    {#if online && snapshot?.motd}
+      <details class="server-motd" open>
+        <summary>Message of the day</summary>
+        <p>{snapshot.motd}</p>
+      </details>
+    {/if}
     {#if actionError || view.error || view.voiceError}
       <div class="notice" role="status"><CircleAlert size={17} /><span>{actionError || view.error || view.voiceError}</span></div>
+    {/if}
+    {#if online && snapshot?.channelId}
+      {#key snapshot.connectionId + "/" + snapshot.channelId}
+        {#if workspace.screenSharing}<ScreenSharing {snapshot} visible={isInRoom} />{/if}
+        {#if snapshot.cameras}<ScreenSharing {snapshot} visible={isInRoom} source="camera" />{/if}
+      {/key}
     {/if}
     <section class="chat-pane" aria-label="Channel chat">
       <div class="chat-log" {@attach attachMessageList} role="log" aria-label="Channel messages">
@@ -476,7 +557,14 @@
               <Avatar {name} />
               <div class="flex-content">
                 <div class="chat-meta"><strong>{name}</strong><time datetime={new Date(entry.createdAt).toISOString()}>{messageTime.format(entry.createdAt)}</time></div>
-                <p>{entry.text}</p>
+                <RichMessage text={entry.text} html={entry.html} />
+                {#if entry.attachment && snapshot}
+                  {@const connectionId = snapshot.connectionId}
+                  <Button type="button" variant="outline" class="chat-attachment" disabled={!canChat || Boolean(pending)}
+                    onclick={() => workspace.runAction("attachment-download", () => downloadAttachment(workspace.serverOrigin, connectionId, entry))}>
+                    <Download size={15} /><span class="truncate">{entry.attachment.name}</span>
+                  </Button>
+                {/if}
               </div>
             </article>
           {/each}
@@ -486,22 +574,15 @@
             {#if view.phase === "offline" && !workspace.serverOrigin}
               <div><strong>No server connected</strong><p>Connect to a server to see its channels and messages.</p></div>
               <Button variant="outline" onclick={() => workspace.showConnect()}>Connect to a server</Button>
-            {:else if !voiceAvailable && currentChannel}
-              <div><strong>Channel chat is available in the desktop app</strong><p>Open VNX.chat to join the voice channel and send messages.</p></div>
             {:else}
-              <div><strong>{isInRoom ? "No messages yet" : "Channel messages appear here"}</strong><p>{isInRoom ? "Send a message to start the conversation." : "Join a voice channel to read and send messages."}</p></div>
+              <div><strong>{isInRoom ? "No messages yet" : "Channel messages appear here"}</strong><p>{isInRoom ? "Send a message to start the conversation." : "Join a channel to read and send messages."}</p></div>
             {/if}
           </div>
         {/if}
       </div>
-      {#if voiceAvailable}
-        <form class="composer" onsubmit={sendMessage}>
-          <div class="composer-field">
-            <Input aria-label="Channel message" placeholder={canChat ? `Message #${currentChannel?.name}` : "Join a channel to send a message"} disabled={!canChat} maxlength={2000} bind:value={message} />
-          </div>
-          <Button type="submit" class="send-button" variant="default" aria-label="Send message" disabled={!canChat || !message.trim() || Boolean(pending)}><Send size={17} /></Button>
-        </form>
-      {/if}
+      {#key (snapshot?.connectionId ?? "") + "/" + (currentChannel?.id ?? "")}
+        <ChatComposer channelId={currentChannel?.id ?? ""} channelName={currentChannel?.name ?? ""} enabled={canChat} />
+      {/key}
     </section>
   </div>
 {/snippet}
@@ -509,6 +590,10 @@
 <main class="room-pane">
   {#if workspace.serverSettings}
     {@render workspace.serverSettings()}
+  {:else if workspace.roomView === "directMessages" && online && snapshot?.directMessages && workspace.serverId}
+    {#key snapshot.connectionId}
+      <DirectMessages />
+    {/key}
   {:else if workspace.roomView === "channelSettings" && editingChannel}
     <header class="workspace-header">
       <div class="heading-icon"><Pencil size={19} aria-hidden="true" /></div>
@@ -541,7 +626,7 @@
   {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}
   <form class="dialog-form" onsubmit={submitPassword}>
     <label>Channel password<Input type="password" required bind:value={channelPassword} /></label>
-    <Button variant="default" type="submit" disabled={Boolean(pending)}>{pending === "join" ? "Joining…" : "Join voice"}</Button>
+    <Button variant="default" type="submit" disabled={Boolean(pending)}>{pending === "join" ? "Joining…" : voiceAvailable ? "Join voice" : "Join channel"}</Button>
   </form>
 </Modal>
 
@@ -566,6 +651,11 @@
         <Checkbox label="Remove channel password" bind:checked={removeChannelPassword} />
       {/if}
     {/if}
+    {#if canSetAudioBitrate}
+      <label>Voice bitrate (kbps)<Input type="number" min="32" max="128" step="0.001"
+        placeholder={snapshot?.targetAudioBitrate ? `${snapshot.targetAudioBitrate / 1000} (server default)` : "Server default"}
+        bind:value={channelAudioKbps} /></label>
+    {/if}
     {#if workspace.channelBackgrounds}
       <label>Background image URL <Input type="url" pattern="https://.+" maxlength={512} placeholder="https://example.com/channel.jpg"
         autocomplete="off" spellcheck="false" title="Use an HTTPS image URL" bind:value={backgroundImageUrl} /></label>
@@ -580,3 +670,15 @@
     {@render channelFormFields()}
   </Modal>
 {/if}
+
+<style>
+  .server-motd {
+    margin: .5rem .5rem 0;
+    padding: .5rem .75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+  }
+  .server-motd summary { width: fit-content; font-weight: 600; cursor: pointer; }
+  .server-motd p { margin: .25rem 0 0; max-height: 9rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>

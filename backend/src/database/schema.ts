@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { type AnySQLiteColumn, check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { type AnySQLiteColumn, blob, check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const metadata = sqliteTable("metadata", { key: text().primaryKey(), value: text().notNull() });
 export const settings = sqliteTable("settings", { key: text().primaryKey(), value: text().notNull() });
@@ -44,6 +44,7 @@ export const channels = sqliteTable("channels", {
   name: text().notNull(), description: text().notNull().default(""), position: integer().notNull().default(0), capacity: integer(),
   temporary: integer({ mode: "boolean" }).notNull().default(false), passwordHash: text("password_hash"),
   backgroundImageUrl: text("background_image_url"),
+  audioBitrate: integer("audio_bitrate"),
 }, (table) => [index("channels_parent").on(table.parentId, table.position)]);
 export const channelOverrides = sqliteTable("channel_overrides", {
   channelId: text("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
@@ -57,17 +58,38 @@ export const bans = sqliteTable("bans", {
 export const messages = sqliteTable("messages", {
   id: text().primaryKey(), channelId: text("channel_id").references(() => channels.id, { onDelete: "cascade" }),
   senderId: text("sender_id").notNull().references(() => accounts.id), recipientId: text("recipient_id").references(() => accounts.id),
-  text: text().notNull(), createdAt: integer("created_at").notNull(),
+  text: text().notNull(), html: text(), createdAt: integer("created_at").notNull(),
 }, (table) => [
   check("message_destination", sql`(${table.channelId} IS NULL) != (${table.recipientId} IS NULL)`),
   index("messages_channel").on(table.channelId, table.createdAt, table.id),
   index("messages_direct").on(table.senderId, table.recipientId, table.createdAt, table.id),
   index("messages_retention").on(table.createdAt),
 ]);
+export const attachments = sqliteTable("attachments", {
+  messageId: text("message_id").primaryKey().references(() => messages.id, { onDelete: "cascade" }),
+  name: text().notNull(),
+  size: integer().notNull(),
+  data: blob({ mode: "buffer" }).notNull(),
+});
+export const directMessages = sqliteTable("direct_messages", {
+  id: text().primaryKey(),
+  senderId: text("sender_id").notNull().references(() => accounts.id),
+  recipientId: text("recipient_id").notNull().references(() => accounts.id),
+  createdAt: integer("created_at").notNull(),
+  nonce: text().notNull(),
+  ciphertext: text().notNull(),
+  signature: text().notNull(),
+}, (table) => [
+  check("direct_message_participants", sql`${table.senderId} != ${table.recipientId}`),
+  index("direct_messages_sender").on(table.senderId, table.recipientId, table.createdAt, table.id),
+  index("direct_messages_recipient").on(table.recipientId, table.createdAt),
+  index("direct_messages_retention").on(table.createdAt),
+]);
 export const auditEvents = sqliteTable("audit", {
   id: integer().primaryKey(), actorId: text("actor_id").references(() => accounts.id), action: text().notNull(),
   targetId: text("target_id"), createdAt: integer("created_at").notNull(),
-});
+  details: text({ mode: "json" }).$type<Record<string, string | number | boolean | string[] | null>>(),
+}, (table) => [index("audit_actor").on(table.actorId, table.id)]);
 export const speakingRestrictions = sqliteTable("speaking_restrictions", {
   accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
   actorId: text("actor_id").notNull().references(() => accounts.id),

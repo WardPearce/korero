@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { Check, Download, MessageCircle, Palette, Pencil, Plus, Send, Upload } from "@lucide/svelte";
+  import { Check, Download, Hash, Palette, Pencil, Plus, Send, Upload } from "@lucide/svelte";
   import { onDestroy, tick } from "svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
-  import Checkbox from "#lib/components/LabeledCheckbox.svelte";
-  import Modal from "#lib/Modal.svelte";
+  import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
+  import Modal from "#lib/components/Modal.svelte";
   import {
-    applyTheme, builtInThemes, colorFields, contrast, defaultTheme, parseTheme, playfulThemes, readAppearance,
+    applyAppearance, builtInThemes, colorFields, contrast, defaultTheme, parseTheme, playfulThemes, readAppearance,
     saveAppearance, swatchColors, themeFor, themeStyle, type Appearance, type SavedTheme, type Theme,
   } from "#lib/theme";
 
@@ -33,7 +33,9 @@
   let status = $state("");
   let error = $state("");
   let fileInput: HTMLInputElement;
-  let createButton = $state<HTMLButtonElement | null>(null);
+  let workspace: HTMLDivElement;
+  let importButton = $state<HTMLButtonElement | null>(null);
+  let editorTrigger: HTMLElement | null = null;
 
   let readability = $derived.by(() => {
     if (!draft) return 0;
@@ -42,11 +44,11 @@
   });
 
   $effect(() => {
-    if (draft && previewInApp) applyTheme(draft);
+    if (draft && previewInApp) applyAppearance(appearance, draft);
   });
 
   onDestroy(() => {
-    if (previewInApp) applyTheme(themeFor(appearance));
+    if (previewInApp) applyAppearance(appearance);
   });
 
   function updateAppearance(next: Appearance, message: string) {
@@ -60,20 +62,30 @@
     updateAppearance({ ...appearance, active: theme.id }, theme.name + " applied.");
   }
 
-  function startEditor(theme: Theme, id?: string) {
+  function toggleGlassmorphism(glassmorphism: boolean) {
+    updateAppearance({ ...appearance, glassmorphism }, glassmorphism ? "Frosted glass enabled." : "Frosted glass disabled.");
+  }
+
+  function startEditor(theme: Theme, trigger: HTMLElement | null, id?: string) {
+    editorTrigger = trigger;
     draft = { ...theme, colors: { ...theme.colors } };
     editingId = id;
     status = "";
     error = "";
   }
 
-  function createTheme() {
-    startEditor({ ...active, name: "My " + active.name.slice(0, 37) });
+  function createTheme(event: MouseEvent & { currentTarget: HTMLElement }) {
+    startEditor({ ...active, name: "My " + active.name.slice(0, 37) }, event.currentTarget);
+  }
+
+  function customizeTheme(event: MouseEvent & { currentTarget: HTMLElement }) {
+    if (activeIsCustom) startEditor(active, event.currentTarget, active.id);
+    else createTheme(event);
   }
 
   function togglePreview(checked: boolean) {
     previewInApp = checked;
-    if (!checked) applyTheme(active);
+    if (!checked) applyAppearance(appearance);
   }
 
   async function closeEditor() {
@@ -83,7 +95,9 @@
     confirmDelete = false;
     error = "";
     await tick();
-    createButton?.focus();
+    workspace?.scrollTo(0, 0);
+    editorTrigger?.focus({ preventScroll: true });
+    editorTrigger = null;
   }
 
   function save(event: SubmitEvent) {
@@ -98,7 +112,7 @@
     const custom = editingId
       ? appearance.custom.map((entry) => entry.id === id ? saved : entry)
       : [...appearance.custom, saved];
-    updateAppearance({ active: id, custom }, theme.name + " saved and applied.");
+    updateAppearance({ ...appearance, active: id, custom }, theme.name + " saved and applied.");
     void closeEditor();
   }
 
@@ -106,6 +120,7 @@
     if (!editingId) return;
     const custom = appearance.custom.filter(({ id }) => id !== editingId);
     updateAppearance({
+      ...appearance,
       active: appearance.active === editingId ? defaultTheme.id : appearance.active,
       custom,
     }, "Theme deleted.");
@@ -121,7 +136,7 @@
       const data = JSON.parse(await file.text());
       const theme = data?.version === 1 ? parseTheme(data.theme) : undefined;
       if (!theme) throw new Error();
-      if (!draft) startEditor(theme);
+      if (!draft) startEditor(theme, importButton);
     } catch {
       error = "Choose a valid VNX.chat theme JSON file.";
     }
@@ -141,66 +156,76 @@
 
 {#snippet themeTile(theme: SavedTheme)}
   <button class="theme-tile" type="button" aria-pressed={active.id === theme.id} onclick={() => select(theme)}>
-    <span class="swatch-card" style={themeStyle(theme)} aria-hidden="true">
-      <span class="swatches">
-        {#each swatchColors as color (color)}
-          <span style:--swatch={theme.colors[color]}></span>
-        {/each}
+    <span class="tile-preview" style={themeStyle(theme)} aria-hidden="true">
+      <span class="tile-window">
+        <span class="tile-sidebar"><span></span><span></span><span></span></span>
+        <span class="tile-channel"><span></span><span></span><span></span></span>
       </span>
-      {#if active.id === theme.id}<span class="selected-mark"><Check size={13} strokeWidth={3} /></span>{/if}
     </span>
-    <span class="theme-name">{theme.name}</span>
+    <span class="tile-caption">
+      <span class="theme-name">{theme.name}</span>
+      {#if active.id === theme.id}<span class="selected-mark"><Check size={13} strokeWidth={3} aria-hidden="true" /></span>{/if}
+    </span>
+    <span class="tile-colors" aria-hidden="true">
+      {#each swatchColors as color (color)}
+        <span style:--swatch={theme.colors[color]}></span>
+      {/each}
+    </span>
   </button>
 {/snippet}
 
-<main class="room-pane settings-pane">
+{#snippet channelPreview(theme: Theme, showStatuses = false)}
+  <div class="sample" data-glass={appearance.glassmorphism ? "" : undefined} style={themeStyle(theme)} aria-label="Sample channel" role="group">
+    <div class="sample-sidebar">
+      <strong>Channels</strong>
+      <span class="sample-selection"><Hash size={14} aria-hidden="true" /> General</span>
+      <span><Hash size={14} aria-hidden="true" /> Lounge</span>
+    </div>
+    <div class="sample-channel">
+      <div class="sample-title"><Hash size={16} aria-hidden="true" /> General</div>
+      <div class="sample-message">
+        <span class="sample-avatar" aria-hidden="true">M</span>
+        <div><strong>Moana</strong> <small>10:42 am</small><p>See you in voice.</p></div>
+      </div>
+      <div class="sample-composer"><span>Message General</span><span><Send size={15} aria-hidden="true" /></span></div>
+      {#if showStatuses}
+        <div class="sample-statuses">
+          {#each sampleStatuses as [color, label] (color)}
+            <span style:--status={theme.colors[color]}>{label}</span>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  </div>
+{/snippet}
+
+<main class="room-pane settings-pane appearance-pane">
   <header class="workspace-header">
     <div class="heading-icon"><Palette size={19} aria-hidden="true" /></div>
     <h1>Appearance</h1>
+    <div class="theme-actions page-actions">
+      <Button bind:ref={importButton} variant="outline" disabled={!!draft} onclick={() => fileInput.click()}><Upload /> Import</Button>
+      <Button disabled={!!draft} onclick={createTheme}><Plus /> Create theme</Button>
+      <input type="file" accept=".json,application/json" hidden bind:this={fileInput} onchange={importTheme} />
+    </div>
   </header>
-  <div class="workspace">
-    <section class="settings-card appearance-card" aria-labelledby="themes-heading">
-      <div class="appearance-heading">
-        <div>
-          <h2 id="themes-heading">Themes</h2>
-          <p class="field-hint" role="status">{status || "Using " + active.name}</p>
-        </div>
+  <div class="workspace appearance-workspace" bind:this={workspace}>
+    <section class="current-theme" aria-labelledby="current-theme-heading">
+      <div class="current-theme-details">
+        <h2 id="current-theme-heading">Current theme</h2>
+        <p class="current-theme-name">{active.name}</p>
         <div class="theme-actions">
-          <Button variant="outline" disabled={!!draft} onclick={() => fileInput.click()}><Upload /> Import</Button>
-          <Button bind:ref={createButton} disabled={!!draft} onclick={createTheme}><Plus /> Create theme</Button>
-          <input type="file" accept=".json,application/json" hidden bind:this={fileInput} onchange={importTheme} />
+          <Button variant="outline" disabled={!!draft} onclick={customizeTheme}
+            aria-label={activeIsCustom ? "Edit theme" : "Customize selected theme"}>
+            <Pencil /> {activeIsCustom ? "Edit theme" : "Customize"}
+          </Button>
+          <Button variant="ghost" aria-label="Export selected theme" onclick={exportTheme}><Download /> Export</Button>
         </div>
+        <Checkbox label="Frosted glass" bind:checked={() => appearance.glassmorphism, toggleGlassmorphism} />
+        <p class="field-hint theme-status" role="status">{status}</p>
       </div>
+      {@render channelPreview(active)}
       {#if error && !draft}<p class="form-error" role="alert">{error}</p>{/if}
-      <div class="theme-actions">
-        {#if activeIsCustom}
-          <Button variant="outline" disabled={!!draft} onclick={() => startEditor(active, active.id)}><Pencil /> Edit theme</Button>
-        {:else}
-          <Button variant="outline" disabled={!!draft} onclick={createTheme}><Pencil /> Customize selected theme</Button>
-        {/if}
-        <Button variant="ghost" onclick={exportTheme}><Download /> Export selected theme</Button>
-      </div>
-      {#if appearance.custom.length}
-        <div class="custom-themes">
-          <h3 id="custom-heading">My themes</h3>
-          <div class="theme-grid" role="group" aria-labelledby="custom-heading">
-            {#each appearance.custom as theme (theme.id)}
-              {@render themeTile(theme)}
-            {/each}
-          </div>
-        </div>
-      {/if}
-      <div class="theme-actions theme-filters" role="group" aria-label="Filter built-in themes">
-        {#each themeFilters as [value, label] (value)}
-          <Button variant={filter === value ? "secondary" : "outline"} aria-pressed={filter === value}
-            aria-controls="built-in-themes" onclick={() => { filter = value; }}>{label}</Button>
-        {/each}
-      </div>
-      <div id="built-in-themes" class="theme-grid" role="group" aria-label="Built-in themes">
-        {#each visibleThemes as theme (theme.id)}
-          {@render themeTile(theme)}
-        {/each}
-      </div>
     </section>
 
     {#if draft}
@@ -240,20 +265,7 @@
             </div>
             <div class="preview-column">
               <h3>Live preview</h3>
-              <div class="sample" style={themeStyle(draft)} aria-label="Sample channel">
-                <div class="sample-title"><MessageCircle size={16} /> General</div>
-                <div class="sample-message">
-                  <span class="sample-avatar">M</span>
-                  <div><strong>Moana</strong><small>Today, 10:42 am</small><p>See you in voice.</p></div>
-                </div>
-                <div class="sample-selection"><Check size={14} /> General selected</div>
-                <div class="sample-composer"><span>Message General</span><span><Send size={15} /></span></div>
-                <div class="sample-statuses">
-                  {#each sampleStatuses as [color, label] (color)}
-                    <span style:--status={draft.colors[color]}>{label}</span>
-                  {/each}
-                </div>
-              </div>
+              {@render channelPreview(draft, true)}
               <Checkbox label="Preview in app" bind:checked={() => previewInApp, togglePreview} />
               {#if readability < 4.5}
                 <p class="form-error">Some text colors have low contrast against the selected surfaces.</p>
@@ -270,6 +282,34 @@
         </form>
       </section>
     {/if}
+
+    {#if appearance.custom.length}
+      <section class="theme-gallery" aria-labelledby="custom-heading">
+        <h2 id="custom-heading">My themes</h2>
+        <div class="theme-grid">
+          {#each appearance.custom as theme (theme.id)}
+            {@render themeTile(theme)}
+          {/each}
+        </div>
+      </section>
+    {/if}
+
+    <section class="theme-gallery" aria-labelledby="themes-heading">
+      <div class="gallery-heading">
+        <h2 id="themes-heading">Built-in themes</h2>
+        <div class="theme-actions theme-filters" role="group" aria-label="Filter built-in themes">
+          {#each themeFilters as [value, label] (value)}
+            <button type="button" aria-pressed={filter === value} aria-controls="built-in-themes"
+              onclick={() => { filter = value; }}>{label}</button>
+          {/each}
+        </div>
+      </div>
+      <div id="built-in-themes" class="theme-grid">
+        {#each visibleThemes as theme (theme.id)}
+          {@render themeTile(theme)}
+        {/each}
+      </div>
+    </section>
   </div>
 </main>
 
@@ -281,36 +321,123 @@
 </Modal>
 
 <style>
-  .appearance-card { container-type: inline-size; display: grid; width: min(100%, 58rem); gap: 1rem; }
-  .appearance-heading, .theme-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
-  .appearance-heading { justify-content: space-between; }
+  .appearance-pane { container-type: inline-size; }
+  .appearance-pane > .workspace-header {
+    --gutter: clamp(.75rem, 2.4cqi, 2rem);
+    flex-wrap: wrap;
+    padding-inline: var(--gutter);
+  }
+  .workspace.appearance-workspace {
+    padding: clamp(.75rem, 2.4cqi, 2rem);
+    gap: clamp(1.5rem, 2.8cqi, 2.75rem);
+    scrollbar-gutter: stable;
+  }
+  .theme-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+  .page-actions { margin-inline-start: auto; }
+  .current-theme {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    align-items: center;
+    gap: clamp(1.25rem, 3cqi, 3rem);
+    padding: clamp(1rem, 2.5cqi, 2.5rem);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    background: linear-gradient(115deg, color-mix(in srgb, var(--glass-card, var(--card)) 91%, var(--primary)), var(--glass-card, var(--card)) 65%);
+    box-shadow: var(--glass-highlight, none);
+  }
+  .current-theme-details { display: grid; justify-items: start; gap: .6rem; min-width: 0; }
+  .current-theme-details h2 { color: var(--muted-foreground); font-size: var(--type-small); }
+  .current-theme-name {
+    margin-bottom: .3rem;
+    font-size: calc(clamp(1.65rem, 3.5cqi, 3rem) * var(--text-scale));
+    font-weight: 650;
+    letter-spacing: -.035em;
+    line-height: 1.08;
+    overflow-wrap: anywhere;
+  }
+  .theme-status { overflow-wrap: anywhere; }
+  .theme-status:empty { position: absolute; }
+  .current-theme > .form-error { grid-column: 1 / -1; }
+
+  .theme-gallery { display: grid; gap: .85rem; }
+  .gallery-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; }
   h2 { font-size: 1.15em; }
   h3, legend { font-weight: 600; }
-  .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 5.6rem), 1fr)); gap: .75rem .5rem; }
-  .theme-tile { display: grid; min-width: 0; align-content: start; justify-items: center; gap: .33rem; padding: 4px; border-radius: var(--radius-md); }
-  .swatch-card {
-    display: grid;
-    position: relative;
-    align-items: center;
-    width: 100%;
-    max-width: 7.5rem;
-    height: 5.4rem;
-    padding: .65rem;
+  .theme-filters { gap: .2rem; padding: .2rem; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--muted); }
+  .theme-filters button {
+    min-height: max(32px, calc(var(--control-height) - 4px));
+    padding: .25rem .65rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--muted-foreground);
+    font-size: var(--type-small);
+    font-weight: 500;
+  }
+  .theme-filters button:hover { color: var(--foreground); }
+  .theme-filters button[aria-pressed="true"] { border-color: var(--border); background: var(--card); color: var(--foreground); }
+  .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 8.25rem), 1fr)); gap: clamp(.6rem, 1.15cqi, 1rem); }
+  .theme-tile {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: .4rem;
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
+    background: var(--glass-card, var(--card));
+    text-align: start;
+  }
+  .theme-tile:hover { border-color: var(--input); background: var(--muted); }
+  .theme-tile[aria-pressed="true"] { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+  .tile-preview {
+    display: grid;
+    align-content: end;
+    width: 100%;
+    height: clamp(4.6rem, 7.4cqi, 6.25rem);
+    padding: .65rem .65rem 0;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: min(var(--radius), .5rem);
+    background: color-mix(in srgb, var(--background) 85%, var(--primary));
+  }
+  .tile-window {
+    display: grid;
+    grid-template-columns: 30% minmax(0, 1fr);
+    height: clamp(3.8rem, 6.3cqi, 5.35rem);
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-bottom: 0;
+    border-radius: min(var(--radius), .45rem) min(var(--radius), .45rem) 0 0;
     background: var(--background);
   }
-  .swatches { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; width: min(100%, 2.8rem); }
-  .swatches span { height: .62rem; border-radius: min(var(--radius), 1rem); background: var(--swatch); }
-  .theme-name { max-width: 100%; color: var(--muted-foreground); font-size: var(--type-caption); line-height: 1.25; text-align: center; overflow-wrap: anywhere; }
-  .theme-tile[aria-pressed="true"] .swatch-card { outline: 2px solid var(--tile-ring); outline-offset: 2px; }
-  .theme-tile { --tile-ring: var(--ring); }
-  .theme-tile:is(:hover, [aria-pressed="true"]) .theme-name { color: var(--foreground); }
-  .theme-tile[aria-pressed="true"] .theme-name { font-weight: 700; }
+  .tile-sidebar, .tile-channel { display: flex; flex-direction: column; min-width: 0; gap: .35rem; padding: .45rem .3rem; }
+  .tile-sidebar { background: var(--muted); border-inline-end: 1px solid var(--border); }
+  .tile-channel { padding-inline: .4rem; }
+  .tile-sidebar > span, .tile-channel > span { height: .28rem; border-radius: min(var(--radius), .15rem); background: var(--input); }
+  .tile-sidebar > span:nth-child(2) { height: .5rem; background: var(--accent); }
+  .tile-sidebar > span:last-child { width: 74%; }
+  .tile-channel > span:first-child { width: 56%; background: var(--foreground); }
+  .tile-channel > span:nth-child(2) { height: .64rem; width: 85%; background: var(--card); }
+  .tile-channel > span:last-child { width: 37%; margin-top: auto; background: var(--primary); }
+  .tile-caption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .3rem;
+    min-height: 2.35rem;
+    padding: .35rem .2rem;
+  }
+  .theme-name { min-width: 0; font-size: var(--type-small); font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+  .tile-colors {
+    display: flex;
+    gap: 2px;
+    margin: auto .2rem .25rem;
+    overflow: hidden;
+    border-radius: min(var(--radius), .25rem);
+  }
+  .tile-colors > span { flex: 1; height: .35rem; background: var(--swatch); }
   .selected-mark {
-    position: absolute;
-    inset: .36rem .36rem auto auto;
     display: grid;
+    flex: none;
     place-items: center;
     width: 1.15rem;
     height: 1.15rem;
@@ -318,8 +445,14 @@
     color: var(--primary-foreground);
     background: var(--primary);
   }
-  .custom-themes, .theme-filters, .theme-footer { padding-top: .8rem; border-top: 1px solid var(--border); }
-  .custom-themes { display: grid; gap: .65rem; }
+  .appearance-card {
+    container-type: inline-size;
+    display: grid;
+    width: 100%;
+    gap: 1rem;
+    padding: clamp(1rem, 2.5cqi, 2.5rem);
+  }
+  .theme-footer { padding-top: .8rem; border-top: 1px solid var(--border); }
   .theme-editor, .editor-fields, .preview-column { display: grid; gap: 1rem; min-width: 0; align-content: start; }
   .editor-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .9fr); align-items: start; gap: 1.1rem; }
   .editor-options, .color-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
@@ -334,22 +467,69 @@
   .color-field small { display: block; font-family: var(--font-mono); }
   .preview-column { position: sticky; top: 0; }
   .sample {
-    display: grid; gap: var(--ui-gap); padding: var(--ui-gap); border: 1px solid var(--border);
-    border-radius: calc(var(--radius) * 1.4); background: var(--background); color: var(--foreground);
-    font-size: calc(.9375rem * var(--text-scale));
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2.5fr);
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius) * 1.4);
+    background: var(--background);
+    background-image: var(--glass-backdrop, none);
+    color: var(--foreground);
+    font-size: calc(.875rem * var(--text-scale));
+    overflow-wrap: anywhere;
   }
-  .sample-title, .sample-selection, .sample-composer { display: flex; align-items: center; gap: .5rem; }
-  .sample-title { padding: .4rem .6rem; border-radius: var(--radius); background: var(--muted); font-weight: 650; }
-  .sample-message { display: flex; gap: .55rem; padding: calc(var(--ui-gap) * .65); border-radius: var(--radius); background: var(--card); }
-  .sample-message small { display: block; color: var(--muted-foreground); }
-  .sample-avatar { display: grid; place-items: center; width: 2em; height: 2em; border-radius: min(calc(var(--radius) * 2), 50%); background: var(--secondary); color: var(--secondary-foreground); }
-  .sample-selection { padding: .25rem .5rem; border-radius: var(--radius); background: var(--accent); color: var(--accent-foreground); }
-  .sample-composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  .sample-sidebar, .sample-channel { display: grid; align-content: start; min-width: 0; gap: calc(var(--ui-gap) * .55); }
+  .sample-sidebar { padding: calc(var(--ui-gap) * .7); border-inline-end: 1px solid var(--border); background: var(--glass-panel, var(--muted)); }
+  .sample-sidebar strong { margin: .3em; font-size: .85em; color: var(--muted-foreground); }
+  .sample-sidebar > span, .sample-title { display: flex; align-items: center; gap: .35em; padding: .4em .5em; }
+  .sample-sidebar > span { font-size: .9em; color: var(--muted-foreground); }
+  .sample-sidebar > .sample-selection { border-radius: var(--radius); background: var(--accent); color: var(--accent-foreground); }
+  .sample-channel { padding: 0 calc(var(--ui-gap) * .7) calc(var(--ui-gap) * .7); }
+  .sample-title {
+    min-height: var(--control-height);
+    margin-inline: calc(var(--ui-gap) * -.7);
+    padding-inline: calc(var(--ui-gap) * .7);
+    border-bottom: 1px solid var(--border);
+    font-weight: 650;
+  }
+  .sample-message {
+    display: flex; align-items: start; gap: .55rem; padding: calc(var(--ui-gap) * .65);
+    border-radius: var(--radius); background: var(--glass-card, var(--card)); box-shadow: var(--glass-highlight, none);
+  }
+  .sample-message small { color: var(--muted-foreground); }
+  .sample-avatar {
+    display: grid; flex: none; place-items: center; width: 2em; height: 2em;
+    border-radius: min(calc(var(--radius) * 2), 50%);
+    background: var(--secondary); color: var(--secondary-foreground);
+  }
+  .sample-composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; }
   .sample-composer span { display: flex; align-items: center; gap: .5rem; min-height: var(--control-height); padding-inline: .5rem; border: 1px solid var(--input); border-radius: var(--radius); color: var(--muted-foreground); }
   .sample-composer span:last-child { border-color: transparent; background: var(--primary); color: var(--primary-foreground); }
   .sample-statuses { display: flex; flex-wrap: wrap; gap: .4em 1em; font-size: .8em; }
   .sample-statuses span { display: inline-flex; align-items: center; gap: .35em; }
   .sample-statuses span::before { content: ""; width: .65em; height: .65em; border-radius: min(var(--radius), 50%); background: var(--status); }
+  @container (max-width: 40rem) {
+    .current-theme { grid-template-columns: minmax(0, 1fr); gap: .8rem; }
+  }
+  @container (max-width: 28rem) {
+    .page-actions { width: 100%; }
+    .theme-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 7.5rem), 1fr)); }
+    .theme-filters button { padding-inline: .4rem; font-size: var(--type-caption); }
+    .sample { grid-template-columns: minmax(5.25rem, 1fr) minmax(0, 2.5fr); }
+    .sample-sidebar > span { padding-inline: .3em; }
+    .sample-sidebar :global(svg) { display: none; }
+  }
+  @container (max-width: 22.5rem) {
+    .sample { grid-template-columns: minmax(0, 1fr); }
+    .sample-sidebar {
+      display: flex;
+      flex-wrap: wrap;
+      border-inline-end: 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .sample-sidebar strong { display: none; }
+  }
   @container (max-width: 34rem) {
     .editor-layout { display: flex; flex-direction: column; }
     .preview-column { position: static; order: -1; width: 100%; }

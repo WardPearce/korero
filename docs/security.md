@@ -12,6 +12,9 @@ Privileges are opt-in in the default role map. The Owner role has all permission
 is exempt from overrides. Other roles use the nearest channel or ancestor override
 for that role and permission, then the server-level role grant. A role administrator
 can act only on lower-ranked accounts and cannot assign their own rank or higher.
+Reparenting a channel requires edit access at both parent scopes. Moves that
+change inherited permissions also require role-management authority over the
+affected roles and server-level grants for those permissions.
 The original Owner cannot be demoted through the protocol. Channel passwords are
 separate strings hashed using Argon2id. A moderator move can bypass the password
 prompt but still checks target join permission and capacity.
@@ -24,12 +27,23 @@ A stolen private key can sign new challenges as that identity. Stolen active ses
 expiration, revocation, or detected refresh-token reuse.
 
 Standard WebRTC encrypts media on each link to the SFU using DTLS-SRTP. The SFU and
-server operator are trusted to handle the voice and text they relay. There is no
-end-to-end voice or text encryption. The server never records voice packets, has no
-telemetry, and offers optional text persistence with retention off by default. There
-are no previews or attachment downloads. Connection IPs are used for rate limiting
-in memory and can be visible to the network and infrastructure. Do not send TLS
-connection details, credentials, tickets or authentication bodies to logs.
+server operator can access voice in transit and channel chat. The server never records
+voice packets, has no telemetry, and offers optional chat persistence, disabled by default. Attachments
+require an active session with matching channel membership and text permission.
+With persistence enabled, attachments are stored in SQLite and expire with their
+messages. Otherwise, they stay in memory for up to one hour. Connection IPs are used
+for rate limiting in memory and can be visible to the network and infrastructure.
+Keep TLS connection details, credentials, tickets and authentication bodies out of logs.
+
+Direct message contents are end-to-end encrypted by the client. Each participant
+verifies the conversation safety code through a trusted channel before using it.
+This detects identity substitution by a relay. Use a trusted client build because
+code running on either endpoint can read plaintext and access the local key.
+The relay sees the participants, timestamps and packet sizes and can withhold
+delivery. Retained messages use keys derived from the participants’ long-term
+identities. Compromise of either private identity key exposes recorded ciphertext
+for that identity. Importing the same identity on a different device preserves access
+to retained history once the contact is verified on that device.
 
 Security-sensitive actions are recorded using local IDs and timestamps. Startup prints
 the one-off bootstrap token locally before the first Owner is created. Treat console

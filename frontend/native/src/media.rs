@@ -20,6 +20,7 @@ mod ffi {
         type Voice;
         fn set_audio_profile(settings: &str) -> Result<()>;
         fn set_push_to_talk(pressed: bool);
+        fn set_whisper_to_talk(pressed: bool);
         fn audio_devices() -> Result<String>;
         fn test_microphone() -> Result<f64>;
         #[cfg(target_os = "android")]
@@ -77,6 +78,10 @@ pub fn set_audio_profile(profile: &AudioProfile) -> Result<()> {
 
 pub fn set_push_to_talk(pressed: bool) {
     ffi::set_push_to_talk(pressed);
+}
+
+pub fn set_whisper_to_talk(pressed: bool) {
+    ffi::set_whisper_to_talk(pressed);
 }
 
 pub fn audio_devices() -> Result<Value> {
@@ -201,6 +206,7 @@ pub struct RoomVoice {
     worker: VoiceThread,
     rtp: Value,
     send_id: Option<String>,
+    whisper: Option<(String, Option<String>)>,
     receive_id: Option<String>,
     consumers: HashMap<String, Option<String>>,
     member_volumes: HashMap<String, u8>,
@@ -224,12 +230,47 @@ impl RoomVoice {
             worker,
             rtp,
             send_id: None,
+            whisper: None,
             receive_id: None,
             consumers: Default::default(),
             member_volumes,
             bitrate,
             channel,
         })
+    }
+
+    pub async fn set_bitrate(&mut self, bitrate: u32) -> Result<()> {
+        if bitrate != self.bitrate {
+            if self.whisper.is_none() {
+                self.set_sending(false).await?;
+            }
+            self.bitrate = bitrate;
+        }
+        Ok(())
+    }
+
+    pub async fn set_whisper(&mut self, target: Option<(String, Option<String>)>) -> Result<()> {
+        self.set_sending(false).await?;
+        self.whisper = target;
+        if let Err(error) = self.set_sending(true).await {
+            if self.whisper.take().is_some() {
+                let _ = self.set_sending(true).await;
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub async fn end_whisper(&mut self) -> Result<()> {
+        if self.whisper.take().is_some() {
+            set_whisper_to_talk(false);
+            self.set_sending(false).await?;
+        }
+        Ok(())
+    }
+
+    pub fn whisper_transport(&self, id: &str) -> bool {
+        self.whisper.is_some() && self.send_id.as_deref() == Some(id)
     }
 
     pub async fn set_sending(&mut self, sending: bool) -> Result<()> {
@@ -243,10 +284,13 @@ impl RoomVoice {
                 local?;
             }
         } else if self.send_id.is_none() {
-            let mut transport = self
-                .wire
-                .rpc("media.transport.create", json!({"direction": "send"}))
-                .await?;
+            let mut request = json!({"direction": "send"});
+            if let Some((channel_id, password)) = &self.whisper {
+                request["whisperChannelId"] = json!(channel_id);
+                if let Some(password) = password { request["whisperPassword"] = json!(password); }
+            }
+            let mut transport = self.wire.rpc("media.transport.create", request).await?;
+            transport["whisper"] = json!(self.whisper.is_some());
             transport["bitrate"] = json!(self.bitrate);
             let id = field(&transport, "id")?.to_owned();
             if let Err(error) = self.worker.request(Operation::Send(Some(transport))).await {
@@ -380,6 +424,9 @@ impl RoomVoice {
     }
 
     pub async fn stop(self) {
+        if self.whisper.is_some() {
+            set_whisper_to_talk(false);
+        }
         let _ = self.worker.request(Operation::Stop).await;
         for id in [self.send_id, self.receive_id].into_iter().flatten() {
             let _ = self

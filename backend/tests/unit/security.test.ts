@@ -22,7 +22,8 @@ test("checks the complete TOML configuration before startup", async () => {
     const file = join(directory, "server.toml");
     for (const [toml, reason] of [
       ['[server]\n typo = true', "Invalid configuration"],
-      ['[server]\n host = "0.0.0.0"\n[tls]\n mode = "disabled"', "requires a loopback"],
+      ['[server]\n host = "0.0.0.0"\n[tls]\n mode = "disabled"', "Invalid configuration"],
+      ['[tls]\n mode = "proxy"', "explicitly trusted proxies"],
       ['[media]\n port = 8443', "overlap"],
       ['[media]\n listen_ip = "0.0.0.0"', "requires an announced address"],
       ['[media]\n enable_tcp = false\n enable_udp = false', "at least one"],
@@ -30,8 +31,10 @@ test("checks the complete TOML configuration before startup", async () => {
       await Bun.write(file, toml);
       await expect(loadConfig({ file, directory })).rejects.toThrow(reason);
     }
-    await Bun.write(file, '[server]\n host = "::1"\n[tls]\n mode = "disabled"');
-    expect((await loadConfig({ file, directory })).server.host).toBe("::1");
+    await Bun.write(file, '[server]\n host = "::1"\n trusted_proxies = ["::1"]\n[tls]\n mode = "proxy"');
+    const config = await loadConfig({ file, directory });
+    expect(config.server.trusted_proxies).toEqual(["::1"]);
+    expect(config.tls.mode).toBe("proxy");
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

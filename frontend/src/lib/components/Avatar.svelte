@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Moon, UserRound } from "@lucide/svelte";
   import * as Avatar from "#lib/components/ui/avatar/index.js";
-  import { initials } from "./client";
+  import { initials } from "#lib/connection/client";
 
   let { name, small = false, speaking = false, afk = false }: {
     name: string; small?: boolean; speaking?: boolean; afk?: boolean;

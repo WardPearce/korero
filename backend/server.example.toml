@@ -40,6 +40,7 @@ max_sessions = 32
 [limits]
 connections_per_account = 4
 pending_connections = 32
+pending_connections_per_ip = 4
 transports = 2
 producers = 1
 consumers = 128

@@ -1,0 +1,1 @@
+ALTER TABLE `messages` ADD `html` text;

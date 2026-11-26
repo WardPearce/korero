@@ -1,6 +1,6 @@
 <script lang="ts">
-  import SliderField from "#lib/components/SliderField.svelte";
-  import { getAudioSettings } from "./audio.svelte";
+  import SliderField from "#lib/components/fields/SliderField.svelte";
+  import { getAudioSettings } from "#lib/media/audio.svelte";
 
   let { setting, label, min = 0 }: {
     setting: "inputLevel" | "outputLevel" | "activityThreshold";

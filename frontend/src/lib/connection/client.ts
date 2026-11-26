@@ -1,7 +1,7 @@
 import { treaty } from "@elysia/eden";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { App } from "../../../backend/src/app";
+import type { App } from "../../../../backend/src/app";
 import { browserSession } from "./browser-session";
 
 export interface Account {
@@ -20,8 +20,12 @@ export interface Channel {
   passwordRequired: boolean;
   backgroundImageUrl?: string | null;
   canEdit?: boolean;
+  canReparent?: boolean;
   canSetPassword?: boolean;
   canMute?: boolean;
+  canWhisperTo?: boolean;
+  audioBitrate?: number | null;
+  canSetAudioBitrate?: boolean;
 }
 
 export interface Member {
@@ -50,7 +54,22 @@ export interface Snapshot {
   lowerRoles?: string[];
   assignableRoles?: string[];
   bannerImageUrl?: string | null;
+  motd?: string;
+  targetAudioBitrate?: number;
+  maxAttachmentBytes?: number;
   canReorderChannels?: boolean;
+  canSendText?: boolean;
+  directMessages?: { maxBytes: number; persistent: boolean };
+  canShareScreen?: boolean;
+  whispers?: { producerId: string; from: string }[];
+  screens?: ScreenShare[];
+  cameras?: ScreenShare[];
+}
+
+export interface ScreenShare {
+  producerId: string;
+  connectionId: string;
+  audioProducerId?: string;
 }
 
 export type MemberRequest =
@@ -65,15 +84,31 @@ export interface Message {
   senderId: string;
   createdAt: number;
   text: string;
+  html?: string;
+  attachment?: { name: string; size: number };
 }
+
+export interface DirectMessage {
+  id: string;
+  senderId: string;
+  recipientId: string;
+  createdAt: number;
+  nonce: string;
+  ciphertext: string;
+  signature: string;
+}
+
+export type DirectOperation = "direct.peer" | "direct.inbox" | "direct.history" | "direct.send";
 
 export interface VoiceState {
   phase: "offline" | "connecting" | "online" | "reconnecting" | "error";
   snapshot: Snapshot | null;
   messages: Message[];
+  directMessages?: DirectMessage[];
   speaking: string[];
   voice: "idle" | "active" | "muted" | "deafened" | "error";
   voiceError: string | null;
+  whisperChannelId?: string | null;
   error: string | null;
 }
 
@@ -83,7 +118,13 @@ export interface ServerInfo {
   identityAuthentication?: boolean;
   identityEnrollment?: boolean;
   channelBackgrounds?: boolean;
+  maxAttachmentBytes?: number;
+  richChat?: boolean;
+  maxWebSocketBytes?: number;
+  screenSharing?: boolean;
+  channelAudioQuality?: boolean;
   serverAdministration?: boolean;
+  extendedServerAdministration?: boolean;
   passwordRequired?: boolean;
   invitationPasswordBypass?: boolean;
   bannerImageUrl?: string | null;
@@ -116,6 +157,12 @@ export function call<T = void>(command: string, args?: Record<string, unknown>) 
     return Promise.reject(new Error("Open VNX.chat in the desktop app to connect to a server."));
   }
   return invoke<T>(command, args);
+}
+
+export function directRequest<T>(connectionId: string, kind: DirectOperation, payload: unknown = {}) {
+  return nativeApp()
+    ? call<T>("direct_request", { connectionId, kind, payload })
+    : browserSession.directRequest<T>(connectionId, kind, payload);
 }
 
 export function watchVoice(onState: (state: VoiceState) => void) {

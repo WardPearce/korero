@@ -2,7 +2,7 @@
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
   import { ArrowDownLeft, UserRound } from "@lucide/svelte";
-  import { apiFor, messageFrom, requestError } from "#lib/client";
+  import { apiFor, messageFrom, requestError } from "#lib/connection/client";
   import { getWorkspace } from "#lib/workspace";
 
   const workspace = getWorkspace();

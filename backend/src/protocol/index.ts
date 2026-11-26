@@ -19,6 +19,12 @@ const identityProof = { id: token, signature: t.String({ pattern: "^[A-Za-z0-9_-
 const enrollmentProof = object(identityProof);
 const password = text(128);
 const invitationExpiry = int(1, 8640000000000000);
+export const bytesPerMiB = 1024 * 1024;
+export const defaultAttachmentMiB = 4;
+export const maxSupportedAttachmentMiB = 32;
+export const attachmentDataLength = (bytes: number) => Math.ceil(bytes / 3) * 4;
+export const maxScreenVideoBitrate = 12000000;
+const richMessageHtml = optional(text(32768));
 export const httpBodies = {
   identityChallenge: object({ operation: t.UnionEnum(["login", "register", "bootstrap"]),
     publicKey: t.String({ pattern: "^[A-Za-z0-9_-]{43}$" }), deviceName, origin: text(512) }),
@@ -29,11 +35,28 @@ export const httpBodies = {
   account: object({ displayName }),
   serverPassword: object({ password: nullable(password) }),
   invitationUpdate: object({ expiresAt: optional(nullable(invitationExpiry)), usesLeft: optional(nullable(int(0, 10000))) }),
-  serverConfiguration: object({ toml: text(65536, 0), revision: t.String({ pattern: "^[a-f0-9]{64}$" }) }),
   roleDefinition: object({ name: roleName, permissions: list(t.UnionEnum([...permissions]), permissions.length) }),
-  channelOrder: object({ channelId: id, targetId: id, placement: t.UnionEnum(["before", "after"]) }),
+  deleteRole: object({ name: roleName }),
+  serverPreferences: object({
+    motd: optional(t.String({ maxLength: 1000, pattern: "^[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]*$" })),
+    defaultRole: optional(roleName),
+    defaultAudioBitrate: optional(nullable(int(32000, 128000))),
+    maxAttachmentMiB: optional(int(1, maxSupportedAttachmentMiB)),
+  }),
+  channelOrder: object({ channelId: id, targetId: id, placement: t.UnionEnum(["before", "after", "inside"]),
+    parentId: optional(nullable(id)) }),
   serverBanner: object({ bannerImageUrl: nullable(text(512)) }),
+  attachmentUpload: object({
+    connectionId: id, channelId: id, text: text(8192, 0), html: richMessageHtml,
+    name: t.String({ minLength: 1, maxLength: 255, pattern: "^[^\\u0000-\\u001f\\u007f/:\\\\]+$" }),
+    data: t.String({ minLength: 4, maxLength: attachmentDataLength(maxSupportedAttachmentMiB * bytesPerMiB), pattern: "^[A-Za-z0-9+/]+={0,2}$" }),
+  }),
 };
+export const auditQuery = object({
+  before: optional(t.Numeric({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, multipleOf: 1 })),
+  actorId: optional(id),
+  prefix: optional(t.String({ pattern: "^[a-z]{1,24}$" })),
+});
 
 const codecParameters = optional(t.Record(t.String({ pattern: "^(?!constructor$|prototype$|__proto__$)[a-zA-Z0-9_-]{1,64}$" }),
   t.Union([text(256, 0), t.Number(), t.Boolean()]), { maxProperties: 48 }));
@@ -48,20 +71,22 @@ const headerUri = t.UnionEnum([
 ]);
 const payloadType = int(0, 127);
 const ssrc = int(1, 4294967295);
-const codec = { mimeType: t.String({ pattern: "^[aA][uU][dD][iI][oO]/[oO][pP][uU][sS]$" }), clockRate: t.Literal(48000),
+const codec = { mimeType: t.String({ pattern: "^([aA][uU][dD][iI][oO]/[oO][pP][uU][sS]|[vV][iI][dD][eE][oO]/([vV][pP]8|[rR][tT][xX]))$" }),
+  clockRate: t.UnionEnum([48000, 90000]),
   channels: optional(int(1, 2)), parameters: codecParameters, rtcpFeedback };
 const feedbackDirection = t.UnionEnum(["sendrecv", "sendonly", "recvonly", "inactive"]);
 const rtpCapabilities = object({
-  codecs: list(object({ kind: t.Literal("audio"), preferredPayloadType: payloadType, ...codec }), 4, 1),
+  codecs: list(object({ kind: t.UnionEnum(["audio", "video"]), preferredPayloadType: payloadType, ...codec }), 4, 1),
   headerExtensions: optional(list(object({ kind: t.UnionEnum(["audio", "video"]), uri: headerUri, preferredId: int(1, 255),
     preferredEncrypt: optional(t.Boolean()), direction: optional(feedbackDirection) }), 32)),
 });
 const rtpParameters = object({
   mid: optional(text(32)), msid: optional(text(256)),
-  codecs: list(object({ payloadType, ...codec }), 1, 1),
+  codecs: list(object({ payloadType, ...codec }), 2, 1),
   headerExtensions: optional(list(object({ uri: headerUri, id: int(1, 255), encrypt: optional(t.Boolean()), parameters: codecParameters }), 32)),
   encodings: optional(list(object({ ssrc: optional(ssrc), rid: optional(text(32)), codecPayloadType: optional(payloadType),
-    dtx: optional(t.Boolean()), scalabilityMode: optional(t.Literal("L1T1")), maxBitrate: optional(int(1, 1000000)) }), 1, 1)),
+    rtx: optional(object({ ssrc })), active: optional(t.Boolean()), dtx: optional(t.Boolean()), scalabilityMode: optional(t.Literal("L1T1")),
+    maxBitrate: optional(int(1, maxScreenVideoBitrate)) }), 1, 1)),
   rtcp: optional(object({ cname: optional(text(256)), reducedSize: optional(t.Boolean()), mux: optional(t.Boolean()) })),
 });
 const dtlsParameters = object({
@@ -81,8 +106,11 @@ const channelDetails = {
   capacity: optional(nullable(int(1, 1024))),
   password: optional(nullable(text(128))),
   backgroundImageUrl: optional(nullable(text(512))),
+  audioBitrate: optional(nullable(int(32000, 128000))),
 };
-const target = object({ channelId: optional(id), accountId: optional(id) });
+const directAccount = { accountId: id };
+const directCursor = object({ id, createdAt: int(1, Number.MAX_SAFE_INTEGER) });
+const base64url = (minLength: number, maxLength = minLength) => t.String({ minLength, maxLength, pattern: "^[A-Za-z0-9_-]+$" });
 export const payloads = {
   "connection.authenticate": object({ ticket: token, versions: list(int(1, 100000), 16, 1) }),
   "connection.renew": object({ ticket: token }),
@@ -111,17 +139,23 @@ export const payloads = {
   "admin.diagnostics": empty,
   "admin.audit": object({ before: optional(int(1, Number.MAX_SAFE_INTEGER)) }),
   "server.settings": object({ name: optional(displayName), registration: optional(t.UnionEnum(["open", "invitation", "admin", "disabled"])) }),
-  "message.send": object({ ...target.properties, text: text(8192) }),
-  "message.history": object({ ...target.properties, before: optional(int(1, Number.MAX_SAFE_INTEGER)) }),
+  "message.send": object({ channelId: id, text: text(8192), html: richMessageHtml }),
+  "message.history": object({ channelId: id, before: optional(int(1, Number.MAX_SAFE_INTEGER)) }),
   "message.delete": object({ messageId: id }),
-  "media.capabilities": empty,
-  "media.transport.create": object({ direction: t.UnionEnum(["send", "receive"]), forceTcp: optional(t.Boolean()) }),
+  "direct.peer": object(directAccount),
+  "direct.inbox": empty,
+  "direct.history": object({ ...directAccount, before: optional(directCursor) }),
+  "direct.send": object({ ...directAccount, id, nonce: base64url(16), ciphertext: base64url(23, 10944), signature: base64url(86) }),
+  "media.capabilities": object({ kind: optional(t.Literal("video")) }),
+  "media.transport.create": object({ direction: t.UnionEnum(["send", "receive"]), forceTcp: optional(t.Boolean()),
+    kind: optional(t.Literal("video")), videoSource: optional(t.Literal("camera")),
+    whisperChannelId: optional(id), whisperPassword: optional(text(128)) }),
   "media.transport.connect": object({ transportId: id, dtlsParameters }),
   "media.transport.close": transportId,
   "media.transport.stats": transportId,
   "media.ice.restart": transportId,
   "media.producers": empty,
-  "media.producer.create": object({ transportId: id, kind: t.Literal("audio"), rtpParameters }),
+  "media.producer.create": object({ transportId: id, kind: t.UnionEnum(["audio", "video"]), rtpParameters }),
   "media.producer.pause": producerId,
   "media.producer.resume": producerId,
   "media.producer.close": producerId,

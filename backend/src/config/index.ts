@@ -15,11 +15,11 @@ const configuration = object({
     origins: list, public_addresses: list, trusted_proxies: list, password: t.String({ maxLength: 128 }) }),
   tls: object({ mode: t.UnionEnum(["self-signed", "manual", "proxy"]), certificate: string, private_key: string, names: list }),
   media: object({ listen: t.Array(object({ ip: string, announced_address: t.Optional(string) }), { maxItems: 32 }), listen_ips: list, listen_ip: string, announced_address: string, announced_ipv6: string,
-    port, workers: integer(1, 32), target_audio_bitrate: integer(32000, 64000), enable_udp: t.Boolean(), enable_tcp: t.Boolean(),
+    port, workers: integer(1, 32), target_audio_bitrate: integer(32000, 128000), enable_udp: t.Boolean(), enable_tcp: t.Boolean(),
     ice_servers: t.Array(object({ urls: list, username: t.Optional(string), credential: t.Optional(string) }), { maxItems: 8 }) }),
   authentication: object({ access_seconds: integer(1, 86400), refresh_seconds: integer(2, 31536000),
     setup_seconds: integer(30, 86400), ticket_seconds: integer(2, 120), refresh_retry_seconds: integer(1, 60), max_sessions: integer(1, 1000) }),
-  limits: object({ connections_per_account: integer(1, 32), pending_connections: integer(1, 2048),
+  limits: object({ connections_per_account: integer(1, 32), pending_connections: integer(1, 2048), pending_connections_per_ip: integer(1, 2048),
     transports: integer(2, 16), producers: integer(1, 16), consumers: integer(1, 1024), users_per_channel: integer(1, 1024),
     websocket_bytes: integer(4096, 262144), websocket_pending: integer(1, 128), websocket_requests_per_minute: integer(10, 10000),
     media_per_minute: integer(1, 5000), ice_restarts_per_minute: integer(1, 100), auth_per_minute: integer(1, 1000),
@@ -33,14 +33,13 @@ const defaults: Settings = {
   media: { listen: [], listen_ips: [], listen_ip: "", announced_address: "", announced_ipv6: "", port: 8444, workers: 1,
     target_audio_bitrate: 48000, enable_udp: true, enable_tcp: true, ice_servers: [] },
   authentication: { access_seconds: 900, refresh_seconds: 7776000, setup_seconds: 900, ticket_seconds: 20, refresh_retry_seconds: 10, max_sessions: 32 },
-  limits: { connections_per_account: 4, pending_connections: 32, transports: 2, producers: 1, consumers: 128, users_per_channel: 32,
+  limits: { connections_per_account: 4, pending_connections: 32, pending_connections_per_ip: 4, transports: 2, producers: 1, consumers: 128, users_per_channel: 32,
     websocket_bytes: 65536, websocket_pending: 16, websocket_requests_per_minute: 1200, media_per_minute: 360, ice_restarts_per_minute: 6,
     auth_per_minute: 30, registration_per_minute: 12, upgrades_per_minute: 60, max_channels: 1024 },
   messaging: { persistence: false, retention_hours: 24, max_length: 2000, per_minute: 20 },
 };
 export const localAddresses = () => [...new Set(Object.values(networkInterfaces()).flatMap((entries) =>
   (entries ?? []).filter(({ address }) => !address.toLowerCase().startsWith("fe80:")).map(({ address }) => address)))];
-const loopback = (ip: string) => ip === "::1" || ip.startsWith("127.");
 export const endpoint = (host: string, port: number) => `${isIP(host) === 6 ? `[${host}]` : host}:${port}`;
 export type Config = Settings & { directory: string; file: string; mediaAddresses: { ip: string; announcedAddress?: string }[] };
 const validator = getSchemaValidator(configuration, { normalize: false })!;
@@ -49,13 +48,13 @@ function objectValue(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 
-export async function loadConfig(options: { file?: string; directory?: string; source?: string } = {}): Promise<Config> {
+export async function loadConfig(options: { file?: string; directory?: string } = {}): Promise<Config> {
   const hint = options.directory ?? process.env.VOICE_DATA_DIR;
   const selected = options.file ?? process.env.VOICE_CONFIG;
   const file = resolve(selected ?? resolve(hint ?? "./data", "server.toml"));
   let raw: unknown = {};
-  if (options.source !== undefined || existsSync(file)) {
-    try { raw = Bun.TOML.parse(options.source ?? await Bun.file(file).text()); }
+  if (existsSync(file)) {
+    try { raw = Bun.TOML.parse(await Bun.file(file).text()); }
     catch { throw new Error(`Invalid TOML in ${file}`); }
   } else if (selected) throw new Error(`Configuration file does not exist: ${file}`);
   if (!objectValue(raw)) throw new Error("Expected a configuration table");

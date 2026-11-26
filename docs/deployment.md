@@ -59,6 +59,15 @@ be persisted via the authorised WebSocket API. On restart, those saved values ov
 TOML unless explicitly set by environment. Environment-managed values cannot be
 changed through the API.
 
+Edit the TOML on the host and restart to apply it. Set `VOICE_SERVER_PASSWORD` to
+manage the shared password on the host. An explicitly empty value disables the shared
+password for that run. Unset the variable to use the TOML or the saved app password again.
+
+Pending WebSocket connections are limited to 32 globally and four per client IP
+by default. Configure `limits.pending_connections` and
+`limits.pending_connections_per_ip` on the host. For pools with two or more
+slots, one source can use at most half the pool.
+
 - `self-signed` is the default. Clients verify a public-key pin.
 - `manual` loads `tls.certificate` and an owner-only `tls.private_key`. Use PEM,
   including intermediary certificates in the certificate file when applicable.

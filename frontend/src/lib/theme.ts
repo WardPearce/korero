@@ -20,7 +20,7 @@ export type Theme = {
   textSize: number;
 };
 export type SavedTheme = Theme & { id: string };
-export type Appearance = { active: string; custom: SavedTheme[] };
+export type Appearance = { active: string; custom: SavedTheme[]; glassmorphism: boolean };
 
 export const swatchColors = ["primary", "secondary", "accent", "success", "danger", "warning", "info"] as const;
 
@@ -177,17 +177,25 @@ export function readAppearance(): Appearance {
             const theme = parseTheme(entry);
             if (theme && typeof id === "string" && /^custom-[\da-f-]{36}$/.test(id)) custom.set(id, { ...theme, id });
           }
-          const appearance = { active: typeof data.active === "string" ? data.active : "", custom: [...custom.values()] };
+          const appearance = {
+            active: typeof data.active === "string" ? data.active : "",
+            custom: [...custom.values()],
+            glassmorphism: data.glassmorphism === true,
+          };
           appearance.active = themeFor(appearance).id;
           return appearance;
         }
       }
-      return { active: legacyThemes.get(localStorage.getItem(legacyKey) ?? "") ?? defaultTheme.id, custom: [] };
+      return {
+        active: legacyThemes.get(localStorage.getItem(legacyKey) ?? "") ?? defaultTheme.id,
+        custom: [],
+        glassmorphism: false,
+      };
     } catch {
       // An unavailable or damaged preference store falls back to the default appearance.
     }
   }
-  return { active: defaultTheme.id, custom: [] };
+  return { active: defaultTheme.id, custom: [], glassmorphism: false };
 }
 
 function luminance(color: string) {
@@ -241,9 +249,10 @@ export function themeStyle(theme: Theme) {
   return Object.entries(properties(theme)).map(([key, value]) => key + ":" + value).join(";");
 }
 
-export function applyTheme(theme: Theme) {
+export function applyAppearance(appearance: Appearance, theme: Theme = themeFor(appearance)) {
   const root = document.documentElement;
   root.classList.toggle("dark", theme.scheme === "dark");
+  root.toggleAttribute("data-glass", appearance.glassmorphism);
   for (const [key, value] of Object.entries(properties(theme))) root.style.setProperty(key, value);
 
   const favicon = document.querySelector<HTMLLinkElement>("#app-favicon");
@@ -255,7 +264,7 @@ export function applyTheme(theme: Theme) {
 
 export function saveAppearance(appearance: Appearance): boolean {
   session = appearance;
-  applyTheme(themeFor(appearance));
+  applyAppearance(appearance);
   try {
     localStorage.setItem(storageKey, JSON.stringify({ version: 1, ...appearance }));
     return true;

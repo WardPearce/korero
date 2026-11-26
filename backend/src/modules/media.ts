@@ -1,16 +1,20 @@
 import type { AudioLevelObserver, Consumer, DtlsParameters, Producer, Router, RtpCapabilities, TransportListenInfo,
   WebRtcServer, WebRtcTransport, Worker } from "mediasoup/types";
 import type { Config } from "../config";
-import type { Request } from "../protocol";
+import { maxScreenVideoBitrate, type Request } from "../protocol";
 import { fail, ProtocolError } from "../security/errors";
 
 type MediaRequest = Extract<Request, { type: `media.${string}` }>;
-type Peer = { id: string; channelId: string | null; membershipEpoch: number; account: { id: string } | null };
+type Peer = { id: string; channelId: string | null; membershipEpoch: number; account: { id: string; displayName: string } | null };
 type Slot = { index: number; worker: Worker | null; server: WebRtcServer | null; rooms: number; restart?: ReturnType<typeof setTimeout> };
 type Room = { slot: Slot; pending: Promise<{ router: Router; observer: AudioLevelObserver }>; closed: boolean;
   producers: Map<string, { producer: Producer; peerId: string; accountId: string }>; speaking: Set<string> };
-type Transport = { rtc: WebRtcTransport; direction: "send" | "receive" };
+type Kind = "audio" | "video";
+type VideoSource = "screen" | "camera";
+export type WhisperRoute = { channelId: string; passwordHash: string | null };
+type Transport = { rtc: WebRtcTransport; direction: "send" | "receive"; kind: Kind; videoSource?: VideoSource; whisper?: WhisperRoute };
 type Resources = { transports: Map<string, Transport>; producers: Map<string, Producer>; consumers: Map<string, Consumer> };
+const maxCameraVideoBitrate = 6000000;
 
 export class Media {
   private readonly rooms = new Map<string, Room>();
@@ -87,8 +91,10 @@ export class Media {
     slot.rooms++;
     const room: Room = {
       slot, closed: false, producers: new Map(), speaking: new Set(),
-      pending: slot.worker.createRouter({ mediaCodecs: [{ kind: "audio", mimeType: "audio/opus", clockRate: 48000,
-        channels: 2, parameters: { useinbandfec: 1 } }] }).then(async (router) => {
+      pending: slot.worker.createRouter({ mediaCodecs: [
+        { kind: "audio", mimeType: "audio/opus", clockRate: 48000, channels: 2, parameters: { useinbandfec: 1 } },
+        { kind: "video", mimeType: "video/VP8", clockRate: 90000 },
+      ] }).then(async (router) => {
         try {
           if (room.closed) fail("CONFLICT");
           const observer = await router.createAudioLevelObserver({ maxEntries: 8, threshold: -55, interval: 300 });
@@ -115,7 +121,10 @@ export class Media {
     for (const id of room.speaking) if (!next.has(id)) this.event(channelId, "media.speaking", { producerId: id, speaking: false });
     for (const id of next) if (room.producers.has(id) && !room.speaking.has(id)) this.event(channelId, "media.speaking", { producerId: id, speaking: true });
     const changed = new Set([...room.speaking, ...next]
-      .filter((id) => room.speaking.has(id) !== next.has(id)).map((id) => room.producers.get(id)?.peerId));
+      .filter((id) => room.speaking.has(id) !== next.has(id)).map((id) => {
+        const entry = room.producers.get(id);
+        return entry?.producer.appData.whisperFrom === undefined ? entry?.peerId : undefined;
+      }));
     room.speaking = new Set([...next].filter((id) => room.producers.has(id)));
     for (const connectionId of changed) if (connectionId)
       this.event(channelId, "channel.voiceActivity", { channelId, connectionId, speaking: this.isSpeaking(channelId, connectionId) });
@@ -134,21 +143,67 @@ export class Media {
     this.resources.delete(peerId);
     if (resources) for (const { rtc } of resources.transports.values()) rtc.close();
   }
-  stopSending(peerId: string) { for (const producer of this.resources.get(peerId)?.producers.values() ?? []) producer.close(); }
+  stopSending(peerId: string, kind?: Kind) {
+    const resources = this.resources.get(peerId);
+    if (!resources) return;
+    if (!kind || kind === "audio") {
+      for (const { rtc, whisper } of resources.transports.values()) if (whisper) rtc.close();
+    }
+    for (const producer of resources.producers.values()) {
+      if (!kind || (producer.kind === kind && !producer.appData.videoSource)) producer.close();
+    }
+  }
   stopReceiving(peerId: string) { for (const consumer of this.resources.get(peerId)?.consumers.values() ?? []) consumer.close(); }
 
-  async handle(peer: Peer, request: MediaRequest, authorize: (send?: boolean, receive?: boolean) => void) {
+  recheckWhispers(peerId: string, allowed: (whisper: WhisperRoute) => boolean) {
+    for (const { rtc, whisper } of this.resources.get(peerId)?.transports.values() ?? []) {
+      if (whisper && !allowed(whisper)) rtc.close();
+    }
+  }
+
+  whispers(channelId: string) {
+    return [...(this.rooms.get(channelId)?.producers.values() ?? [])].flatMap(({ producer }) => {
+      const from = producer.appData.whisperFrom;
+      return typeof from === "string" ? [{ producerId: producer.id, from }] : [];
+    });
+  }
+
+  screens(channelId: string) {
+    const producers = [...(this.rooms.get(channelId)?.producers.values() ?? [])];
+    const audio = new Map(producers.filter(({ producer }) => producer.kind === "audio" && producer.appData.videoSource === "screen")
+      .map(({ producer, peerId }) => [peerId, producer.id]));
+    return producers
+      .filter(({ producer }) => producer.kind === "video" && producer.appData.videoSource === "screen")
+      .map(({ producer, peerId }) => ({ producerId: producer.id, connectionId: peerId, audioProducerId: audio.get(peerId) }));
+  }
+
+  cameras(channelId: string) {
+    return [...(this.rooms.get(channelId)?.producers.values() ?? [])]
+      .filter(({ producer }) => producer.appData.videoSource === "camera")
+      .map(({ producer, peerId }) => ({ producerId: producer.id, connectionId: peerId }));
+  }
+
+  async handle(peer: Peer, request: MediaRequest, authorize: (send?: Kind, receive?: boolean) => void,
+    authorizeWhisper: (whisper: WhisperRoute) => boolean, requestedWhisper?: WhisperRoute) {
     authorize();
-    const channelId = peer.channelId ?? fail("FORBIDDEN");
+    const sourceChannelId = peer.channelId ?? fail("FORBIDDEN");
     const epoch = peer.membershipEpoch;
-    const room = this.room(channelId);
+    const current = this.resources.get(peer.id);
+    const { payload } = request;
+    const whisperTransport = "transportId" in payload ? current?.transports.get(payload.transportId)?.whisper : undefined;
+    const whisperProducer = "producerId" in payload ? current?.producers.get(payload.producerId)?.appData.whisper as WhisperRoute | undefined : undefined;
+    const whisper = requestedWhisper ?? whisperTransport ?? whisperProducer;
+    const closing = request.type === "media.transport.close" || request.type === "media.producer.close";
+    const channelId = whisper?.channelId ?? sourceChannelId;
+    const room = whisper && !requestedWhisper ? this.rooms.get(channelId) ?? fail("NOT_FOUND") : this.room(channelId);
     const { router, observer } = await room.pending.catch((error) => {
       if (error instanceof ProtocolError) throw error;
       fail("UNAVAILABLE");
     });
-    const ensureCurrent = (send?: boolean, receive?: boolean) => {
-      authorize(send, receive);
-      if (peer.membershipEpoch !== epoch || peer.channelId !== channelId || room.closed) fail("CONFLICT");
+    const ensureCurrent = (send?: Kind, receive?: boolean) => {
+      authorize(whisper && !closing ? "audio" : send, receive);
+      if (peer.membershipEpoch !== epoch || peer.channelId !== sourceChannelId || room.closed) fail("CONFLICT");
+      if (whisper && !closing && !authorizeWhisper(whisper)) fail("FORBIDDEN");
     };
     ensureCurrent();
     let state = this.resources.get(peer.id);
@@ -157,36 +212,61 @@ export class Media {
       this.resources.set(peer.id, state);
     }
     const resources = state;
-    const transport = (id: string, direction?: Transport["direction"]) => {
+    const transport = (id: string, direction?: Transport["direction"], kind?: Kind, videoSource?: VideoSource) => {
       const entry = resources.transports.get(id);
-      if (!entry || (direction && entry.direction !== direction)) fail("NOT_FOUND");
+      if (!entry || (direction && entry.direction !== direction) || (kind && entry.kind !== kind)) fail("NOT_FOUND");
+      if (videoSource && entry.videoSource !== videoSource) fail("NOT_FOUND");
       return entry.rtc;
     };
     const producer = (id: string) => resources.producers.get(id) ?? fail("NOT_FOUND");
     const consumer = (id: string) => resources.consumers.get(id) ?? fail("NOT_FOUND");
     try {
       switch (request.type) {
-        case "media.capabilities": return router.rtpCapabilities;
+        case "media.capabilities": {
+          const { codecs, headerExtensions } = router.rtpCapabilities;
+          if (request.payload.kind === "video") return { codecs, headerExtensions, iceServers: this.config.media.ice_servers };
+          return { codecs: codecs?.filter((codec) => codec.kind === "audio"), headerExtensions };
+        }
         case "media.producers":
-          return [...room.producers].filter(([, entry]) => entry.peerId !== peer.id).map(([id, entry]) =>
+          return [...room.producers].filter(([, entry]) => entry.peerId !== peer.id && !entry.producer.appData.videoSource).map(([id, entry]) =>
             ({ producerId: id, connectionId: entry.peerId, paused: entry.producer.paused, speaking: room.speaking.has(id) }));
         case "media.transport.create": {
-          const { direction, forceTcp } = request.payload;
+          const { direction, forceTcp, kind = "audio" } = request.payload;
+          if (request.payload.videoSource && kind !== "video") fail("INVALID_REQUEST");
+          const videoSource = kind === "video" ? request.payload.videoSource ?? "screen" : undefined;
           if (forceTcp && !this.config.media.enable_tcp) fail("INVALID_REQUEST");
-          if (resources.transports.size >= this.config.limits.transports) fail("LIMIT");
+          const existing = [...resources.transports.values()];
+          if (kind === "audio" && direction === "send" && existing.some((entry) =>
+            entry.kind === "audio" && entry.direction === "send" && (whisper || entry.whisper))) fail("CONFLICT");
+          if (kind === "video") {
+            ensureCurrent(direction === "send" ? kind : undefined, direction === "receive");
+            if (existing.some((entry) => entry.videoSource === videoSource && entry.direction === direction)) fail("LIMIT");
+          } else if (existing.filter((entry) => entry.kind === kind).length >= this.config.limits.transports) fail("LIMIT");
           const rtc = await router.createWebRtcTransport({
             webRtcServer: room.slot.server ?? fail("UNAVAILABLE"),
             enableUdp: this.config.media.enable_udp && !forceTcp, enableTcp: this.config.media.enable_tcp,
             preferUdp: !forceTcp, enableSctp: false,
           });
-          try { ensureCurrent(); } catch (error) { rtc.close(); throw error; }
-          resources.transports.set(rtc.id, { rtc, direction });
+          try {
+            if (videoSource && direction === "send") {
+              await rtc.setMaxIncomingBitrate(videoSource === "camera" ? maxCameraVideoBitrate : maxScreenVideoBitrate + 320000);
+            }
+            ensureCurrent(kind === "video" && direction === "send" ? kind : undefined, kind === "video" && direction === "receive");
+          } catch (error) { rtc.close(); throw error; }
+          resources.transports.set(rtc.id, { rtc, direction, kind, videoSource, whisper });
           let iceTimer: ReturnType<typeof setTimeout> | undefined;
-          rtc.observer.once("close", () => { clearTimeout(iceTimer); resources.transports.delete(rtc.id); });
+          rtc.observer.once("close", () => {
+            clearTimeout(iceTimer);
+            resources.transports.delete(rtc.id);
+            if (whisper) this.peerEvent(peer.id, "media.whisperEnded", { channelId: sourceChannelId, transportId: rtc.id });
+          });
           const failure = (reason: string) => {
             if (rtc.closed) return;
             rtc.close();
-            this.peerEvent(peer.id, "media.transportFailed", { transportId: rtc.id, reason });
+            if (whisper) return;
+            const event = videoSource === "camera" ? "media.cameraTransportFailed"
+              : videoSource === "screen" ? "media.screenTransportFailed" : "media.transportFailed";
+            this.peerEvent(peer.id, event, { channelId, transportId: rtc.id, reason });
           };
           rtc.on("dtlsstatechange", (status) => { if (status === "failed" || status === "closed") failure(status); });
           rtc.on("icestatechange", (status) => {
@@ -210,65 +290,96 @@ export class Media {
         case "media.transport.stats": return await transport(request.payload.transportId).getStats();
         case "media.ice.restart": return await transport(request.payload.transportId).restartIce();
         case "media.producer.create": {
-          ensureCurrent(true);
-          if (resources.producers.size >= this.config.limits.producers) fail("LIMIT");
-          const entry = await transport(request.payload.transportId, "send").produce({ kind: "audio", rtpParameters: request.payload.rtpParameters });
-          try { ensureCurrent(true); } catch (error) { entry.close(); throw error; }
+          const { kind, rtpParameters, transportId } = request.payload;
+          const videoSource = resources.transports.get(transportId)?.videoSource;
+          ensureCurrent(videoSource ? "video" : kind);
+          if (rtpParameters.codecs.some(({ mimeType }) => !mimeType.toLowerCase().startsWith(kind + "/"))) fail("INVALID_REQUEST");
+          if ([...resources.producers.values()].filter((entry) => entry.kind === kind && entry.appData.videoSource === videoSource).length >=
+              (videoSource ? 1 : this.config.limits.producers)) fail("LIMIT");
+          const rtc = transport(transportId, "send", videoSource ? "video" : "audio", videoSource);
+          if (videoSource !== "screen" && kind !== (videoSource ? "video" : "audio")) fail("INVALID_REQUEST");
+          if (videoSource === "camera" && rtpParameters.encodings?.some(({ maxBitrate }) => (maxBitrate ?? 0) > maxCameraVideoBitrate)) fail("INVALID_REQUEST");
+          const whisperFrom = whisper ? peer.account!.displayName : undefined;
+          const entry = await rtc.produce({ kind, rtpParameters, appData: { videoSource, whisper, whisperFrom } });
+          try { ensureCurrent(videoSource ? "video" : kind); } catch (error) { entry.close(); throw error; }
           resources.producers.set(entry.id, entry);
           room.producers.set(entry.id, { producer: entry, peerId: peer.id, accountId: peer.account!.id });
           entry.observer.once("close", () => {
             resources.producers.delete(entry.id);
             room.producers.delete(entry.id);
-            if (room.speaking.delete(entry.id)) this.event(channelId, "channel.voiceActivity",
+            if (room.speaking.delete(entry.id) && !whisper) this.event(channelId, "channel.voiceActivity",
               { channelId, connectionId: peer.id, speaking: this.isSpeaking(channelId, peer.id) });
-            this.event(channelId, "media.producerClosed", { channelId, producerId: entry.id });
+            if (videoSource === "camera") {
+              this.event(channelId, "media.cameraClosed", { channelId, producerId: entry.id });
+            } else if (kind === "video") {
+              for (const producer of resources.producers.values()) {
+                if (producer.kind === "audio" && producer.appData.videoSource === "screen") producer.close();
+              }
+              this.event(channelId, "media.screenClosed", { channelId, producerId: entry.id });
+            } else if (videoSource === "screen") {
+              const share = this.screens(channelId).find(({ connectionId }) => connectionId === peer.id);
+              if (share) this.event(channelId, "media.screenAvailable", { channelId, ...share });
+            } else this.event(channelId, "media.producerClosed", { channelId, producerId: entry.id });
           });
-          void observer.addProducer({ producerId: entry.id }).catch(() => {});
-          this.event(channelId, "media.producerAvailable", { channelId, producerId: entry.id, connectionId: peer.id });
+          if (videoSource === "camera") {
+            this.event(channelId, "media.cameraAvailable", { channelId, producerId: entry.id, connectionId: peer.id });
+          } else if (videoSource === "screen") {
+            const share = this.screens(channelId).find(({ connectionId }) => connectionId === peer.id);
+            if (share) this.event(channelId, "media.screenAvailable", { channelId, ...share });
+          } else {
+            void observer.addProducer({ producerId: entry.id }).catch(() => {});
+            this.event(channelId, "media.producerAvailable", { channelId, producerId: entry.id, connectionId: peer.id, whisperFrom });
+          }
           return { id: entry.id };
         }
         case "media.producer.pause": {
           const entry = producer(request.payload.producerId);
           await entry.pause();
-          this.event(channelId, "media.producerState", { producerId: entry.id, paused: true });
+          if (!entry.appData.videoSource) this.event(channelId, "media.producerState", { producerId: entry.id, paused: true });
           break;
         }
         case "media.producer.resume": {
-          ensureCurrent(true);
+          const purpose = resources.producers.get(request.payload.producerId)?.appData.videoSource ? "video" : "audio";
+          ensureCurrent(purpose);
           const entry = producer(request.payload.producerId);
           await entry.resume();
-          try { ensureCurrent(true); } catch (error) { entry.close(); throw error; }
-          this.event(channelId, "media.producerState", { producerId: entry.id, paused: false });
+          try { ensureCurrent(purpose); } catch (error) { entry.close(); throw error; }
+          if (!entry.appData.videoSource) this.event(channelId, "media.producerState", { producerId: entry.id, paused: false });
           break;
         }
         case "media.producer.close": producer(request.payload.producerId).close(); break;
         case "media.consumer.create": {
-          ensureCurrent(false, true);
-          if (resources.consumers.size >= this.config.limits.consumers) fail("LIMIT");
+          ensureCurrent(undefined, true);
           const { producerId } = request.payload;
           const { codecs, headerExtensions } = request.payload.rtpCapabilities;
-          const rtpCapabilities: RtpCapabilities = { codecs, headerExtensions: headerExtensions?.filter((entry) => entry.kind === "audio") };
           const sender = room.producers.get(producerId);
-          if (!sender || sender.peerId === peer.id || !router.canConsume({ producerId, rtpCapabilities })) fail("NOT_FOUND");
-          const entry = await transport(request.payload.transportId, "receive").consume({
-            producerId, rtpCapabilities, paused: true,
+          if (!sender || sender.peerId === peer.id) fail("NOT_FOUND");
+          const kind = sender.producer.kind;
+          const videoSource = sender.producer.appData.videoSource as VideoSource | undefined;
+          const rtpCapabilities: RtpCapabilities = { codecs: codecs.filter((codec) => codec.kind === kind),
+            headerExtensions: headerExtensions?.filter((entry) => entry.kind === kind) };
+          if (!router.canConsume({ producerId, rtpCapabilities })) fail("NOT_FOUND");
+          if ([...resources.consumers.values()].filter((entry) => entry.kind === kind && entry.appData.videoSource === videoSource).length >=
+              (videoSource ? 1 : this.config.limits.consumers)) fail("LIMIT");
+          const entry = await transport(request.payload.transportId, "receive", videoSource ? "video" : "audio", videoSource).consume({
+            producerId, rtpCapabilities, paused: true, appData: { videoSource },
           });
           try {
-            ensureCurrent(false, true);
+            ensureCurrent(undefined, true);
             if (entry.closed || !room.producers.has(producerId)) fail("NOT_FOUND");
           } catch (error) { entry.close(); throw error; }
           resources.consumers.set(entry.id, entry);
           entry.observer.once("close", () => resources.consumers.delete(entry.id));
-          entry.once("producerclose", () => this.peerEvent(peer.id, "media.consumerClosed", { consumerId: entry.id, producerId }));
-          const { id, kind, rtpParameters, producerPaused } = entry;
+          if (!videoSource) entry.once("producerclose", () => this.peerEvent(peer.id, "media.consumerClosed", { consumerId: entry.id, producerId }));
+          const { id, rtpParameters, producerPaused } = entry;
           return { id, producerId, kind, rtpParameters, producerPaused, accountId: sender.accountId };
         }
         case "media.consumer.pause": await consumer(request.payload.consumerId).pause(); break;
         case "media.consumer.resume": {
-          ensureCurrent(false, true);
+          ensureCurrent(undefined, true);
           const entry = consumer(request.payload.consumerId);
           await entry.resume();
-          try { ensureCurrent(false, true); } catch (error) { entry.close(); throw error; }
+          try { ensureCurrent(undefined, true); } catch (error) { entry.close(); throw error; }
           break;
         }
         case "media.consumer.close": consumer(request.payload.consumerId).close(); break;

@@ -10,6 +10,8 @@ import { existsSync } from "node:fs";
 import * as schema from "./schema";
 
 export const LOBBY = "00000000-0000-4000-8000-000000000001";
+export const DEFAULT_ROLE_KEY = "defaultRole";
+export const INITIAL_ROLE = "Member";
 export const roles = ["Guest", "Member", "Moderator", "Administrator", "Owner"] as const;
 export type Role = string;
 export const permissions = ["join", "speak", "text", "createChannels", "editChannels", "deleteChannels", "move", "mute", "kick",
@@ -83,6 +85,7 @@ export function snapshotDatabase(db: Store, destination: string) {
   db.run(sql`VACUUM INTO ${destination}`);
 }
 
-export function audit(db: Queries, actorId: string | null, action: string, targetId: string | null) {
-  db.insert(schema.auditEvents).values({ actorId, action, targetId, createdAt: Date.now() }).run();
+export function audit(db: Queries, actorId: string | null, action: string, targetId: string | null,
+  details?: NonNullable<typeof schema.auditEvents.$inferInsert.details>) {
+  db.insert(schema.auditEvents).values({ actorId, action, targetId, details, createdAt: Date.now() }).run();
 }

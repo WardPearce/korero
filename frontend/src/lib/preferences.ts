@@ -1,4 +1,5 @@
 import Dexie, { type Table } from "dexie";
+import type { TalkShortcut } from "./media/talk-shortcut";
 
 export interface SavedServer { origin: string; name: string }
 export interface DeviceIdentity { publicKey: string; privateKey: string }
@@ -8,7 +9,9 @@ export interface AudioPreferences {
   output: string;
   inputLevel: number;
   outputLevel: number;
-  transmitMode: "open" | "activity" | "pushToTalk";
+  transmitMode: "open" | "activity" | "pushToTalk" | "toggleToTalk";
+  talkShortcut: TalkShortcut;
+  globalTalkShortcut: boolean;
   activityThreshold: number;
   noiseSuppression: boolean;
   automaticGain: boolean;
@@ -18,6 +21,7 @@ export interface AudioPreferences {
 export const defaultAudio: AudioPreferences = {
   input: "", output: "", inputLevel: 100, outputLevel: 100,
   transmitMode: "open", activityThreshold: 8,
+  talkShortcut: { code: "KeyV", alt: true, ctrl: false, shift: false, meta: false }, globalTalkShortcut: false,
   noiseSuppression: true, automaticGain: true, echoCancellation: true,
 };
 

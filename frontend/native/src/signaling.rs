@@ -234,7 +234,11 @@ impl Server {
         ensure!(path.starts_with("/api/v1/"), "Invalid API path");
         let url = self.origin.join(path)?;
         ensure!(url.origin() == self.origin.origin(), "Invalid API origin");
+        let attachment = url.path() == "/api/v1/chat/attachments" || url.path().starts_with("/api/v1/chat/attachments/");
         let mut request = self.http.request(method, url);
+        if attachment {
+            request = request.timeout(Duration::from_secs(120));
+        }
         if let Some(token) = access_token {
             request = request.bearer_auth(token);
         }

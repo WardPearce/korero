@@ -2,7 +2,7 @@ import { and, count, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, 
 import { integer, sqliteTable } from "drizzle-orm/sqlite-core";
 import { createPublicKey, randomUUID, verify } from "node:crypto";
 import type { Config } from "../config";
-import { audit, type Queries, type Role, type Store } from "../database";
+import { audit, DEFAULT_ROLE_KEY, INITIAL_ROLE, type Queries, type Role, type Store } from "../database";
 import { accountIdentities, accounts, accountRoles, bans, invitations, refreshHistory, sessions, settings, setup } from "../database/schema";
 import { Credentials, equalDigest, randomToken } from "../security/credentials";
 import { fail, ProtocolError } from "../security/errors";
@@ -25,6 +25,7 @@ const invitationDetails = {
   usesLeft: invitations.usesLeft, revokedAt: invitations.revokedAt,
 };
 const passwordKey = "serverPasswordHash";
+const passwordOptions = { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 } as const;
 
 function invitationScope(actor: Account) {
   return actor.role === "Administrator" || actor.role === "Owner" ? undefined : eq(invitations.createdBy, actor.id);
@@ -55,20 +56,32 @@ export function isBanned(db: Queries, accountId: string) {
 export class Auth {
   private readonly identityChallenges = new Map<string, IdentityChallenge>();
   private readonly tickets = new Map<string, Ticket>();
+  readonly passwordLocked = process.env.VOICE_SERVER_PASSWORD !== undefined;
+  private readonly environmentPasswordHash?: string;
   private passwordWork = 0;
   onRevoked: (sessionIds: Set<string>) => void = () => {};
   onAccountChanged: (accountId: string) => void = () => {};
-  constructor(private readonly db: Store, private readonly credentials: Credentials, private readonly config: Config) {}
+  constructor(private readonly db: Store, private readonly credentials: Credentials, private readonly config: Config) {
+    if (this.passwordLocked && config.server.password) {
+      this.environmentPasswordHash = Bun.password.hashSync(config.server.password, passwordOptions);
+    }
+  }
 
   account(id: string) { return getAccount(this.db, id); }
   updateAccount(id: string, displayName: string) {
-    this.db.update(accounts).set({ displayName }).where(eq(accounts.id, id)).run();
+    const previous = this.account(id);
+    if (previous.displayName === displayName) return previous;
+    this.db.transaction((tx) => {
+      tx.update(accounts).set({ displayName }).where(eq(accounts.id, id)).run();
+      audit(tx, id, "account.profile_changed", id, { previousName: previous.displayName, displayName });
+    }, { behavior: "immediate" });
     this.onAccountChanged(id);
-    return this.account(id);
+    return { ...previous, displayName };
   }
   hasOwner() { return hasOwner(this.db); }
 
   private passwordHash() {
+    if (this.passwordLocked) return this.environmentPasswordHash;
     return this.db.select({ value: settings.value }).from(settings).where(eq(settings.key, passwordKey)).get()?.value;
   }
 
@@ -87,9 +100,10 @@ export class Auth {
   }
 
   async setServerPassword(authorize: () => Account, password: string | null) {
+    if (this.passwordLocked) throw new ProtocolError("FORBIDDEN", "The server password is managed by the host.");
     const previous = this.passwordHash();
     const hash = password === null ? null :
-      await this.password(() => Bun.password.hash(password, { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 }));
+      await this.password(() => Bun.password.hash(password, passwordOptions));
     const actor = authorize();
     this.db.transaction((tx) => {
       if (this.passwordHash() !== previous) fail("CONFLICT");
@@ -104,7 +118,7 @@ export class Auth {
   syncConfiguredServerPassword(password: string) {
     const previous = this.passwordHash();
     if (previous && Bun.password.verifySync(password, previous)) return;
-    const hash = Bun.password.hashSync(password, { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 });
+    const hash = Bun.password.hashSync(password, passwordOptions);
     this.db.transaction((tx) => {
       if (this.passwordHash() !== previous) fail("CONFLICT");
       tx.insert(settings).values({ key: passwordKey, value: hash })
@@ -159,6 +173,7 @@ export class Auth {
       const mode = this.config.server.registration;
       if (mode === "disabled") fail("FORBIDDEN");
       if (mode !== "open" && !invitation) fail("AUTH_FAILED");
+      let invitationId: string | null = null;
       if (invitation) {
         const now = Date.now();
         const row = tx.select({ id: invitations.id, usesLeft: invitations.usesLeft }).from(invitations).where(and(
@@ -169,9 +184,13 @@ export class Auth {
           mode === "admin" ? eq(invitations.adminOnly, true) : undefined,
         )).get();
         if (!row) fail("AUTH_FAILED");
+        invitationId = row.id;
         if (row.usesLeft !== null) tx.update(invitations).set({ usesLeft: row.usesLeft - 1 }).where(eq(invitations.id, row.id)).run();
       }
-      return this.createAccount(tx, name, device, "Member", identity);
+      const role = tx.select({ value: settings.value }).from(settings).where(eq(settings.key, DEFAULT_ROLE_KEY)).get()?.value ?? INITIAL_ROLE;
+      const result = this.createAccount(tx, name, device, role, identity);
+      audit(tx, result.account.id, "account.registered", result.account.id, { role, invitationId });
+      return result;
     }, { behavior: "immediate" });
   }
 

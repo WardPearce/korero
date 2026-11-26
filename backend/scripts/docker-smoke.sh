@@ -27,5 +27,5 @@ docker restart --time 5 "$instance" >/dev/null
 ready >/dev/null
 second=$(docker exec "$instance" curl -kfSs 'https://[::1]:8443/api/v1/server/info')
 test "$first" = "$second"
-test "$(docker logs "$instance" 2>/dev/null | grep -c 'First-owner setup token')" = 1
+test "$(docker logs "$instance" 2>/dev/null | grep -c '^ADMIN SETUP TOKEN$')" = 1
 printf '%s\n' "Offline Docker startup, non-root runtime and persistent server identity passed"

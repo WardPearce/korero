@@ -1,12 +1,13 @@
 <script lang="ts">
   import { Button } from "#lib/components/ui/button/index.js";
-  import Checkbox from "#lib/components/LabeledCheckbox.svelte";
-  import SelectField from "#lib/components/SelectField.svelte";
+  import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
+  import SelectField from "#lib/components/fields/SelectField.svelte";
   import { Headphones, Mic, Radio, SlidersHorizontal } from "@lucide/svelte";
   import { onMount } from "svelte";
-  import AudioDeviceFields from "#lib/AudioDeviceFields.svelte";
-  import AudioLevel from "#lib/AudioLevel.svelte";
-  import { getAudioSettings } from "#lib/audio.svelte";
+  import AudioDeviceFields from "#lib/components/media/AudioDeviceFields.svelte";
+  import AudioLevel from "#lib/components/media/AudioLevel.svelte";
+  import TalkKey from "#lib/components/media/TalkKey.svelte";
+  import { getAudioSettings } from "#lib/media/audio.svelte";
   import { getWorkspace } from "#lib/workspace";
 
   const audio = getAudioSettings();
@@ -17,6 +18,7 @@
     { mode: "open", value: "Open microphone", label: "Open microphone" },
     { mode: "activity", value: "Voice activity", label: "Voice activity" },
     { mode: "pushToTalk", value: "Push-to-talk", label: "Push-to-talk" },
+    { mode: "toggleToTalk", value: "Toggle-to-talk", label: "Toggle-to-talk" },
   ] as const;
   let inputMode = $derived(inputModes.find(({ mode }) => mode === audio.profile.transmitMode)?.value ?? inputModes[0].value);
 
@@ -75,8 +77,17 @@
       <h2 id="audio-transmission"><Radio size={16} /> Transmission</h2>
       <SelectField label="Input mode" options={[...inputModes]} {disabled}
         bind:value={() => inputMode, selectInputMode} />
-      {#if audio.profile.transmitMode === "pushToTalk"}
-        <p class="field-hint">Hold <kbd>Alt</kbd> + <kbd>V</kbd> while the VNX.chat window is focused.</p>
+      {#if audio.profile.transmitMode === "pushToTalk" || audio.profile.transmitMode === "toggleToTalk"}
+        <div class="audio-toggle">
+          <TalkKey shortcut={audio.profile.talkShortcut} {disabled} onchange={(shortcut) => void audio.update("talkShortcut", shortcut)} />
+          <small>{audio.profile.transmitMode === "pushToTalk" ? "Hold the shortcut to transmit." : "Press once to transmit and again to stop."}</small>
+        </div>
+        <Checkbox label="System-wide talk shortcut" {disabled}
+          bind:checked={() => audio.profile.globalTalkShortcut, (checked) => { void audio.update("globalTalkShortcut", checked); }} />
+        <p class="field-hint" role="status">{audio.shortcutError || (audio.globalActive ? "The shortcut works while other apps are focused." : "The shortcut works while VNX.chat is focused.")}</p>
+        {#if audio.talking}
+          <p class="field-hint" role="status">Transmitting microphone audio</p>
+        {/if}
       {:else if audio.profile.transmitMode === "activity"}
         <AudioLevel setting="activityThreshold" label="Microphone activation level (%)" min={1} />
       {/if}

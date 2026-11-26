@@ -25,6 +25,10 @@ struct Client {
 #[derive(Default)]
 struct AppState(Mutex<Client>, Mutex<Option<AudioProfile>>);
 
+#[cfg(desktop)]
+#[derive(Default)]
+struct TalkShortcut(Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>);
+
 #[derive(Serialize)]
 struct HttpReply {
     status: u16,
@@ -122,15 +126,21 @@ async fn fetch(
     let endpoint = path.split('?').next().unwrap_or_default();
     let is_administration = matches!(
         (method.as_str(), endpoint),
-        ("GET", "/api/v1/admin/accounts" | "/api/v1/admin/configuration" | "/api/v1/admin/invitations")
+        ("GET", "/api/v1/admin/accounts" | "/api/v1/admin/invitations" | "/api/v1/admin/audit"
+            | "/api/v1/admin/password" | "/api/v1/admin/preferences")
             | ("PATCH", "/api/v1/admin/roles" | "/api/v1/admin/roles/definition" | "/api/v1/admin/banner"
-                | "/api/v1/admin/configuration" | "/api/v1/admin/password" | "/api/v1/channels/order")
+                | "/api/v1/admin/password" | "/api/v1/admin/preferences" | "/api/v1/channels/order")
+            | ("DELETE", "/api/v1/admin/roles/definition")
             | ("POST", "/api/v1/admin/invitations" | "/api/v1/admin/roles")
     ) || (matches!(method.as_str(), "PATCH" | "DELETE")
         && endpoint.strip_prefix("/api/v1/admin/invitations/").is_some_and(|id| {
             id.len() == 36 && id.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
         }));
-    ensure!(is_public || is_account || is_administration, "Unsupported client HTTP operation");
+    let is_attachment = (method == "POST" && endpoint == "/api/v1/chat/attachments")
+        || (method == "GET" && endpoint.strip_prefix("/api/v1/chat/attachments/").is_some_and(|id| {
+            id.len() == 36 && id.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+        }));
+    ensure!(is_public || is_account || is_administration || is_attachment, "Unsupported client HTTP operation");
     let method = Method::from_bytes(method.as_bytes())?;
     let (status, body) = if is_public {
         server.http(method, &path, body, None).await?
@@ -311,8 +321,27 @@ async fn set_presence(
 }
 
 #[tauri::command]
-async fn send_message(text: String, state: State<'_, AppState>) -> CommandResult<()> {
-    dispatch(&state, Action::SendMessage(text)).await
+async fn send_message(text: String, html: Option<String>, channel_id: Option<String>, state: State<'_, AppState>) -> CommandResult<()> {
+    dispatch(&state, Action::SendMessage { channel_id, text, html }).await
+}
+
+#[tauri::command]
+async fn direct_request(connection_id: String, kind: String, payload: Value, state: State<'_, AppState>) -> CommandResult<Value> {
+    if !matches!(kind.as_str(), "direct.peer" | "direct.inbox" | "direct.history" | "direct.send") {
+        return Err("Unsupported direct message operation".into());
+    }
+    let controller = state.0.lock().await.controller.clone().ok_or("Connect to a server first")?;
+    controller.direct_request(connection_id, kind, payload).await.map_err(display)
+}
+
+#[tauri::command]
+async fn screen_request(connection_id: String, channel_id: String, kind: String, payload: Value, state: State<'_, AppState>) -> CommandResult<Value> {
+    if !matches!(kind.as_str(), "media.capabilities" | "media.transport.create" | "media.transport.connect"
+        | "media.transport.close" | "media.producer.create" | "media.producer.close" | "media.consumer.create" | "media.consumer.resume") {
+        return Err("Unsupported screen sharing operation".into());
+    }
+    let controller = state.0.lock().await.controller.clone().ok_or("Connect to a server first")?;
+    controller.screen_request(connection_id, channel_id, kind, payload).await.map_err(display)
 }
 
 #[tauri::command]
@@ -369,8 +398,63 @@ async fn configure_audio(profile: AudioProfile, state: State<'_, AppState>) -> C
 }
 
 #[tauri::command]
-fn push_to_talk(pressed: bool) {
-    media::set_push_to_talk(pressed);
+async fn push_to_talk(pressed: bool, connection_id: Option<String>, channel_id: Option<String>, state: State<'_, AppState>) -> CommandResult<()> {
+    if !pressed {
+        media::set_push_to_talk(false);
+        return Ok(());
+    }
+    let (Some(connection_id), Some(channel_id)) = (connection_id, channel_id) else {
+        return Err("Join a voice channel first".into());
+    };
+    dispatch(&state, Action::Talk { connection_id, channel_id }).await
+}
+
+#[tauri::command]
+fn whisper_to_talk(pressed: bool) {
+    media::set_whisper_to_talk(pressed);
+}
+
+#[tauri::command]
+async fn set_whisper(
+    connection_id: String,
+    channel_id: String,
+    target_id: Option<String>,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    dispatch(&state, Action::Whisper { connection_id, channel_id, target_id, password }).await
+}
+
+#[tauri::command]
+async fn configure_talk_shortcut(shortcut: Option<String>, app: AppHandle) -> CommandResult<()> {
+    #[cfg(desktop)]
+    if let Some(manager) = app.try_state::<tauri_plugin_global_shortcut::GlobalShortcut<tauri::Wry>>() {
+        use tauri_plugin_global_shortcut::{Shortcut, ShortcutState};
+        let state = app.state::<TalkShortcut>();
+        let mut current = state.0.lock().await;
+        let next = shortcut.as_ref().map(|value| value.parse::<Shortcut>()).transpose()
+            .map_err(|error| error.to_string())?;
+        if *current == next { return Ok(()); }
+        if let Some(previous) = *current {
+            manager.unregister(previous).map_err(|error| error.to_string())?;
+            *current = None;
+        }
+        if let Some((key, label)) = next.zip(shortcut) {
+            manager.on_shortcut(key, move |app, _, event| {
+                let _ = app.emit("korero:talk-shortcut", serde_json::json!({
+                    "shortcut": label,
+                    "pressed": event.state() == ShortcutState::Pressed,
+                }));
+            }).map_err(|error| format!("Could not register the system-wide shortcut: {error}"))?;
+            *current = Some(key);
+        }
+        return Ok(());
+    }
+    let _ = app;
+    if shortcut.is_some() {
+        return Err("System-wide shortcuts are unavailable in this desktop session. The shortcut works while VNX.chat is focused.".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -399,6 +483,41 @@ pub extern "system" fn Java_app_korero_audio_VoicePlugin_initializeRtc(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = {
+        let builder = builder.manage(TalkShortcut::default());
+        let supported = !cfg!(target_os = "linux") || (std::env::var_os("DISPLAY").is_some() &&
+            !std::env::var("XDG_SESSION_TYPE").is_ok_and(|session| session.eq_ignore_ascii_case("wayland")) &&
+            std::env::var_os("WAYLAND_DISPLAY").is_none());
+        if supported { builder.plugin(tauri_plugin_global_shortcut::Builder::new().build()) } else { builder }
+    };
+    #[cfg(target_os = "linux")]
+    let builder = builder
+        .setup(|app| {
+            use webkit2gtk::{SettingsExt, WebViewExt};
+            if let Some(window) = app.get_webview_window("main") {
+                window.with_webview(|webview| {
+                    if let Some(settings) = WebViewExt::settings(&webview.inner()) {
+                        settings.set_enable_media_stream(true);
+                        settings.set_enable_webrtc(true);
+                    }
+                })?;
+            }
+            Ok(())
+        })
+        .on_permission_request(|webview, kind| {
+            use tauri::webview::{PermissionKind, PermissionResponse};
+            if !matches!(kind, PermissionKind::DisplayCapture | PermissionKind::Camera) {
+                return PermissionResponse::Default;
+            }
+            let local = webview.label() == "main" && webview.url().is_ok_and(|url| {
+                (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
+                    || (cfg!(debug_assertions) && webview.app_handle().config().build.dev_url
+                        .as_ref().is_some_and(|dev| url.origin() == dev.origin()))
+            });
+            // Local capture follows an explicit preview or source-picker action.
+            if local { PermissionResponse::Allow } else { PermissionResponse::Deny }
+        });
     #[cfg(target_os = "android")]
     let builder = builder.plugin(tauri_plugin_korero_audio::init());
     builder
@@ -414,12 +533,17 @@ pub fn run() {
             leave_channel,
             set_presence,
             send_message,
+            direct_request,
+            screen_request,
             save_channel,
             member_action,
             set_member_volume,
             get_audio_devices,
             configure_audio,
+            configure_talk_shortcut,
             push_to_talk,
+            whisper_to_talk,
+            set_whisper,
             microphone_test,
             generate_identity,
             legacy_identity,

@@ -40,6 +40,12 @@ join distinct channels from multiple devices. Each connection has at most one cu
 channel. Reconnection creates a new connection and fetches an authoritative snapshot.
 Cached request replies are socket-local and bounded.
 
+One server owns both accounts in a direct conversation. It resolves the
+recipient’s public identity, accepts encrypted packets and delivers them to each
+participant’s active device sessions, independent of channel membership. With
+message persistence enabled, SQLite holds the packets until the configured
+retention cutoff. Clients fetch their own inbox and history after reconnecting.
+
 Each worker has a shared UDP/TCP WebRtcServer. The first media request in an occupied
 channel creates its Opus router and audio-level observer on the least loaded available
 worker. Peers use separate send and receive transports. Consumers start paused and

@@ -1,7 +1,7 @@
-import { call, nativeApp, requestError, type RelayResponse } from "./client";
+import { call, nativeApp, requestError, type RelayResponse } from "../connection/client";
 import { browserIdentity, exportBrowserIdentity, importBrowserIdentity, signIdentity } from "./browser-identity";
-import { browserSession } from "./browser-session";
-import { preferences, type DeviceIdentity } from "./preferences";
+import { browserSession } from "../connection/browser-session";
+import { preferences, type DeviceIdentity } from "../preferences";
 
 export function getIdentity() {
   return preferences.identities.get("default");
