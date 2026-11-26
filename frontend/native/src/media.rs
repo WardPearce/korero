@@ -9,6 +9,12 @@ use tokio::{
 
 #[cxx::bridge(namespace = "korero")]
 mod ffi {
+    struct MicrophoneSample {
+        gate_peak: f64,
+        sample_rate: u32,
+        pcm: Vec<i16>,
+    }
+
     extern "Rust" {
         type Rpc;
         fn rpc_call(rpc: &Rpc, method: &str, body: &str) -> Result<String>;
@@ -22,7 +28,7 @@ mod ffi {
         fn set_push_to_talk(pressed: bool);
         fn set_whisper_to_talk(pressed: bool);
         fn audio_devices() -> Result<String>;
-        fn test_microphone() -> Result<f64>;
+        fn test_microphone() -> Result<MicrophoneSample>;
         #[cfg(target_os = "android")]
         fn initialize_android(env: usize, context: usize) -> bool;
         fn make_voice(
@@ -55,10 +61,25 @@ pub struct AudioProfile {
     pub output_level: u8,
     pub transmit_mode: TransmitMode,
     pub activity_threshold: u8,
+    #[serde(default = "default_activity_hold")]
+    pub activity_hold_ms: u16,
+    #[serde(default)]
+    pub noise_gate: bool,
+    #[serde(default = "default_gate_threshold")]
+    pub gate_threshold_db: i8,
+    #[serde(default = "default_gate_attenuation")]
+    pub gate_attenuation_db: u8,
+    #[serde(default = "default_gate_hold")]
+    pub gate_hold_ms: u16,
     pub noise_suppression: bool,
     pub automatic_gain: bool,
     pub echo_cancellation: bool,
 }
+
+fn default_activity_hold() -> u16 { 250 }
+fn default_gate_threshold() -> i8 { -45 }
+fn default_gate_attenuation() -> u8 { 30 }
+fn default_gate_hold() -> u16 { 150 }
 
 #[derive(Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,7 +92,9 @@ pub enum TransmitMode {
 
 pub fn set_audio_profile(profile: &AudioProfile) -> Result<()> {
     anyhow::ensure!(profile.input_level <= 100 && profile.output_level <= 100 &&
-        (1..=100).contains(&profile.activity_threshold) && profile.input.len() <= 4096 &&
+        (1..=100).contains(&profile.activity_threshold) && profile.activity_hold_ms <= 1000 &&
+        (-80..=-5).contains(&profile.gate_threshold_db) && profile.gate_attenuation_db <= 60 &&
+        profile.gate_hold_ms <= 1000 && profile.input.len() <= 4096 &&
         profile.output.len() <= 4096, "Invalid audio preferences");
     Ok(ffi::set_audio_profile(&serde_json::to_string(profile)?)?)
 }
@@ -88,7 +111,9 @@ pub fn audio_devices() -> Result<Value> {
     Ok(serde_json::from_str(&ffi::audio_devices()?)?)
 }
 
-pub fn test_microphone() -> Result<f64> {
+pub use ffi::MicrophoneSample;
+
+pub fn test_microphone() -> Result<MicrophoneSample> {
     Ok(ffi::test_microphone()?)
 }
 

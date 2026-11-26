@@ -99,59 +99,146 @@ void select_device(webrtc::AudioDeviceModule& adm, bool input, const std::string
   // A disconnected device falls back to the system default and can be selected again when it returns.
 }
 
+constexpr int kCaptureBlockMs = 10;
+constexpr float kFullScale = 32768.0f;
+
+float db_to_gain(float db) { return std::pow(10.0f, db / 20.0f); }
+
 class CaptureControls final : public webrtc::CustomProcessing {
 public:
-  CaptureControls(const json& settings, const std::atomic<bool>& whisper_route)
+  explicit CaptureControls(const json& settings, const std::atomic<bool>* whisper_route = nullptr)
       : mode_(settings.value("transmitMode", "open")),
         gain_(settings.value("inputLevel", 100) / 100.0f),
-        threshold_(settings.value("activityThreshold", 8) * 327.68f),
-        whisper_route_(whisper_route) {}
+        activity_threshold_(settings.value("activityThreshold", 8) * kFullScale / 100.0f),
+        activity_hold_(hold_frames(settings.value("activityHoldMs", 250))),
+        gate_enabled_(settings.value("noiseGate", false)),
+        gate_threshold_(db_to_gain(settings.value("gateThresholdDb", -45)) * kFullScale),
+        gate_close_threshold_(gate_threshold_ * db_to_gain(-3)),
+        closed_gain_(db_to_gain(-settings.value("gateAttenuationDb", 30))),
+        gate_hold_(hold_frames(settings.value("gateHoldMs", 150))),
+        whisper_route_(whisper_route), gate_gain_(closed_gain_) {}
 
-  void Initialize(int, int) override { release_frames_ = 0; }
+  void Initialize(int, int) override {
+    activity_frames_ = 0;
+    gate_frames_ = 0;
+    gate_open_ = false;
+    gate_gain_ = closed_gain_;
+  }
   std::string ToString() const override { return "Kōrero capture controls"; }
+  double input_peak() const { return std::min(1.0f, input_peak_ / kFullScale); }
 
   void Process(webrtc::AudioBuffer* audio) override {
-    const auto channels = audio->num_channels();
     const auto frames = audio->num_frames();
-    const auto now = monotonic_ms();
-    const bool whispering = now < whisper_until.load();
-    const bool routed_to_whisper = whisper_route_.load();
-    bool active;
-    if (whispering || routed_to_whisper) {
-      active = whispering && routed_to_whisper;
-      release_frames_ = 0;
-    } else if (mode_ == "activity") {
-      float peak = 0;
-      for (size_t channel = 0; channel < channels; ++channel)
+    auto* const* samples = audio->channels();
+    float peak = 0;
+    if (gate_enabled_ || mode_ == "activity" || !whisper_route_) {
+      for (size_t channel = 0; channel < audio->num_channels(); ++channel)
         for (size_t frame = 0; frame < frames; ++frame)
-          peak = std::max(peak, std::abs(audio->channels()[channel][frame]) * gain_);
-      if (peak >= threshold_) release_frames_ = 25;
-      active = release_frames_ > 0;
-      if (active) --release_frames_;
-    } else {
-      active = mode_ == "open" || (mode_ == "pushToTalk" && now < talk_until.load());
+          peak = std::max(peak, std::abs(samples[channel][frame]));
+      peak *= gain_;
     }
-    for (size_t channel = 0; channel < channels; ++channel)
+    if (!whisper_route_) input_peak_ = std::max(input_peak_, peak);
+
+    if (!transmitting(peak)) {
+      gate_frames_ = 0;
+      gate_open_ = false;
+      gate_gain_ = closed_gain_;
+      for (size_t channel = 0; channel < audio->num_channels(); ++channel)
+        std::fill_n(samples[channel], frames, 0.0f);
+      return;
+    }
+
+    float target = 1;
+    float start = 1;
+    if (gate_enabled_) {
+      // A slightly lower closing threshold prevents rapid toggling near the boundary.
+      const float threshold = gate_open_ ? gate_close_threshold_ : gate_threshold_;
+      if (peak >= threshold) {
+        gate_open_ = true;
+        gate_frames_ = gate_hold_;
+      } else {
+        gate_open_ = gate_frames_ > 0;
+        if (gate_open_) --gate_frames_;
+      }
+      target = gate_open_ ? 1.0f : closed_gain_;
+      start = gate_gain_;
+      gate_gain_ = target;
+    }
+    const float step = (target - start) / frames;
+    for (size_t channel = 0; channel < audio->num_channels(); ++channel)
       for (size_t frame = 0; frame < frames; ++frame)
-        audio->channels()[channel][frame] = active ? audio->channels()[channel][frame] * gain_ : 0.0f;
+        samples[channel][frame] *= gain_ * (start + step * (frame + 1));
   }
 
 private:
+  static int hold_frames(int ms) {
+    return (ms + kCaptureBlockMs - 1) / kCaptureBlockMs;
+  }
+
+  bool transmitting(float peak) {
+    if (whisper_route_) {
+      const auto now = monotonic_ms();
+      const bool whispering = now < whisper_until.load();
+      const bool routed_to_whisper = whisper_route_->load();
+      if (whispering || routed_to_whisper) {
+        activity_frames_ = 0;
+        return whispering && routed_to_whisper;
+      }
+      if (mode_ == "pushToTalk") return now < talk_until.load();
+    }
+    if (mode_ != "activity") return true;
+    if (peak >= activity_threshold_) {
+      activity_frames_ = activity_hold_;
+      return true;
+    }
+    if (activity_frames_ == 0) return false;
+    --activity_frames_;
+    return true;
+  }
+
   std::string mode_;
-  float gain_, threshold_;
-  const std::atomic<bool>& whisper_route_;
-  int release_frames_ = 0;
+  float gain_, activity_threshold_;
+  int activity_hold_;
+  bool gate_enabled_;
+  float gate_threshold_, gate_close_threshold_, closed_gain_;
+  int gate_hold_;
+  const std::atomic<bool>* whisper_route_;
+  float gate_gain_;
+  float input_peak_ = 0;
+  bool gate_open_ = false;
+  int activity_frames_ = 0;
+  int gate_frames_ = 0;
 };
 
-class MicrophoneMeter final : public webrtc::AudioTransport {
+#ifndef __ANDROID__
+class MicrophoneRecorder final : public webrtc::AudioTransport {
 public:
+  MicrophoneRecorder(const webrtc::Environment& environment, const json& settings) {
+    webrtc::AudioProcessing::Config config;
+    config.high_pass_filter.enabled = true;
+    config.noise_suppression.enabled = settings.value("noiseSuppression", true);
+    config.noise_suppression.level = webrtc::AudioProcessing::Config::NoiseSuppression::kHigh;
+    config.gain_controller1.enabled = settings.value("automaticGain", true);
+    config.gain_controller1.mode = webrtc::AudioProcessing::Config::GainController1::kAdaptiveDigital;
+
+    auto builder = webrtc::BuiltinAudioProcessingBuilder(config);
+    auto controls = std::make_unique<CaptureControls>(settings);
+    controls_ = controls.get();
+    builder.SetCapturePostProcessing(std::move(controls));
+    processing_ = builder.Build(environment);
+    if (!processing_) throw std::runtime_error("Could not initialize microphone processing");
+    sample_.pcm.reserve(kSampleRate * 3);
+  }
+
   int32_t RecordedDataIsAvailable(const void* data, size_t frames, size_t,
-      size_t channels, uint32_t, uint32_t, int32_t, uint32_t current, bool, uint32_t& next) override {
+      size_t channels, uint32_t rate, uint32_t, int32_t, uint32_t current, bool, uint32_t& next) override {
     next = current;
-    const auto* samples = static_cast<const int16_t*>(data);
-    int value = peak.load();
-    for (size_t i = 0; i < frames * channels; ++i) value = std::max(value, std::abs(int(samples[i])));
-    peak.store(value);
+    if (sample_.pcm.size() >= kSampleRate * 3 || frames != rate / 100) return 0;
+    std::array<int16_t, kSampleRate / 100> block{};
+    const int status = processing_->ProcessStream(static_cast<const int16_t*>(data),
+        webrtc::StreamConfig(rate, channels), webrtc::StreamConfig(kSampleRate, 1), block.data());
+    if (status != 0) return status;
+    for (const auto value : block) sample_.pcm.push_back(value);
     return 0;
   }
   int32_t NeedMorePlayData(size_t frames, size_t bytes, size_t, uint32_t, void* data,
@@ -161,8 +248,21 @@ public:
     return 0;
   }
   void PullRenderData(int, int, size_t, size_t, void*, int64_t*, int64_t*) override {}
-  std::atomic<int> peak{0};
+
+  MicrophoneSample finish() {
+    if (sample_.pcm.empty()) throw std::runtime_error("No microphone samples were captured");
+    sample_.gate_peak = controls_->input_peak();
+    sample_.sample_rate = kSampleRate;
+    return std::move(sample_);
+  }
+
+private:
+  static constexpr uint32_t kSampleRate = 48000;
+  CaptureControls* controls_;
+  webrtc::scoped_refptr<webrtc::AudioProcessing> processing_;
+  MicrophoneSample sample_{};
 };
+#endif
 
 class ProbeAudio : public webrtc::webrtc_impl::AudioDeviceModuleDefault<webrtc::AudioDeviceModule> {
 public:
@@ -331,7 +431,7 @@ struct Voice::Impl {
     webrtc::scoped_refptr<webrtc::AudioProcessing> processing;
     if (!synthetic) {
       auto builder = webrtc::BuiltinAudioProcessingBuilder();
-      builder.SetCapturePostProcessing(std::make_unique<CaptureControls>(settings, whisper_route));
+      builder.SetCapturePostProcessing(std::make_unique<CaptureControls>(settings, &whisper_route));
       processing = builder.Build(environment);
     }
     factory = webrtc::CreatePeerConnectionFactory(network.get(), worker.get(), signaling.get(), adm,
@@ -514,28 +614,28 @@ rust::String audio_devices() {
   return rust::String(text.data(), text.size());
 }
 
-double test_microphone() {
+MicrophoneSample test_microphone() {
 #ifdef __ANDROID__
   throw std::runtime_error("The microphone test is unavailable on Android");
 #else
   const auto settings = audio_profile();
-  MicrophoneMeter meter;
   auto environment = webrtc::CreateEnvironment();
+  MicrophoneRecorder recorder(environment, settings);
   auto adm = system_audio(environment);
   if (!adm || adm->Init() != 0) throw std::runtime_error("System audio is unavailable");
   try {
     if (adm->SetRecordingDevice(uint16_t{0}) != 0) throw std::runtime_error("No microphone is available");
     select_device(*adm, true, settings.value("input", ""));
-    if (adm->RegisterAudioCallback(&meter) != 0 || adm->InitRecording() != 0 || adm->StartRecording() != 0)
+    if (adm->RegisterAudioCallback(&recorder) != 0 || adm->InitRecording() != 0 || adm->StartRecording() != 0)
       throw std::runtime_error("Could not open the microphone");
-    std::this_thread::sleep_for(2s);
+    std::this_thread::sleep_for(3s);
     adm->StopRecording();
     adm->Terminate();
   } catch (...) {
     adm->Terminate();
     throw;
   }
-  return std::min(1.0, meter.peak.load() / 32768.0 * settings.value("inputLevel", 100) / 100.0);
+  return recorder.finish();
 #endif
 }
 

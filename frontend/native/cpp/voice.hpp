@@ -7,6 +7,7 @@
 
 namespace korero {
 struct Rpc;
+struct MicrophoneSample;
 
 class Voice {
 public:
@@ -33,6 +34,6 @@ void set_audio_profile(rust::Str settings);
 void set_push_to_talk(bool pressed) noexcept;
 void set_whisper_to_talk(bool pressed) noexcept;
 rust::String audio_devices();
-double test_microphone();
+MicrophoneSample test_microphone();
 bool initialize_android(size_t env, size_t context) noexcept;
 }  // namespace korero
