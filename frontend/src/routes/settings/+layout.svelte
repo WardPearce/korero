@@ -1,7 +1,7 @@
 <script lang="ts">
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
-  import { ArrowLeft, Fingerprint, Headphones, UserRound } from "lucide-svelte";
+  import { ArrowLeft, Fingerprint, Headphones, UserRound } from "@lucide/svelte";
   let { children } = $props();
   const categories = [
     { path: "/settings", label: "Account", icon: UserRound },
@@ -12,7 +12,7 @@
 
 <div class="settings-shell">
   <nav class="settings-nav" aria-label="Settings categories">
-    <a href={resolve("/")}><ArrowLeft size={16} /> Workspace</a>
+    <a href={resolve("/")}><ArrowLeft size={16} aria-hidden="true" /> Back</a>
     {#each categories as { path, label, icon: Icon } (path)}
       <a href={resolve(path)} aria-current={page.route.id === path ? "page" : undefined}><Icon size={16} /> {label}</a>
     {/each}

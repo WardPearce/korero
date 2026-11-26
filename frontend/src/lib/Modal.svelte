@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { Dialog } from "bits-ui";
-  import { X } from "lucide-svelte";
+  import { X } from "@lucide/svelte";
   import type { Snippet } from "svelte";
+  import IconButton from "./IconButton.svelte";
 
   let {
     open = $bindable(false),
@@ -18,23 +18,33 @@
     icon?: Snippet;
     dismissible?: boolean;
   } = $props();
+
+  const id = $props.id();
+  let pressedBackdrop = false;
+
+  function syncDialog(dialog: HTMLDialogElement) {
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }
+
+  function dismiss() {
+    if (dismissible) open = false;
+  }
 </script>
 
-<Dialog.Root bind:open>
-  <Dialog.Portal>
-    <Dialog.Overlay class="dialog-overlay" />
-    <Dialog.Content
-      class="dialog-content"
-      escapeKeydownBehavior={dismissible ? "close" : "ignore"}
-      interactOutsideBehavior={dismissible ? "close" : "ignore"}
-    >
+<dialog {@attach syncDialog} class="app-dialog" aria-labelledby={id + "-title"} aria-describedby={id + "-description"}
+  oncancel={(event) => { event.preventDefault(); dismiss(); }}
+  onpointerdown={(event) => { pressedBackdrop = event.target === event.currentTarget; }}
+  onclick={(event) => { if (pressedBackdrop && event.target === event.currentTarget) dismiss(); }}>
+  <div class="dialog-body">
+    <header class="dialog-heading">
       {#if icon}<div class="dialog-icon">{@render icon()}</div>{/if}
+      <h2 id={id + "-title"}>{title}</h2>
       {#if dismissible}
-        <Dialog.Close class="icon-button dialog-close" aria-label="Close dialog"><X size={18} /></Dialog.Close>
+        <IconButton label="Close dialog" onclick={dismiss}><X size={18} aria-hidden="true" /></IconButton>
       {/if}
-      <Dialog.Title class="dialog-title">{title}</Dialog.Title>
-      <Dialog.Description class="dialog-description">{description}</Dialog.Description>
-      {@render children()}
-    </Dialog.Content>
-  </Dialog.Portal>
-</Dialog.Root>
+    </header>
+    <p id={id + "-description"} class="dialog-description">{description}</p>
+    {@render children()}
+  </div>
+</dialog>

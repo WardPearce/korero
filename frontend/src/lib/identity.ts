@@ -42,7 +42,7 @@ export async function generateIdentity() {
 }
 
 export async function importIdentity(file: File, passphrase: string, replace = false) {
-  if (file.size > 1024) throw new Error("Invalid Kōrero identity export.");
+  if (file.size > 1024) throw new Error("Invalid VNX.chat identity export.");
   const blob = await file.text();
   const identity = await (nativeApp() ? call<DeviceIdentity>("import_identity", { blob, passphrase }) : importBrowserIdentity(blob, passphrase));
   return saveIdentity(identity, replace);

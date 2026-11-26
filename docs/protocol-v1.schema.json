@@ -1255,6 +1255,99 @@
               ]
             },
             "type": {
+              "const": "invitation.update"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "invitationId"
+              ],
+              "properties": {
+                "invitationId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "expiresAt": {
+                  "anyOf": [
+                    {
+                      "minimum": 1,
+                      "maximum": 8640000000000000,
+                      "anyOf": [
+                        {
+                          "format": "integer",
+                          "default": 0,
+                          "type": "string"
+                        },
+                        {
+                          "minimum": 1,
+                          "maximum": 8640000000000000,
+                          "type": "integer"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "usesLeft": {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "maximum": 10000,
+                      "anyOf": [
+                        {
+                          "format": "integer",
+                          "default": 0,
+                          "type": "string"
+                        },
+                        {
+                          "minimum": 0,
+                          "maximum": 10000,
+                          "type": "integer"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
               "const": "invitation.revoke"
             },
             "payload": {
@@ -3100,6 +3193,58 @@
               "minLength": 1,
               "maxLength": 128,
               "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "invitationUpdate": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "expiresAt": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "maximum": 8640000000000000,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 8640000000000000,
+                  "type": "integer"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usesLeft": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "maximum": 10000,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 0,
+                  "maximum": 10000,
+                  "type": "integer"
+                }
+              ]
             },
             {
               "type": "null"

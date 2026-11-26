@@ -42,22 +42,26 @@ A fresh connection always uses a fresh ticket.
 
 Use the OS credential store for refresh tokens and their associated server and device
 identity. Keep access tokens and tickets in memory when possible. Remember the public
-server pin separately from credentials. Avoid webview storage, URLs, debug logs, and
-crash reports for all bearer credentials. On device logout remove its local credentials.
+server pin separately from credentials. Keep bearer credentials out of webview storage,
+HTTP request URLs, debug logs, and crash reports. On device logout remove its local credentials.
 
 ## Registration and setup
 
 `open` accepts registrations without an invitation. `invitation` requires a valid
 invitation. `admin` requires an invitation issued by an Administrator or Owner.
 `disabled` blocks new registrations. Existing identities can still sign in.
-Administrators can create invitations with an expiry and/or use limit and revoke them.
-Moderators can create and revoke their own invitations in open and invitation-only
-registration.
+Administrators can create multiple invitations, each with an optional expiry and
+registration limit, and edit or delete them. Moderators can manage their own
+invitations in open and invitation-only registration. Copy each invitation when
+you create it and share it privately as `server-address#invite-code`. Paste the full
+link into the app's server address field to join.
 The first Owner uses a separate, 15-minute, locally displayed setup token and an atomic
 bootstrap request. The bootstrap route returns `NOT_FOUND` once an Owner exists.
 Regular identities can enroll before the owner claims the server if registration
 permits it. A valid setup token can promote an existing identity to first Owner.
 
 An Owner or Administrator can require a shared password for identity login and
-registration. The server stores its Argon2id hash. Existing sessions continue
-until they expire or are revoked.
+registration. A valid invitation replaces the shared password for that registration.
+Registration mode and proof of identity still apply. A later sign-in to an existing
+account requires the shared password when configured. The server stores its Argon2id
+hash. Existing sessions continue until they expire or are revoked.

@@ -1,13 +1,16 @@
-import { createContext } from "svelte";
+import { createContext, type Snippet } from "svelte";
 import type { MemberRequest, VoiceState } from "./client";
 
 export type MobilePane = "servers" | "channels" | "room";
+export type RoomView = "chat" | "channelSettings" | "serverSettings";
 
 interface Workspace {
   readonly view: VoiceState;
   readonly serverOrigin: string;
   readonly serverTitle: string;
   readonly bannerImageUrl: string | null;
+  readonly canAdminister: boolean;
+  readonly serverSettings: Snippet | undefined;
   readonly channelBackgrounds: boolean;
   readonly channelWidth: number;
   readonly channelMax: number;
@@ -16,7 +19,9 @@ interface Workspace {
   actionError: string;
   selectedChannelId: string | null;
   mobilePane: MobilePane;
+  roomView: RoomView;
   showConnect(address?: string): void;
+  showServerSettings(): void;
   run(action: string, command: string, args?: Record<string, unknown>): Promise<boolean>;
   memberAction(request: MemberRequest): Promise<boolean>;
   memberVolume(accountId: string): number;

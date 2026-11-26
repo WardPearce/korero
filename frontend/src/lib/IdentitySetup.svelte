@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Fingerprint, Import, KeyRound } from "lucide-svelte";
+  import { Button, Input } from "gridworkdesign";
+  import { Fingerprint, Import, KeyRound } from "@lucide/svelte";
   import { messageFrom } from "./client";
   import { generateIdentity, importIdentity } from "./identity";
   import Modal from "./Modal.svelte";
@@ -42,24 +43,24 @@
 
 </script>
 
-<Modal {open} title="Set up your identity" description="Your username will be used when you join a new Kōrero server." dismissible={false}>
+<Modal {open} title="Set up your identity" description="Your username will be used when you join a new VNX.chat server." dismissible={false}>
   {#snippet icon()}<Fingerprint size={22} />{/snippet}
   {#if error || migrationError}<p class="form-error" role="alert">{error || migrationError}</p>{/if}
   <form class="dialog-form" onsubmit={submit}>
-    <label>Username<input autocomplete="nickname" required bind:value={username} disabled={busy} aria-describedby="username-length" /><small id="username-length">4–32 characters</small></label>
+    <label>Username<Input autocomplete="nickname" required bind:value={username} disabled={busy} aria-describedby="username-length" /><small id="username-length">4–32 characters</small></label>
     {#if hasIdentity}
-      <button class="primary-button justify-center" type="submit" disabled={busy}>Save username</button>
+      <Button variant="alternate" type="submit" disabled={busy}>Save username</Button>
     {:else if importing}
       <label>Identity backup<input type="file" accept=".identity" required disabled={busy} onchange={(event) => { file = event.currentTarget.files?.[0]; }} /></label>
-      <label>Backup passphrase<input type="password" required minlength={12} autocomplete="off" bind:value={passphrase} disabled={busy} /></label>
+      <label>Backup passphrase<Input type="password" required minlength={12} autocomplete="off" bind:value={passphrase} disabled={busy} /></label>
       <div class="dialog-actions">
-        <button class="secondary-button" type="button" disabled={busy} onclick={() => { importing = false; passphrase = ""; file = undefined; error = ""; }}>Back</button>
-        <button class="primary-button" type="submit" disabled={busy || !file}>Import identity</button>
+        <Button type="button" disabled={busy} onclick={() => { importing = false; passphrase = ""; file = undefined; error = ""; }}>Back</Button>
+        <Button variant="alternate" type="submit" disabled={busy || !file}>Import identity</Button>
       </div>
     {:else}
       <div class="identity-choices">
-        <button class="primary-button" type="submit" disabled={busy}><KeyRound size={18} /> Generate identity</button>
-        <button class="secondary-button" type="button" disabled={busy} onclick={() => { importing = true; error = ""; }}><Import size={18} /> Import identity</button>
+        <Button variant="alternate" type="submit" disabled={busy}><KeyRound size={18} /> Generate identity</Button>
+        <Button type="button" disabled={busy} onclick={() => { importing = true; error = ""; }}><Import size={18} /> Import identity</Button>
       </div>
     {/if}
   </form>

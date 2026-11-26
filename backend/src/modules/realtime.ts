@@ -786,6 +786,11 @@ export class Realtime {
         return this.auth.invitation(actor, expiresInSeconds, uses, expiresAt);
       }
       case "invitation.list": this.require(actor, "manageInvitations"); return this.auth.invitations(actor);
+      case "invitation.update": {
+        this.require(actor, "manageInvitations");
+        const { invitationId, ...changes } = request.payload;
+        return this.auth.updateInvitation(actor, invitationId, changes);
+      }
       case "invitation.revoke": this.require(actor, "manageInvitations"); this.auth.revokeInvitation(actor, request.payload.invitationId); break;
       case "admin.diagnostics": {
         this.require(actor, "viewAdmin");

@@ -24,12 +24,12 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | --- | --- | --- | --- |
 | GET `/health` | Public | — | `{status:"ok"}` |
 | GET `/ready` | Public | — | `{status:"ready"}`, or 503 with `{status:"unavailable"}` |
-| GET `/api/v1/server/info` | Public | — | `serverId, name, version, protocolVersions, registration, setupRequired, passwordRequired, serverAdministration, bannerImageUrl, fingerprint?` |
+| GET `/api/v1/server/info` | Public | — | `serverId, name, version, protocolVersions, registration, setupRequired, passwordRequired, invitationPasswordBypass, serverAdministration, bannerImageUrl, fingerprint?` |
 | GET `/api/v1/server/capabilities` | Optional | — | `protocolVersions, websocketPath, audio, targetAudioBitrate, heartbeatSeconds, maxWebSocketBytes, udp, tcp, textPersistence, iceServers?` |
 | POST `/api/v1/auth/identity/challenge` | Public | `operation, publicKey, deviceName, origin` | Single-use challenge |
 | POST `/api/v1/auth/identity/login` | Signed login challenge and server password where required | `id, signature, password?` | Account and new session |
 | POST `/api/v1/admin/bootstrap` | Setup token and signed bootstrap challenge | `token, displayName, deviceName, identity` | Account and session |
-| POST `/api/v1/auth/register` | Signed registration challenge, invitation and server password where required | `displayName, deviceName, identity, invitation?, password?` | Account and session |
+| POST `/api/v1/auth/register` | Signed registration challenge, registration policy, and server password when configured for registration without an invitation | `displayName, deviceName, identity, invitation?, password?` | Account and session |
 | POST `/api/v1/auth/refresh` | Refresh token in body | `refreshToken` | Rotated session credentials |
 | POST `/api/v1/auth/logout` | Access token | — | `{}` |
 | POST `/api/v1/auth/logout-all` | Access token | — | `{}` |
@@ -43,6 +43,9 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | POST `/api/v1/admin/roles` | Administrator or Owner | `name, permissions` | `{name, permissions}` |
 | PATCH `/api/v1/admin/roles/definition` | Administrator or Owner | `name, permissions` | `{name, permissions}` |
 | POST `/api/v1/admin/invitations` | `manageInvitations` | `expiresAt?, expiresInSeconds?, uses?` | `id, token, expiresAt, usesLeft` |
+| GET `/api/v1/admin/invitations` | `manageInvitations` | — | `invitations` with non-deleted records |
+| PATCH `/api/v1/admin/invitations/:id` | `manageInvitations` | `expiresAt?, usesLeft?` | Updated invitation record |
+| DELETE `/api/v1/admin/invitations/:id` | `manageInvitations` | — | `{}` |
 | PATCH `/api/v1/admin/banner` | `manageSettings` | `bannerImageUrl` as an HTTPS URL or `null` | `{bannerImageUrl}` |
 | PATCH `/api/v1/channels/order` | `editChannels` | `channelId, targetId, placement` as `before` or `after` | `{}` |
 | PATCH `/api/v1/admin/password` | `manageSettings` | `password` or `null` to remove it | `{passwordRequired}` |
@@ -62,6 +65,11 @@ between Moderator and Administrator. Channel ordering applies to sibling channel
 the caller can see and edit. Invitation expiration can use either a future Unix
 timestamp in milliseconds or a lifetime in seconds. Omitting both leaves the
 invitation without an expiration. Omitting `uses` allows unlimited registrations.
+Invitation updates leave omitted fields as they are and use `null` to remove an
+expiry or use limit. Setting `usesLeft` replaces the number of remaining uses.
+Invitation listings and update responses contain metadata only. When
+`invitationPasswordBypass` is advertised, a valid invite satisfies the shared
+password requirement for account creation.
 Configuration changes validate and save the active TOML file.
 They take effect after a server restart. A stale revision returns `CONFLICT`.
 
@@ -162,6 +170,7 @@ password or permission-override fields.
 | `moderation.unban` | `accountId` | `{}` |
 | `invitation.create` | `expiresAt?, expiresInSeconds?, uses?` | `{id, token, expiresAt, usesLeft}` |
 | `invitation.list` | — | Latest 100 invitation records without tokens or verifiers |
+| `invitation.update` | `invitationId, expiresAt?, usesLeft?` | Updated invitation record |
 | `invitation.revoke` | `invitationId` | `{}` |
 | `server.settings` | `name?, registration?` | `{}` |
 | `admin.diagnostics` | — | Counts, process CPU and memory, worker PID and native resource usage where available |

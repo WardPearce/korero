@@ -40,6 +40,7 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
   };
   const bearer = (request: Request) => auth.access(request.headers.get("authorization"));
   const requireSettings = (request: Request) => () => realtime.authorize(bearer(request).accountId, "manageSettings");
+  const manageInvitations = (request: Request) => realtime.authorize(bearer(request).accountId, "manageInvitations");
   return app
     .onRequest(({ request, set }) => {
       const path = new URL(request.url).pathname;
@@ -74,7 +75,7 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
     .get("/api/v1/server/info", () => ({ ...info, name: config.server.name, version: serverVersion, protocolVersions: [version],
       registration: config.server.registration, setupRequired: !auth.hasOwner(), identityAuthentication: true,
       identityEnrollment: true, channelBackgrounds: true, serverAdministration: true, passwordRequired: auth.passwordRequired(),
-      bannerImageUrl: realtime.bannerImageUrl }))
+      invitationPasswordBypass: true, bannerImageUrl: realtime.bannerImageUrl }))
     .get("/api/v1/server/capabilities", ({ request }) => {
       const access = request.headers.get("authorization");
       if (access) bearer(request);
@@ -144,9 +145,17 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
       realtime.setBanner(bearer(request).accountId, body.bannerImageUrl), { body: httpBodies.serverBanner })
     .patch("/api/v1/channels/order", ({ request, body }) =>
       realtime.reorderChannel(bearer(request).accountId, body.channelId, body.targetId, body.placement), { body: httpBodies.channelOrder })
+    .get("/api/v1/admin/invitations", ({ request }) => ({ invitations: auth.invitations(manageInvitations(request), false) }))
     .post("/api/v1/admin/invitations", ({ request, body: { expiresInSeconds, uses, expiresAt } }) =>
-      auth.invitation(realtime.authorize(bearer(request).accountId, "manageInvitations"), expiresInSeconds, uses, expiresAt),
+      auth.invitation(manageInvitations(request), expiresInSeconds, uses, expiresAt),
       { body: payloads["invitation.create"] })
+    .patch("/api/v1/admin/invitations/:id", ({ request, params, body }) =>
+      auth.updateInvitation(manageInvitations(request), params.id, body),
+      { params: t.Object({ id }), body: httpBodies.invitationUpdate })
+    .delete("/api/v1/admin/invitations/:id", ({ request, params }) => {
+      auth.revokeInvitation(manageInvitations(request), params.id);
+      return {};
+    }, { params: t.Object({ id }) })
     .patch("/api/v1/admin/password", ({ request, body }) => {
       const authorize = requireSettings(request);
       authorize();

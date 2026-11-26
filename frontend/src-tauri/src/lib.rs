@@ -31,6 +31,14 @@ struct HttpReply {
     body: Value,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VoiceStateResponse {
+    #[serde(flatten)]
+    view: View,
+    server_origin: Option<String>,
+}
+
 type CommandResult<T> = std::result::Result<T, String>;
 
 fn display(error: anyhow::Error) -> String {
@@ -114,11 +122,14 @@ async fn fetch(
     let endpoint = path.split('?').next().unwrap_or_default();
     let is_administration = matches!(
         (method.as_str(), endpoint),
-        ("GET", "/api/v1/admin/accounts" | "/api/v1/admin/configuration")
+        ("GET", "/api/v1/admin/accounts" | "/api/v1/admin/configuration" | "/api/v1/admin/invitations")
             | ("PATCH", "/api/v1/admin/roles" | "/api/v1/admin/roles/definition" | "/api/v1/admin/banner"
                 | "/api/v1/admin/configuration" | "/api/v1/admin/password" | "/api/v1/channels/order")
             | ("POST", "/api/v1/admin/invitations" | "/api/v1/admin/roles")
-    );
+    ) || (matches!(method.as_str(), "PATCH" | "DELETE")
+        && endpoint.strip_prefix("/api/v1/admin/invitations/").is_some_and(|id| {
+            id.len() == 36 && id.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+        }));
     ensure!(is_public || is_account || is_administration, "Unsupported client HTTP operation");
     let method = Method::from_bytes(method.as_bytes())?;
     let (status, body) = if is_public {
@@ -224,13 +235,19 @@ async fn logout(session: Option<Session>) {
 }
 
 #[tauri::command]
-async fn voice_state(state: State<'_, AppState>) -> CommandResult<View> {
+async fn voice_state(state: State<'_, AppState>) -> CommandResult<VoiceStateResponse> {
     let client = state.0.lock().await;
-    Ok(client
+    let view = client
         .controller
         .as_ref()
         .map(|controller| controller.state.borrow().clone())
-        .unwrap_or_else(View::offline))
+        .unwrap_or_else(View::offline);
+    let server_origin = client
+        .session
+        .as_ref()
+        .filter(|_| client.controller.is_some())
+        .map(|session| session.server.origin().to_owned());
+    Ok(VoiceStateResponse { view, server_origin })
 }
 
 async fn dispatch(state: &AppState, action: Action) -> CommandResult<()> {
@@ -253,7 +270,7 @@ async fn join_channel(
 ) -> CommandResult<()> {
     let _audio = state.1.lock().await;
     #[cfg(target_os = "android")]
-    let starting = !voice_state(state.clone()).await?.snapshot["channelId"].is_string();
+    let starting = !voice_state(state.clone()).await?.view.snapshot["channelId"].is_string();
     #[cfg(target_os = "android")]
     if starting {
         _app.state::<AndroidAudio>().start().await?;
@@ -359,7 +376,7 @@ fn push_to_talk(pressed: bool) {
 #[tauri::command]
 async fn microphone_test(state: State<'_, AppState>) -> CommandResult<f64> {
     let _profile = state.1.lock().await;
-    if voice_state(state.clone()).await?.snapshot["channelId"].is_string() {
+    if voice_state(state.clone()).await?.view.snapshot["channelId"].is_string() {
         return Err("Leave the voice channel before testing the microphone".into());
     }
     tauri::async_runtime::spawn_blocking(media::test_microphone).await
@@ -411,7 +428,7 @@ pub fn run() {
             authenticate_identity,
         ])
         .run(tauri::generate_context!())
-        .expect("Could not start the Kōrero desktop window");
+        .expect("Could not start the VNX.chat desktop window");
 }
 
 async fn local_identity<T: Send + 'static>(

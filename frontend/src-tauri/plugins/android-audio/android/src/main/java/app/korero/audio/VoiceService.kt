@@ -35,11 +35,11 @@ class VoiceService : Service() {
             val channel = "korero.voice"
             if (Build.VERSION.SDK_INT >= 26) {
                 getSystemService(NotificationManager::class.java).createNotificationChannel(
-                    NotificationChannel(channel, "Kōrero voice", NotificationManager.IMPORTANCE_LOW)
+                    NotificationChannel(channel, "VNX.chat voice", NotificationManager.IMPORTANCE_LOW)
                 )
             }
             val notification = NotificationCompat.Builder(this, channel)
-                .setContentTitle("Kōrero voice is active")
+                .setContentTitle("VNX.chat voice is active")
                 .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                 .setOngoing(true)
                 .setCategory(NotificationCompat.CATEGORY_CALL)

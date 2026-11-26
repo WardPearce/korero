@@ -85,6 +85,9 @@ test("invitations are single-use, expirable, revocable and required in admin reg
     expect(listed[0]).not.toHaveProperty("digest");
     await Bun.sleep(1050);
     expect((await register(expiring.token)).response.status).toBe(401);
+    expect(await ws.rpc("invitation.update", { invitationId: expiring.id, expiresAt: null, usesLeft: 1 }))
+      .toMatchObject({ id: expiring.id, expiresAt: null, usesLeft: 1 });
+    expect((await register(expiring.token)).response.status).toBe(201);
     ws.close();
   } finally { await server.cleanup(); }
 });

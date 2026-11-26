@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { ContextMenu } from "bits-ui";
-  import { Check, ChevronRight, HeadphoneOff, MicOff, Volume2 } from "lucide-svelte";
+  import { Button, SliderField } from "gridworkdesign";
+  import { HeadphoneOff, MicOff, Volume2 } from "@lucide/svelte";
   import { tick } from "svelte";
   import Avatar from "./Avatar.svelte";
   import ContextActions from "./ContextActions.svelte";
@@ -22,25 +22,32 @@
   let volume = $state(100);
 
   const actions = $derived.by(() => {
-    const actions: { label: string; select: () => void; danger?: boolean }[] = [];
-    if (canAdjustVolume) actions.push({ label: "User volume…", select: () => showDialog("volume") });
+    const actions: { label: string; onSelect: () => void; disabled?: boolean }[] = [];
+    if (canAdjustVolume) actions.push({ label: "User volume…", onSelect: () => showDialog("volume") });
     if (canModerate && channel.canMute) {
       actions.push(
         { label: member.adminMuted ? "Server unmute" : "Server mute",
-          select: () => act({ kind: "moderation.mute", payload: { connectionId: member.connectionId, muted: !member.adminMuted } }) },
+          onSelect: () => act({ kind: "moderation.mute", payload: { connectionId: member.connectionId, muted: !member.adminMuted } }) },
         { label: member.adminDeafened ? "Server undeafen" : "Server deafen",
-          select: () => act({ kind: "moderation.deafen", payload: { connectionId: member.connectionId, deafened: !member.adminDeafened } }) },
+          onSelect: () => act({ kind: "moderation.deafen", payload: { connectionId: member.connectionId, deafened: !member.adminDeafened } }) },
       );
     }
     if (canModerate && snapshot?.serverPermissions.includes("kick")) {
-      actions.push({ label: "Kick from server…", danger: true, select: () => showDialog("kick") });
+      actions.push({ label: "Kick from server…", onSelect: () => showDialog("kick") });
     }
     if (canModerate && snapshot?.serverPermissions.includes("ban")) {
-      actions.push({ label: "Ban from server…", danger: true, select: () => showDialog("ban") });
+      actions.push({ label: "Ban from server…", onSelect: () => showDialog("ban") });
+    }
+    for (const role of roles) {
+      actions.push({
+        label: member.role === role ? `Role: ${role} (current)` : `Set role: ${role}`,
+        disabled: member.role === role,
+        onSelect: () => act({ kind: "role.set", payload: { accountId: member.accountId, role } }),
+      });
     }
     return actions;
   });
-  const enabled = $derived(workspace.view.phase === "online" && !workspace.pending && Boolean(actions.length || roles.length));
+  const enabled = $derived(workspace.view.phase === "online" && !workspace.pending && Boolean(actions.length));
 
   function act(request: MemberRequest) {
     void workspace.memberAction(request);
@@ -65,28 +72,12 @@
   }
 </script>
 
-{#snippet roleMenu()}
-  <ContextMenu.Sub>
-    <ContextMenu.SubTrigger class="context-menu-item role-option">Roles <ChevronRight size={14} /></ContextMenu.SubTrigger>
-    <ContextMenu.Portal>
-      <ContextMenu.SubContent class="context-menu" sideOffset={4}>
-        {#each roles as role (role)}
-          <ContextMenu.Item class="context-menu-item role-option" disabled={member.role === role}
-            onSelect={() => act({ kind: "role.set", payload: { accountId: member.accountId, role } })}>
-            {role}{#if member.role === role}<Check size={14} aria-label="Current role" />{/if}
-          </ContextMenu.Item>
-        {/each}
-      </ContextMenu.SubContent>
-    </ContextMenu.Portal>
-  </ContextMenu.Sub>
-{/snippet}
-
 <li>
-  <ContextActions {actions} menu={roles.length ? roleMenu : undefined} disabled={!enabled} openOnClick>
-    {#snippet trigger({ props })}
+  <ContextActions {actions} disabled={!enabled} openOnClick>
+    {#snippet trigger(props)}
       <button {...props} type="button" class="tree-member member-target" tabindex={enabled ? 0 : -1}
         aria-haspopup={enabled ? "menu" : undefined}>
-        <Avatar name={member.displayName} class="avatar-small" {speaking} afk={member.afk} />
+        <Avatar name={member.displayName} small {speaking} afk={member.afk} />
         <span class="member-details">
           <span class="truncate" title={member.displayName}>{member.displayName}</span>
           {#if member.afk}
@@ -94,7 +85,6 @@
             {#if member.afkMessage}<span class="afk-message">{member.afkMessage}</span>{/if}
           {/if}
         </span>
-        {#if member.connectionId === snapshot?.connectionId}<small>you</small>{/if}
         {#if member.adminDeafened || member.deafened}
           <HeadphoneOff size={13} class="member-state" aria-label={member.adminDeafened ? "Server deafened" : "Deafened"} />
         {/if}
@@ -115,24 +105,15 @@
       : "Their devices will be disconnected and their account will be blocked from rejoining."}>
     <form class="dialog-form" onsubmit={confirm}>
       {#if dialog === "volume"}
-        <label>Volume <output>{volume}%</output>
-          <input type="range" min="0" max="100" step="1" bind:value={volume} disabled={Boolean(workspace.pending)} />
-        </label>
+        <SliderField label="Volume (%)" bind:value={volume} disabled={Boolean(workspace.pending)} />
       {/if}
       {#if workspace.actionError}<p class="form-error" role="alert">{workspace.actionError}</p>{/if}
       <div class="dialog-actions">
-        <button type="button" class="secondary-button" onclick={() => { dialogOpen = false; }}>Cancel</button>
-        <button type="submit" class="primary-button" disabled={Boolean(workspace.pending)}>
+        <Button type="button" onclick={() => { dialogOpen = false; }}>Cancel</Button>
+        <Button type="submit" variant="alternate" disabled={Boolean(workspace.pending)}>
           {dialog === "volume" ? "Apply" : dialog === "kick" ? "Kick" : "Ban"}
-        </button>
+        </Button>
       </div>
     </form>
   </Modal>
 {/if}
-
-<style>
-  .member-target { width: 100%; text-align: left; }
-  .member-target:not(:disabled):is(:hover, :focus-visible, [data-state="open"]) { background: var(--selected); }
-  :global(.context-menu-item.role-option) { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-  :global(.context-menu-item.role-option[data-disabled]) { color: var(--muted); cursor: default; }
-</style>

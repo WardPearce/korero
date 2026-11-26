@@ -20,7 +20,15 @@ type Ticket = { sessionId: string; expiresAt: number };
 type RevokedSession = { id: string };
 
 const invitationRow = sqliteTable("invitations", { rowId: integer("rowid") });
+const invitationDetails = {
+  id: invitations.id, createdBy: invitations.createdBy, expiresAt: invitations.expiresAt,
+  usesLeft: invitations.usesLeft, revokedAt: invitations.revokedAt,
+};
 const passwordKey = "serverPasswordHash";
+
+function invitationScope(actor: Account) {
+  return actor.role === "Administrator" || actor.role === "Owner" ? undefined : eq(invitations.createdBy, actor.id);
+}
 
 function getAccount(db: Queries, id: string): Account {
   const row = db.select({ id: accounts.id, displayName: accounts.displayName, createdAt: accounts.createdAt, role: accountRoles.role })
@@ -145,17 +153,18 @@ export class Auth {
 
   async register(name: string, device: string, identity: IdentityChallenge, invitation?: string, password?: string) {
     if (this.config.server.registration === "disabled") fail("FORBIDDEN");
-    const hash = await this.verifyPassword(password);
+    const hash = invitation ? undefined : await this.verifyPassword(password);
     return this.db.transaction((tx) => {
-      if (this.passwordHash() !== hash) fail("CONFLICT");
+      if (!invitation && this.passwordHash() !== hash) fail("CONFLICT");
       const mode = this.config.server.registration;
       if (mode === "disabled") fail("FORBIDDEN");
-      if (mode !== "open" || invitation) {
-        if (!invitation) fail("AUTH_FAILED");
+      if (mode !== "open" && !invitation) fail("AUTH_FAILED");
+      if (invitation) {
+        const now = Date.now();
         const row = tx.select({ id: invitations.id, usesLeft: invitations.usesLeft }).from(invitations).where(and(
           eq(invitations.digest, this.credentials.digest("invitation", invitation)),
           isNull(invitations.revokedAt),
-          or(isNull(invitations.expiresAt), gt(invitations.expiresAt, Date.now())),
+          or(isNull(invitations.expiresAt), gt(invitations.expiresAt, now)),
           or(isNull(invitations.usesLeft), gt(invitations.usesLeft, 0)),
           mode === "admin" ? eq(invitations.adminOnly, true) : undefined,
         )).get();
@@ -386,18 +395,34 @@ export class Auth {
     return { id, token, expiresAt: expiration, usesLeft: uses ?? null };
   }
 
-  invitations(actor: Account) {
-    const { id, createdBy, expiresAt, usesLeft, revokedAt } = invitations;
-    return this.db.select({ id, createdBy, expiresAt, usesLeft, revokedAt }).from(invitations)
-      .where(actor.role === "Administrator" || actor.role === "Owner" ? undefined : eq(createdBy, actor.id))
-      .orderBy(desc(invitationRow.rowId)).limit(100).all();
+  invitations(actor: Account, includeRevoked = true) {
+    const query = this.db.select(invitationDetails).from(invitations)
+      .where(and(invitationScope(actor), includeRevoked ? undefined : isNull(invitations.revokedAt)))
+      .orderBy(desc(invitationRow.rowId));
+    return includeRevoked ? query.limit(100).all() : query.all();
+  }
+
+  updateInvitation(actor: Account, id: string, changes: { expiresAt?: number | null; usesLeft?: number | null }) {
+    const { expiresAt, usesLeft } = changes;
+    if (expiresAt === undefined && usesLeft === undefined) fail("INVALID_REQUEST");
+    if (expiresAt != null && expiresAt <= Date.now()) {
+      throw new ProtocolError("INVALID_REQUEST", "Choose a future expiration date.");
+    }
+    return this.db.transaction((tx) => {
+      const updated = tx.update(invitations).set({ expiresAt, usesLeft })
+        .where(and(eq(invitations.id, id), isNull(invitations.revokedAt), invitationScope(actor)))
+        .returning(invitationDetails).get();
+      if (!updated) fail("NOT_FOUND");
+      audit(tx, actor.id, "invitation.updated", id);
+      return updated;
+    }, { behavior: "immediate" });
   }
 
   revokeInvitation(actor: Account, id: string) {
     this.db.transaction((tx) => {
       const revoked = tx.update(invitations).set({ revokedAt: Date.now() })
-        .where(and(eq(invitations.id, id), isNull(invitations.revokedAt),
-          actor.role === "Administrator" || actor.role === "Owner" ? undefined : eq(invitations.createdBy, actor.id))).returning({ id: invitations.id }).get();
+        .where(and(eq(invitations.id, id), isNull(invitations.revokedAt), invitationScope(actor)))
+        .returning({ id: invitations.id }).get();
       if (!revoked) fail("NOT_FOUND");
       audit(tx, actor.id, "invitation.revoked", id);
     }, { behavior: "immediate" });

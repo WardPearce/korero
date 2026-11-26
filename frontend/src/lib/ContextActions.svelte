@@ -1,39 +1,42 @@
 <script lang="ts">
-  import { ContextMenu } from "bits-ui";
+  import { ContextMenu } from "gridworkdesign";
   import type { Snippet } from "svelte";
 
-  let { trigger, actions, menu, disabled = false, openOnClick = false }: {
-    trigger: NonNullable<ContextMenu.TriggerProps["child"]>;
-    actions: { label: string; select: () => void; danger?: boolean }[];
-    menu?: Snippet;
+  type Action = { label: string; onSelect: () => void; disabled?: boolean };
+  type TriggerEvents = { onkeydown?: (event: KeyboardEvent) => void; onclick?: (event: MouseEvent) => void };
+
+  let { trigger, actions, disabled = false, openOnClick = false }: {
+    trigger: Snippet<[TriggerEvents]>;
+    actions: Action[];
     disabled?: boolean;
     openOnClick?: boolean;
   } = $props();
 
+  function openAtTrigger(target: EventTarget | null) {
+    if (!(target instanceof HTMLElement)) return;
+    const rect = target.getBoundingClientRect();
+    target.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true, cancelable: true, clientX: rect.left + 16, clientY: rect.bottom,
+    }));
+  }
+
   function openFromKeyboard(event: KeyboardEvent) {
     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
     event.preventDefault();
-    openAtTrigger(event.target as HTMLElement);
+    openAtTrigger(event.target);
   }
 
-  function openAtTrigger(target: HTMLElement) {
-    const rect = target.getBoundingClientRect();
-    target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true,
-      clientX: rect.left + 16, clientY: rect.bottom }));
+  function openFromClick(event: MouseEvent) {
+    openAtTrigger(event.currentTarget);
   }
 </script>
 
-<ContextMenu.Root>
-  <ContextMenu.Trigger child={trigger} disabled={disabled || (!actions.length && !menu)} onkeydown={openFromKeyboard}
-    onclick={openOnClick ? (event) => openAtTrigger(event.currentTarget) : undefined} />
-  <ContextMenu.Portal>
-    <ContextMenu.Content class="context-menu" sideOffset={4}>
-      {#each actions as action (action.label)}
-        <ContextMenu.Item class="context-menu-item" data-danger={action.danger} onSelect={action.select}>
-          {action.label}
-        </ContextMenu.Item>
-      {/each}
-      {@render menu?.()}
-    </ContextMenu.Content>
-  </ContextMenu.Portal>
-</ContextMenu.Root>
+{#if disabled || !actions.length}
+  {@render trigger({})}
+{:else}
+  <div class="context-row">
+    <ContextMenu items={actions}>
+      {@render trigger({ onkeydown: openFromKeyboard, onclick: openOnClick ? openFromClick : undefined })}
+    </ContextMenu>
+  </div>
+{/if}

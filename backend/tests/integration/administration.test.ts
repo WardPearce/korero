@@ -97,21 +97,47 @@ test("custom role grants, server presentation, and channel order are enforced an
   } finally { await server.cleanup(); }
 });
 
-test("invitations accept an exact expiration date and enforce a custom user limit", async () => {
+test("invitation links bypass the registration password and honor updated limits and deletion", async () => {
   const server = await fixture({ environment: { VOICE_SERVER_REGISTRATION: "invitation" } });
   try {
     const owner = await server.owner();
     const path = "/api/v1/admin/invitations";
+    const password = "private phrase";
+    await server.call("/api/v1/admin/password", { password }, owner.accessToken, "PATCH");
     const expiresAt = Date.now() + 3 * 86400000;
-    const { payload } = await server.call<{ token: string; expiresAt: number; usesLeft: number }>(path,
+    const { payload } = await server.call<{ id: string; token: string; expiresAt: number; usesLeft: number }>(path,
       { expiresAt, uses: 2 }, owner.accessToken);
     expect(payload).toMatchObject({ expiresAt, usesLeft: 2 });
+    const { payload: other } = await server.call<{ id: string; token: string }>(path, {}, owner.accessToken);
+    expect(other.token).not.toBe(payload.token);
+    const list = () => server.call<{ invitations: { id: string }[] }>(path, undefined, owner.accessToken);
+    const listed = (await list()).payload.invitations;
+    expect(listed.map(({ id }) => id)).toEqual([other.id, payload.id]);
+    expect(listed[0]).not.toHaveProperty("token");
     expect((await server.fail(path, { expiresAt: Date.now() - 1000 }, owner.accessToken)).status).toBe(400);
-    const register = async (displayName: string) => server.call("/api/v1/auth/register", {
-      displayName, deviceName: "Test", identity: await server.proof("register", testIdentity()), invitation: payload.token,
+    const key = testIdentity();
+    const register = async (displayName: string, invitation = payload.token, identity = testIdentity()) => server.call<Device>("/api/v1/auth/register", {
+      displayName, deviceName: "Test", identity: await server.proof("register", identity), invitation,
     });
-    expect((await register("Alice")).response.status).toBe(201);
+    expect((await register("Invalid", "a".repeat(43))).response.status).toBe(401);
+    const alice = await register("Alice", payload.token, key);
+    expect(alice.response.status).toBe(201);
+    expect((await register("Alice", payload.token, key)).response.status).toBe(409);
+    expect((await server.fail("/api/v1/auth/identity/login", await server.proof("login", key))).status).toBe(401);
+
+    const invitation = `${path}/${payload.id}`;
+    expect((await server.fail(invitation, { usesLeft: 10 }, alice.payload.accessToken, "PATCH")).status).toBe(403);
+    const edit = (body: { expiresAt?: number | null; usesLeft?: number | null }) =>
+      server.call(invitation, body, owner.accessToken, "PATCH");
+    expect((await edit({ expiresAt: null })).payload).toMatchObject({ expiresAt: null, usesLeft: 1 });
     expect((await register("Bobby")).response.status).toBe(201);
     expect((await register("Carol")).response.status).toBe(401);
+    expect((await edit({ usesLeft: null })).payload).toMatchObject({ expiresAt: null, usesLeft: null });
+    expect((await register("Carol")).response.status).toBe(201);
+    expect((await server.call(invitation, undefined, owner.accessToken, "DELETE")).response.status).toBe(200);
+    expect((await register("David")).response.status).toBe(401);
+    expect((await edit({ usesLeft: 1 })).response.status).toBe(404);
+    expect((await list()).payload.invitations.map(({ id }) => id)).toEqual([other.id]);
+    expect((await register("David", other.token)).response.status).toBe(201);
   } finally { await server.cleanup(); }
 });

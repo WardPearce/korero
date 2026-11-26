@@ -1,5 +1,3 @@
-# Kōrero
-
 A self-hosted, voice-first server with direct-IP HTTPS and WebSocket signalling, an Opus SFU,
 public-key accounts, persistent device sessions, hierarchical channels, moderation, and basic text.
 The [v1 protocol](docs/protocol.md) is open to independent clients. The Bun/Elysia server lives in

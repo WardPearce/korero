@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { sveltekit } from "@sveltejs/kit/vite";
-import tailwind from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 function defaultServer() {
@@ -15,7 +14,7 @@ function defaultServer() {
 }
 
 export default defineConfig({
-  plugins: [sveltekit(), tailwind()],
+  plugins: [sveltekit()],
   clearScreen: false,
   define: {
     "import.meta.env.VITE_DEFAULT_SERVER": JSON.stringify(defaultServer()),
@@ -24,5 +23,9 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 1420,
     strictPort: true,
+    // The native SDK and Cargo build artifacts are outside the frontend module graph.
+    watch: {
+      ignored: ["**/.native/**", "**/native/target/**", "**/src-tauri/target/**"],
+    },
   },
 });

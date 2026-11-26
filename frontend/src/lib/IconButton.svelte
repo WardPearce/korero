@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Tooltip } from "bits-ui";
+  import { Button } from "gridworkdesign";
   import type { Snippet } from "svelte";
 
   let {
@@ -19,17 +19,6 @@
   } = $props();
 </script>
 
-<Tooltip.Root>
-  <Tooltip.Trigger
-    aria-label={label}
-    aria-pressed={active}
-    {onclick}
-    {disabled}
-    class="icon-button {classes}"
-  >
-    {@render children()}
-  </Tooltip.Trigger>
-  <Tooltip.Portal>
-    <Tooltip.Content class="tooltip" sideOffset={8}>{label}</Tooltip.Content>
-  </Tooltip.Portal>
-</Tooltip.Root>
+<Button type="button" aria-label={label} title={label} aria-pressed={active} {onclick} {disabled} class="icon-button {classes}">
+  {@render children()}
+</Button>

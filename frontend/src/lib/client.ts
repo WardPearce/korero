@@ -85,6 +85,7 @@ export interface ServerInfo {
   channelBackgrounds?: boolean;
   serverAdministration?: boolean;
   passwordRequired?: boolean;
+  invitationPasswordBypass?: boolean;
   bannerImageUrl?: string | null;
   registration: "open" | "invitation" | "admin" | "disabled";
   setupRequired: boolean;
@@ -112,7 +113,7 @@ export function nativeApp() {
 
 export function call<T = void>(command: string, args?: Record<string, unknown>) {
   if (!nativeApp()) {
-    return Promise.reject(new Error("Open Kōrero in the desktop app to connect to a server."));
+    return Promise.reject(new Error("Open VNX.chat in the desktop app to connect to a server."));
   }
   return invoke<T>(command, args);
 }

@@ -23,13 +23,13 @@ export async function browserIdentity(): Promise<DeviceIdentity> {
 
 async function unpack(pkcs8: Uint8Array) {
   if (pkcs8.length !== 83 || !pkcs8Header.every((byte, index) => byte === pkcs8[index]) ||
-      pkcs8[48] !== 0x81 || pkcs8[49] !== 0x21 || pkcs8[50] !== 0) throw new Error("Invalid Kōrero identity key.");
+      pkcs8[48] !== 0x81 || pkcs8[49] !== 0x21 || pkcs8[50] !== 0) throw new Error("Invalid VNX.chat identity key.");
   const v1 = pkcs8.slice(0, 48);
   v1[1] = 46;
   v1[4] = 0;
   const key = await crypto.subtle.importKey("pkcs8", v1, "Ed25519", true, ["sign"]);
   const { x } = await crypto.subtle.exportKey("jwk", key);
-  if (!x || x !== encode(pkcs8.slice(51))) throw new Error("Invalid Kōrero identity key.");
+  if (!x || x !== encode(pkcs8.slice(51))) throw new Error("Invalid VNX.chat identity key.");
   return { key, publicKey: x };
 }
 
@@ -44,7 +44,7 @@ export async function importBrowserIdentity(blob: string, passphrase: string): P
   const bytes = decode(blob.trim());
   const offset = header.length;
   if (bytes.length !== offset + 16 + 12 + 83 + 16 || !header.every((byte, index) => bytes[index] === byte)) {
-    throw new Error("Invalid Kōrero identity export.");
+    throw new Error("Invalid VNX.chat identity export.");
   }
   const key = await wrappingKey(passphrase, bytes.slice(offset, offset + 16));
   const pkcs8 = await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.slice(offset + 16, offset + 28), additionalData: header },

@@ -18,6 +18,7 @@ const requestId = int(1, Number.MAX_SAFE_INTEGER);
 const identityProof = { id: token, signature: t.String({ pattern: "^[A-Za-z0-9_-]{86}$" }) };
 const enrollmentProof = object(identityProof);
 const password = text(128);
+const invitationExpiry = int(1, 8640000000000000);
 export const httpBodies = {
   identityChallenge: object({ operation: t.UnionEnum(["login", "register", "bootstrap"]),
     publicKey: t.String({ pattern: "^[A-Za-z0-9_-]{43}$" }), deviceName, origin: text(512) }),
@@ -27,6 +28,7 @@ export const httpBodies = {
   bootstrap: object({ token, displayName, deviceName, identity: enrollmentProof }),
   account: object({ displayName }),
   serverPassword: object({ password: nullable(password) }),
+  invitationUpdate: object({ expiresAt: optional(nullable(invitationExpiry)), usesLeft: optional(nullable(int(0, 10000))) }),
   serverConfiguration: object({ toml: text(65536, 0), revision: t.String({ pattern: "^[a-f0-9]{64}$" }) }),
   roleDefinition: object({ name: roleName, permissions: list(t.UnionEnum([...permissions]), permissions.length) }),
   channelOrder: object({ channelId: id, targetId: id, placement: t.UnionEnum(["before", "after"]) }),
@@ -101,9 +103,10 @@ export const payloads = {
   "moderation.kick": object({ accountId: id }),
   "moderation.ban": object({ accountId: id, expiresInSeconds: optional(int(1, 31536000)) }),
   "moderation.unban": object({ accountId: id }),
-  "invitation.create": object({ expiresInSeconds: optional(int(1, 31536000)), expiresAt: optional(int(1, 8640000000000000)),
+  "invitation.create": object({ expiresInSeconds: optional(int(1, 31536000)), expiresAt: optional(invitationExpiry),
     uses: optional(int(1, 10000)) }),
   "invitation.list": empty,
+  "invitation.update": object({ invitationId: id, ...httpBodies.invitationUpdate.properties }),
   "invitation.revoke": object({ invitationId: id }),
   "admin.diagnostics": empty,
   "admin.audit": object({ before: optional(int(1, Number.MAX_SAFE_INTEGER)) }),

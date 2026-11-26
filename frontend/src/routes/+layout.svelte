@@ -1,15 +1,12 @@
 <script lang="ts">
-  import "@fontsource-variable/dm-sans";
-  import "@fontsource-variable/manrope";
+  import { Button, Checkbox, Input, Root } from "gridworkdesign";
   import "../app.css";
 
   import { goto } from "$app/navigation";
-  import { resolve } from "$app/paths";
+  import { asset, resolve } from "$app/paths";
   import { page } from "$app/state";
-  import { Tooltip } from "bits-ui";
-  import { ArrowRight, AudioLines, Bookmark, Cable, ListTree, Plus, Server, Settings2, X } from "lucide-svelte";
+  import { ArrowRight, AudioLines, Bookmark, Cable, ListTree, Plus, Server, Settings2, X } from "@lucide/svelte";
   import { onMount } from "svelte";
-  import QuickAudio from "$lib/QuickAudio.svelte";
   import { AudioSettings, setAudioSettings } from "$lib/audio.svelte";
   import PaneDivider from "$lib/PaneDivider.svelte";
   import { getMemberVolumes, getUsername, migrateSavedServers, preferences, saveMemberVolumes, type SavedServer } from "$lib/preferences";
@@ -25,13 +22,14 @@
   } from "$lib/client";
   import { authenticateIdentity, identityError, loadIdentity } from "$lib/identity";
   import { browserServerOrigin, browserSession } from "$lib/browser-session";
-  import { setWorkspace, type MobilePane } from "$lib/workspace";
+  import { applyTheme, readTheme } from "$lib/theme";
+  import { setWorkspace, type MobilePane, type RoomView } from "$lib/workspace";
 
   let { children } = $props();
   const audio = setAudioSettings(new AudioSettings());
 
   type Target = { origin: string; info: ServerInfo };
-  const deviceName = "Kōrero";
+  const deviceName = "VNX.chat";
 
   let viewport = $state(1200);
   let savedRailWidth = $state(230);
@@ -69,7 +67,6 @@
   let setupToken = $state("");
   let serverCode = $state("");
   let serverPassword = $state("");
-  let administrationOpen = $state(false);
   let removingServer = $state.raw<SavedServer | null>(null);
   let removeServerOpen = $state(false);
   let removing = $state(false);
@@ -80,6 +77,7 @@
   let actionError = $state("");
   let selectedChannelId = $state<string | null>(null);
   let mobilePane = $state<MobilePane>("room");
+  let roomView = $state<RoomView>("chat");
 
   let me = $derived(view.snapshot?.account);
   let online = $derived(view.phase === "online");
@@ -87,9 +85,11 @@
   let canAdminister = $derived(online && Boolean(serverInfo?.serverAdministration) &&
     ["manageRoles", "manageSettings", "manageInvitations"].some((permission) => serverPermissions.includes(permission)));
   let onWorkspace = $derived(page.route.id === "/");
-  let serverTitle = $derived(serverInfo?.name ?? (serverOrigin ? shortHost(serverOrigin) : "No server connected"));
+  let serverTitle = $derived(serverInfo?.name ?? (serverOrigin ? shortHost(serverOrigin) : online ? "Connected server" : "No server connected"));
   let bannerImageUrl = $derived(view.snapshot?.bannerImageUrl === undefined ? serverInfo?.bannerImageUrl ?? null : view.snapshot.bannerImageUrl);
   let claimOwnership = $derived(Boolean(discovery?.info.setupRequired && setupToken.trim()));
+  let needsPassword = $derived(Boolean(discovery?.info.passwordRequired &&
+    !(discovery.info.invitationPasswordBypass && serverCode.trim())));
   let status = $derived(
     view.phase === "online" ? "Connected" : view.phase === "connecting" ? "Connecting" :
       view.phase === "reconnecting" ? "Reconnecting" : view.phase === "error" ? "Connection lost" : "Offline",
@@ -100,6 +100,8 @@
     get serverOrigin() { return serverOrigin; },
     get serverTitle() { return serverTitle; },
     get bannerImageUrl() { return bannerImageUrl; },
+    get canAdminister() { return canAdminister; },
+    get serverSettings() { return roomView === "serverSettings" && canAdminister ? serverSettings : undefined; },
     get channelBackgrounds() { return Boolean(serverInfo?.channelBackgrounds); },
     get channelWidth() { return channelWidth; },
     get channelMax() { return channelMax; },
@@ -111,7 +113,10 @@
     set selectedChannelId(value) { selectedChannelId = value; },
     get mobilePane() { return mobilePane; },
     set mobilePane(value) { mobilePane = value; },
+    get roomView() { return roomView; },
+    set roomView(value) { roomView = value; },
     showConnect,
+    showServerSettings,
     run,
     memberAction,
     memberVolume(accountId) { return memberVolumes[accountId] ?? 100; },
@@ -121,6 +126,7 @@
   });
 
   onMount(() => {
+    applyTheme(readTheme());
     void audio.load();
     void Promise.all([migrateSavedServers().then(() => preferences.servers.toArray()), preferences.local.bulkGet(["rail", "channel"])])
       .then(([servers, [rail, channel]]) => {
@@ -147,8 +153,14 @@
     }).then(async (stop) => {
       if (!mounted) return stop();
       unlisten = stop;
-      const state = await call<VoiceState>("voice_state");
-      if (mounted && !receivedEvent) applyView(state);
+      const state = await call<VoiceState & { serverOrigin?: string | null }>("voice_state");
+      if (!mounted) return;
+      if (!receivedEvent) applyView(state);
+      const origin = state.serverOrigin;
+      if (!origin || serverOrigin || connectBusy || view.phase === "offline") return;
+      serverOrigin = origin;
+      const info = await getServerInfo(origin);
+      if (mounted && serverOrigin === origin && !serverInfo) serverInfo = info;
     }).catch((error: unknown) => {
       if (mounted) actionError = messageFrom(error);
     });
@@ -208,24 +220,29 @@
   }
 
   async function discoverServerInfo(origin: string) {
-    administrationOpen = false;
+    roomView = "chat";
     serverInfo = null;
     serverOrigin = "";
     selectedChannelId = null;
-    const result = await apiFor(origin).server.info.get();
-    if (result.error) throw requestError(result.error);
-    if (!result.data || !("serverId" in result.data)) throw new Error("This server did not return Kōrero server details.");
-    const target = { origin, info: result.data };
+    const target = { origin, info: await getServerInfo(origin) };
     discovery = target;
     if (!target.info.identityAuthentication || !target.info.identityEnrollment) {
-      throw new Error("Update this server to a Kōrero version that supports identity sign-in.");
+      throw new Error("Update this server to a VNX.chat version that supports identity sign-in.");
     }
-    if (target.info.setupRequired || target.info.passwordRequired) {
+    if (target.info.setupRequired || needsPassword) {
       accessPrompt = true;
       connectOpen = true;
       return;
     }
-    await signIn(target);
+    if (serverCode) await enroll(target);
+    else await signIn(target);
+  }
+
+  async function getServerInfo(origin: string): Promise<ServerInfo> {
+    const result = await apiFor(origin).server.info.get();
+    if (result.error) throw requestError(result.error);
+    if (!result.data || !("serverId" in result.data)) throw new Error("This server did not return VNX.chat server details.");
+    return result.data;
   }
 
   async function signIn(target: Target) {
@@ -258,13 +275,18 @@
     connectBusy = true;
     connectError = "";
     try {
+      const [address, invitation, ...extra] = discoverAddress.trim().split("#");
+      if (extra.length || (invitation !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(invitation))) {
+        throw new Error("Enter the full invitation link, including the code after #.");
+      }
+      serverCode = invitation ?? "";
       if (!nativeApp()) {
-        const origin = browserServerOrigin(discoverAddress.trim());
+        const origin = browserServerOrigin(address);
         await browserSession.select(origin);
         await discoverServerInfo(origin);
         return;
       }
-      const contact = await call<CertificateContact>("inspect_server", { address: discoverAddress.trim() });
+      const contact = await call<CertificateContact>("inspect_server", { address });
       const previous = (await preferences.trust.get(contact.origin))?.fingerprint;
       if (previous === contact.fingerprint) await loadServer(contact, previous);
       else if (!previous && contact.publiclyTrusted) await loadServer(contact, null);
@@ -302,7 +324,7 @@
     connectBusy = true;
     connectError = "";
     try {
-      if (claimOwnership) await enroll(discovery);
+      if (claimOwnership || serverCode.trim()) await enroll(discovery);
       else await signIn(discovery);
     } catch (error) {
       connectError = messageFrom(error);
@@ -315,6 +337,9 @@
     const code = serverCode.trim();
     const password = serverPassword || undefined;
     const bootstrap = claimOwnership;
+    if (!bootstrap && target.info.registration === "disabled") {
+      throw new Error("This server has closed registration for new identities.");
+    }
     const result = await authenticateIdentity(target.origin, target.info.serverId, deviceName,
       bootstrap
         ? { operation: "bootstrap", displayName: username, token: setupToken.trim() }
@@ -330,11 +355,21 @@
       }
     }
     if (result.status === 409) {
+      if (code && target.info.passwordRequired && !password) {
+        serverCode = "";
+        accessPrompt = true;
+        connectOpen = true;
+        connectError = "This identity already has an account. Enter the server password to sign in.";
+        return;
+      }
       const login = await authenticateIdentity(target.origin, target.info.serverId, deviceName, { operation: "login", password });
       if (login.status === 200) {
         await finishConnection(target);
         return;
       }
+    }
+    if (!bootstrap && code && result.status === 401 && !needsPassword) {
+      throw new Error("This invitation is invalid, expired, or out of uses.");
     }
     if (result.status !== 201) throw identityError(result);
     const account = result.body;
@@ -370,6 +405,7 @@
     connectOpen = false;
     openWorkspace("channels");
     connectError = "";
+    discoverAddress = target.origin;
     serverCode = "";
     setupToken = "";
     serverPassword = "";
@@ -395,7 +431,7 @@
       if (nativeApp()) return call(command, args);
       if (command === "disconnect") return browserSession.disconnect();
       if (command === "save_channel") return browserSession.saveChannel(args?.payload as Record<string, unknown>);
-      throw new Error("Open Kōrero in the desktop app to use voice.");
+      throw new Error("Open VNX.chat in the desktop app to use voice.");
     });
   }
 
@@ -425,7 +461,7 @@
   async function disconnect() {
     if (connectBusy) return false;
     if (!await run("disconnect", "disconnect")) return false;
-    administrationOpen = false;
+    roomView = "chat";
     serverInfo = null;
     serverOrigin = "";
     selectedChannelId = null;
@@ -433,12 +469,23 @@
     return true;
   }
 
+  function showServerSettings() {
+    if (!canAdminister || connectBusy || pending) return;
+    roomView = "serverSettings";
+    openWorkspace("room");
+  }
+
+  function showChat() {
+    roomView = "chat";
+    openWorkspace("room");
+  }
+
   function serverActions(entry: SavedServer) {
     const actions = [];
     if (entry.origin === serverOrigin && canAdminister) {
-      actions.push({ label: "Server administration", select: () => { administrationOpen = true; } });
+      actions.push({ label: "Server administration", onSelect: showServerSettings });
     }
-    actions.push({ label: "Remove server", danger: true, select: () => {
+    actions.push({ label: "Remove server", onSelect: () => {
       removingServer = entry;
       removeError = "";
       removeServerOpen = true;
@@ -465,36 +512,35 @@
 </script>
 
 <svelte:head>
-  <title>Kōrero</title>
+  <title>VNX.chat</title>
 </svelte:head>
-
-{#snippet brand()}
-  <span class="brand-name">kōrero<span>.</span></span>
-{/snippet}
 
 <svelte:window bind:innerWidth={viewport} onkeydown={audio.talkKeyDown} onkeyup={audio.talkKeyUp} onblur={audio.stopTalking} />
 
-<Tooltip.Provider delayDuration={350}>
+<Root>
   <div class="shell" data-pane={onWorkspace ? mobilePane : "room"} data-workspace={onWorkspace} style:--rail-width={railWidth + "px"} style:--channel-width={channelWidth + "px"}>
     <aside id="server-rail" class="server-rail" aria-label="Servers">
       <div class="rail-top">
-        <div class="brand">{@render brand()}</div>
-        <button class="rail-connect" disabled={!identityReady || connectBusy || Boolean(pending)} onclick={() => showConnect()}><Plus size={18} /> Connect to server</button>
+        <div class="brand" role="img" aria-label="VNX.chat">
+          <span class="brand-logo" style:--brand-logo={`url("${asset("/vnx-logo.svg")}")`}></span><span class="brand-domain">.chat</span>
+        </div>
+        <Button class="rail-connect" disabled={!identityReady || connectBusy || Boolean(pending)} onclick={() => showConnect()}><Plus size={18} /> Connect to server</Button>
         <section class="rail-section">
           <div class="rail-section-label"><span>Servers</span></div>
           {#if serverOrigin}
             <div class="active-server">
               <ContextActions actions={serverActions({ origin: serverOrigin, name: serverTitle })} disabled={connectBusy || Boolean(pending)}>
-                {#snippet trigger({ props })}
-                  <button {...props} tabindex="0" class="rail-server current" onclick={() => openWorkspace("channels")}>
-                    <span class="rail-tile"><Server size={16} strokeWidth={1.8} /></span>
-                    <span class="min-w-0"><strong class="truncate">{serverTitle}</strong><small class="truncate">{shortHost(serverOrigin)}</small></span>
+                {#snippet trigger(props)}
+                  <button {...props} type="button" class="rail-server" onclick={() => openWorkspace("channels")}>
+                    <span class="shrinkable"><strong class="truncate">{serverTitle}</strong><small class="truncate">{shortHost(serverOrigin)}</small></span>
                     <span class="connection-dot" data-online={online}></span>
                   </button>
                 {/snippet}
               </ContextActions>
-              <IconButton label={`Disconnect from ${serverTitle}`} class="disconnect-server" disabled={connectBusy || Boolean(pending)}
-                onclick={() => { void disconnect(); }}><X size={16} /></IconButton>
+              <button type="button" class="disconnect-server" aria-label={`Disconnect from ${serverTitle}`} title="Disconnect"
+                disabled={connectBusy || Boolean(pending)} onclick={() => { void disconnect(); }}>
+                <X size={16} aria-hidden="true" />
+              </button>
             </div>
           {:else}
             <p class="rail-empty">No active connection</p>
@@ -504,10 +550,9 @@
           <div class="rail-section-label"><span>Saved servers</span><Bookmark size={14} strokeWidth={1.6} /></div>
           {#each savedServers as entry (entry.origin)}
             <ContextActions actions={serverActions(entry)} disabled={connectBusy || Boolean(pending)}>
-              {#snippet trigger({ props })}
+              {#snippet trigger(props)}
             <button {...props} tabindex="0" class="rail-server" onclick={() => selectBookmark(entry.origin)}>
-              <span class="rail-tile"><Server size={17} strokeWidth={1.8} /></span>
-              <span class="min-w-0"><strong class="truncate">{entry.name}</strong>
+              <span class="shrinkable"><strong class="truncate">{entry.name}</strong>
                 {#if connectBusy && bookmarkOrigin === entry.origin && !connectOpen}<small role="status">Connecting…</small>{/if}
               </span>
             </button>
@@ -521,12 +566,11 @@
       <div class="rail-bottom">
         <div class="account-line">
           <Avatar name={me?.displayName ?? username} />
-          <div class="min-w-0 grow">
-            <strong class="block truncate">{me?.displayName ?? (username || "Guest")}</strong>
+          <div class="flex-content">
+            <strong class="truncate">{me?.displayName ?? (username || "Guest")}</strong>
             <span class="account-status"><span class="connection-dot" data-online={online}></span>{status}</span>
           </div>
 
-          <QuickAudio />
           <a class="icon-button rail-icon" href={resolve("/settings")} aria-label="Account settings" aria-current={page.route.id === "/settings" ? "page" : undefined} title="Account settings"><Settings2 size={17} /></a>
         </div>
       </div>
@@ -539,74 +583,78 @@
     <nav class="mobile-nav" aria-label="Workspace navigation">
       <button aria-current={onWorkspace && mobilePane === "servers" ? "page" : undefined} onclick={() => openWorkspace("servers")}><Server size={18} /> Servers</button>
       <button aria-current={onWorkspace && mobilePane === "channels" ? "page" : undefined} onclick={() => openWorkspace("channels")}><ListTree size={18} /> Channels</button>
-      <button aria-current={onWorkspace && mobilePane === "room" ? "page" : undefined} onclick={() => openWorkspace("room")}><AudioLines size={18} /> Chat</button>
+      <button aria-current={onWorkspace && mobilePane === "room" && roomView === "chat" ? "page" : undefined} onclick={showChat}><AudioLines size={18} /> Chat</button>
       <a href={resolve("/settings")} aria-current={!onWorkspace ? "page" : undefined}><Settings2 size={18} /> Settings</a>
     </nav>
   </div>
-</Tooltip.Provider>
 
-<IdentitySetup open={identitySetupOpen} {hasIdentity} migrationError={identityLoadError}
-  oncomplete={(name) => { username = name; identityReady = true; identitySetupOpen = false; }} />
+  <IdentitySetup open={identitySetupOpen} {hasIdentity} migrationError={identityLoadError}
+    oncomplete={(name) => { username = name; identityReady = true; identitySetupOpen = false; }} />
 
-<Modal bind:open={connectOpen} title={trustPrompt ? (trustPrompt.previous ? "Server certificate changed" : "Trust this server?") : discovery ? discovery.info.name : "Connect to a server"} description={discovery ? shortHost(discovery.origin) : "Enter the address of a Kōrero server."} dismissible={!connectBusy}>
-  {#snippet icon()}<Cable size={21} />{/snippet}
-  {#if connectError}<p class="form-error" role="alert">{connectError}</p>{/if}
-  {#if trustPrompt}
-    <div class="dialog-form">
-      <p>{trustPrompt.origin}</p>
-      <p>Compare the certificate fingerprint with the one provided by your server operator.</p>
-      {#if trustPrompt.previous}
-        <div><small>Previously trusted SHA-256</small><div class="key-display"><code>{trustPrompt.previous}</code></div></div>
-      {/if}
-      <div><small>Presented SHA-256</small><div class="key-display"><code>{trustPrompt.fingerprint}</code></div></div>
-      <div class="dialog-actions">
-        <button class="secondary-button" disabled={connectBusy} onclick={() => { trustPrompt = null; }}>Back</button>
-        <button class="primary-button" disabled={connectBusy} onclick={approveTrust}>Trust and continue</button>
+  <Modal bind:open={connectOpen} title={trustPrompt ? (trustPrompt.previous ? "Server certificate changed" : "Trust this server?") : discovery ? discovery.info.name : "Connect to a server"} description={discovery ? shortHost(discovery.origin) : "Paste an invitation link or enter a server address."} dismissible={!connectBusy}>
+    {#snippet icon()}<Cable size={21} />{/snippet}
+    {#if connectError}<p class="form-error" role="alert">{connectError}</p>{/if}
+    {#if trustPrompt}
+      <div class="dialog-form">
+        <p>{trustPrompt.origin}</p>
+        <p>Compare the certificate fingerprint with the one provided by your server operator.</p>
+        {#if trustPrompt.previous}
+          <div><small>Previously trusted SHA-256</small><div class="key-display"><code>{trustPrompt.previous}</code></div></div>
+        {/if}
+        <div><small>Presented SHA-256</small><div class="key-display"><code>{trustPrompt.fingerprint}</code></div></div>
+        <div class="dialog-actions">
+          <Button disabled={connectBusy} onclick={() => { trustPrompt = null; }}>Back</Button>
+          <Button variant="alternate" disabled={connectBusy} onclick={approveTrust}>Trust and continue</Button>
+        </div>
       </div>
+    {:else if discovery && accessPrompt}
+      <form class="dialog-form" onsubmit={submitServerCode}>
+        {#if discovery.info.setupRequired}
+          <label>Server setup token
+            <Input type="password" autocomplete="off" spellcheck="false" bind:value={setupToken} />
+          </label>
+          <p class="field-hint">Enter the token to claim ownership, or leave it blank to connect as a member.</p>
+        {/if}
+        {#if needsPassword && !claimOwnership}
+          <label>Server password<Input type="password" autocomplete="current-password" required maxlength={128} bind:value={serverPassword} /></label>
+        {/if}
+        {#if invitationRequired && !claimOwnership}
+          <label>Invitation code
+            <Input type="password" required autocomplete="off" spellcheck="false" bind:value={serverCode} />
+          </label>
+        {/if}
+        <div class="dialog-actions">
+          <Button type="button" disabled={connectBusy} onclick={() => resetConnect(discoverAddress)}>Back</Button>
+          <Button type="submit" variant="alternate" disabled={connectBusy}>{connectBusy ? "Connecting…" : claimOwnership ? "Set up server" : "Connect"} <ArrowRight size={16} /></Button>
+        </div>
+      </form>
+    {:else}
+      <form class="dialog-form" onsubmit={discover}>
+        <label>Server address or invitation link<Input required autocomplete="off" inputmode="url" placeholder="example.com:8443" spellcheck="false" disabled={connectBusy} bind:value={discoverAddress} /></label>
+        <Checkbox label="Save this server address" bind:checked={remembered} />
+        <Button variant="alternate" type="submit" disabled={connectBusy}>{connectBusy ? "Connecting…" : "Connect"} <ArrowRight size={16} /></Button>
+      </form>
+    {/if}
+  </Modal>
+
+  <Modal bind:open={removeServerOpen} title="Remove server?" description={removingServer?.name ?? "Remove this server from your list."} dismissible={!removing}>
+    {#if removeError}<p class="form-error" role="alert">{removeError}</p>{/if}
+    <div class="dialog-actions">
+      <Button onclick={() => { removeServerOpen = false; }} disabled={removing}>Cancel</Button>
+      <Button variant="alternate" onclick={removeServer} disabled={removing}>{removing ? "Removing…" : "Remove server"}</Button>
     </div>
-  {:else if discovery && accessPrompt}
-    <form class="dialog-form" onsubmit={submitServerCode}>
-      {#if discovery.info.setupRequired}
-        <label>Server setup token
-          <input type="password" autocomplete="off" spellcheck="false" bind:value={setupToken} />
-        </label>
-        <p class="field-hint">Enter the token to claim ownership, or leave it blank to connect as a member.</p>
-      {/if}
-      {#if discovery.info.passwordRequired && !claimOwnership}
-        <label>Server password<input type="password" autocomplete="current-password" required maxlength="128" bind:value={serverPassword} /></label>
-      {/if}
-      {#if invitationRequired && !claimOwnership}
-        <label>Invitation code
-          <input type="password" required autocomplete="off" spellcheck="false" bind:value={serverCode} />
-        </label>
-      {/if}
-      <div class="dialog-actions">
-        <button class="secondary-button" type="button" disabled={connectBusy} onclick={() => resetConnect(discoverAddress)}>Back</button>
-        <button type="submit" class="primary-button" disabled={connectBusy}>{connectBusy ? "Connecting…" : claimOwnership ? "Set up server" : "Connect"} <ArrowRight size={16} /></button>
-      </div>
-    </form>
-  {:else}
-    <form class="dialog-form" onsubmit={discover}>
-      <label>Server address<input required autocomplete="off" inputmode="url" placeholder="example.com:8443" spellcheck="false" bind:value={discoverAddress} /></label>
-      <label class="checkbox-label"><input type="checkbox" bind:checked={remembered} /> Save this server address</label>
-      <button class="primary-button justify-center" type="submit" disabled={connectBusy}>{connectBusy ? "Connecting…" : "Connect"} <ArrowRight size={16} /></button>
-    </form>
+  </Modal>
+
+</Root>
+
+{#snippet serverSettings()}
+  {#if serverInfo}
+    {#key serverOrigin}
+      <ServerAdministration origin={serverOrigin} title={serverTitle} permissions={serverPermissions}
+        bannerSupported={serverInfo.bannerImageUrl !== undefined} {bannerImageUrl} onclose={showChat}
+        passwordRequired={Boolean(serverInfo.passwordRequired)} onPasswordChange={(origin, passwordRequired) => {
+          if (serverInfo && origin === serverOrigin) serverInfo = { ...serverInfo, passwordRequired };
+        }} />
+    {/key}
   {/if}
-</Modal>
-
-<Modal bind:open={removeServerOpen} title="Remove server?" description={removingServer?.name ?? "Remove this server from your list."} dismissible={!removing}>
-  {#if removeError}<p class="form-error" role="alert">{removeError}</p>{/if}
-  <div class="dialog-actions">
-    <button class="secondary-button" onclick={() => { removeServerOpen = false; }} disabled={removing}>Cancel</button>
-    <button class="primary-button" onclick={removeServer} disabled={removing}>{removing ? "Removing…" : "Remove server"}</button>
-  </div>
-</Modal>
-
-{#if administrationOpen && serverInfo && canAdminister}
-  <ServerAdministration bind:open={administrationOpen} origin={serverOrigin} title={serverTitle} permissions={serverPermissions}
-    bannerSupported={serverInfo.bannerImageUrl !== undefined} {bannerImageUrl}
-    passwordRequired={Boolean(serverInfo.passwordRequired)} onPasswordChange={(passwordRequired) => {
-      if (serverInfo) serverInfo = { ...serverInfo, passwordRequired };
-    }} />
-{/if}
-
+{/snippet}

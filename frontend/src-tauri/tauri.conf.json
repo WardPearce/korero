@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Kōrero",
+  "productName": "VNX.chat",
   "version": "0.1.0",
   "identifier": "app.korero.voice",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Kōrero",
+        "title": "VNX.chat",
         "width": 1330,
         "height": 860,
         "minWidth": 375,

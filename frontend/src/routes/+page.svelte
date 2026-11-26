@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { DropdownMenu } from "bits-ui";
+  import { BitsConfig } from "bits-ui";
+  import { Button, Checkbox, DropdownMenu, Input, SelectField, Textarea } from "gridworkdesign";
   import {
     ChevronDown, CircleAlert, DoorOpen, Headphones,
-    HeadphoneOff, ImageIcon, ListTree, LockKeyhole, MessageCircle, Mic, MicOff, Plus, Search,
-    Send, Server,
-  } from "lucide-svelte";
+    HeadphoneOff, ListTree, LockKeyhole, MessageCircle, Mic, MicOff, Pencil, Plus, Search,
+    Send, Server, Settings2, X,
+  } from "@lucide/svelte";
   import { tick } from "svelte";
   import Avatar from "$lib/Avatar.svelte";
   import ChannelMember from "$lib/ChannelMember.svelte";
@@ -12,6 +13,7 @@
   import IconButton from "$lib/IconButton.svelte";
   import Modal from "$lib/Modal.svelte";
   import PaneDivider from "$lib/PaneDivider.svelte";
+  import QuickAudio from "$lib/QuickAudio.svelte";
   import { messageTime, nativeApp, type Channel } from "$lib/client";
   import { getWorkspace } from "$lib/workspace";
 
@@ -22,7 +24,8 @@
   const serverTitle = $derived(workspace.serverTitle);
   const pending = $derived(workspace.pending);
   const actionError = $derived(workspace.actionError);
-  let channelFormOpen = $state(false);
+  let createChannelOpen = $state(false);
+  let channelForm = $state<HTMLFormElement>();
   let editingChannel = $state.raw<Channel | null>(null);
   let newChannelName = $state("");
   let channelDescription = $state("");
@@ -69,10 +72,20 @@
     }
     return true;
   }));
-  let voiceLabel = $derived(
-    ownMember?.afk ? "AFK" : view.voice === "active" ? "Voice active" : view.voice === "muted" ? "Microphone muted" :
-      view.voice === "deafened" ? "Deafened" : view.voice === "error" ? "Audio unavailable" : isInRoom ? "Voice connecting" : "Ready to join",
-  );
+  const topLevel = "Top level";
+  const parentOptions = $derived.by(() => {
+    const options = [{ id: "", label: topLevel, value: topLevel }];
+    const labels = new Set([topLevel]);
+    for (const parent of possibleParents) {
+      // Gridwork displays the value before its menu items have mounted.
+      let label = parent.name;
+      for (let number = 2; labels.has(label); number++) label = `${parent.name} (${number})`;
+      labels.add(label);
+      options.push({ id: parent.id, label, value: label });
+    }
+    return options;
+  });
+  const selectedParent = $derived(parentOptions.find(({ id }) => id === parentChannelId)?.value ?? "");
 
   $effect.pre(() => {
     // Measure the old viewport before Svelte inserts messages.
@@ -99,6 +112,7 @@
   }
 
   function selectChannel(channel: Channel) {
+    workspace.roomView = "chat";
     workspace.selectedChannelId = channel.id;
     workspace.mobilePane = "room";
     workspace.actionError = "";
@@ -128,7 +142,11 @@
   }
 
   function showChannelForm(channel: Channel | null = null) {
-    workspace.actionError = "";
+    if (channel) selectChannel(channel);
+    else {
+      if (workspace.roomView === "channelSettings") workspace.roomView = "chat";
+      workspace.actionError = "";
+    }
     channelFormOrigin = workspace.serverOrigin;
     editingChannel = channel;
     newChannelName = channel?.name ?? "";
@@ -138,7 +156,18 @@
     newChannelPassword = "";
     removeChannelPassword = false;
     backgroundImageUrl = channel?.backgroundImageUrl ?? "";
-    channelFormOpen = true;
+    if (channel) workspace.roomView = "channelSettings";
+    else createChannelOpen = true;
+  }
+
+  function closeChannelSettings() {
+    if (workspace.roomView === "channelSettings") workspace.roomView = "chat";
+    newChannelPassword = "";
+  }
+
+  function selectParent(value: string) {
+    const parent = parentOptions.find((option) => option.value === value);
+    if (parent) parentChannelId = parent.id;
   }
 
   async function saveChannel(event: SubmitEvent) {
@@ -157,8 +186,8 @@
       else if (newChannelPassword) payload.password = newChannelPassword;
     }
     if (await run("channel-save", "save_channel", { payload })) {
-      channelFormOpen = false;
-      newChannelPassword = "";
+      createChannelOpen = false;
+      closeChannelSettings();
     }
   }
 
@@ -194,14 +223,14 @@
 
   function channelActions(channel: Channel) {
     if (!channel.canEdit) return [];
-    const actions = [{ label: "Edit channel", select: () => showChannelForm(channel) }];
+    const actions = [{ label: "Edit channel", onSelect: () => showChannelForm(channel) }];
     if (!canReorder) return actions;
     const siblings = snapshot?.channels.filter((item) => item.parentId === channel.parentId) ?? [];
     const index = siblings.findIndex(({ id }) => id === channel.id);
     const previous = siblings[index - 1];
     const next = siblings[index + 1];
-    if (previous?.canEdit) actions.push({ label: "Move up", select: () => { void workspace.reorderChannel(channel.id, previous.id, "before"); } });
-    if (next?.canEdit) actions.push({ label: "Move down", select: () => { void workspace.reorderChannel(channel.id, next.id, "after"); } });
+    if (previous?.canEdit) actions.push({ label: "Move up", onSelect: () => { void workspace.reorderChannel(channel.id, previous.id, "before"); } });
+    if (next?.canEdit) actions.push({ label: "Move down", onSelect: () => { void workspace.reorderChannel(channel.id, next.id, "after"); } });
     return actions;
   }
 
@@ -255,13 +284,14 @@
 {#snippet channelRow(channel: Channel, depth: number, nested: boolean)}
   {@const children = nested ? (snapshot?.channels ?? []).filter((item) => item.parentId === channel.id) : []}
   {@const members = snapshot?.channelMembers?.[channel.id] ?? (snapshot?.channelId === channel.id ? snapshot?.members ?? [] : [])}
+  {@const expandable = children.length > 0 || members.length > 0}
   {@const isActive = activeChannel?.id === channel.id}
   {@const isSelected = currentChannel?.id === channel.id}
   {@const image = channel.backgroundImageUrl?.startsWith("https://") ? channel.backgroundImageUrl : null}
   <li>
     <ContextActions disabled={!online || Boolean(pending)} actions={channelActions(channel)}>
-      {#snippet trigger({ props })}
-    <div {...props} class="channel-row" data-selected={isSelected} data-drop={dropTarget?.id === channel.id ? dropTarget.placement : undefined}
+      {#snippet trigger(props)}
+    <div class="channel-row" data-selected={isSelected} data-drop={dropTarget?.id === channel.id ? dropTarget.placement : undefined}
       style:--depth={Math.min(depth, 6)}>
       {#if image}
         {#key image}
@@ -269,14 +299,13 @@
             onerror={(event) => { event.currentTarget.setAttribute("hidden", ""); }} />
         {/key}
       {/if}
-      {#if children.length || members.length}
-        <button class="tree-expander" onclick={() => toggleGroup(channel.id)} aria-label={collapsed.includes(channel.id) ? `Expand ${channel.name}` : `Collapse ${channel.name}`} aria-expanded={!collapsed.includes(channel.id)}>
-          <ChevronDown size={13} class={collapsed.includes(channel.id) ? "-rotate-90" : ""} />
+      {#if expandable}
+        <button type="button" class="tree-expander" onclick={() => toggleGroup(channel.id)} aria-label={collapsed.includes(channel.id) ? `Expand ${channel.name}` : `Collapse ${channel.name}`} aria-expanded={!collapsed.includes(channel.id)}>
+          <ChevronDown size={13} class={collapsed.includes(channel.id) ? "collapsed-chevron" : ""} />
         </button>
-      {:else}
-        <span class="tree-spacer"></span>
       {/if}
-      <button class="channel-target" aria-current={isSelected ? "true" : undefined} aria-describedby={isActive ? "joined-channel-description" : undefined}
+      <button {...props} type="button" class="channel-target" data-leaf={expandable ? undefined : ""}
+        aria-current={isSelected ? "true" : undefined} aria-describedby={isActive ? "joined-channel-description" : undefined}
         onclick={() => selectChannel(channel)} ondblclick={() => joinChannel(channel)} draggable={canReorder && channel.canEdit === true}
         ondragstart={(event) => startDrag(event, channel)} ondragend={endDrag}
         ondragover={(event) => dragOver(event, channel)}
@@ -316,41 +345,47 @@
           onerror={(event) => { event.currentTarget.setAttribute("hidden", ""); }} />
       {/key}
     {/if}
-    <div class="server-tile"><Server size={22} strokeWidth={1.75} /></div>
-    <div class="min-w-0">
+    <div class="shrinkable">
       <h1 class="truncate">{serverTitle}</h1>
     </div>
   </div>
-    <div class="voice-toolbar" aria-label="Voice controls">
-      <IconButton label={ownMember?.muted ? "Unmute microphone" : "Mute microphone"} disabled={!canVoice || Boolean(pending) || ownMember?.adminMuted || ownMember?.afk} active={Boolean(ownMember?.muted || ownMember?.adminMuted)} onclick={() => run("mute", "set_presence", { muted: !ownMember?.muted, deafened: null })}>
-        {#if ownMember?.muted || ownMember?.adminMuted}<MicOff size={18} />{:else}<Mic size={18} />{/if}
+  <div class="voice-toolbar" role="group" aria-label="Voice controls">
+    <div class="voice-split" role="group" aria-label="Microphone">
+      <IconButton label={ownMember?.muted ? "Unmute microphone" : "Mute microphone"}
+        disabled={!canVoice || Boolean(pending) || ownMember?.adminMuted || ownMember?.afk}
+        active={Boolean(ownMember?.muted || ownMember?.adminMuted)}
+        onclick={() => run("mute", "set_presence", { muted: !ownMember?.muted, deafened: null })}>
+        {#if ownMember?.muted || ownMember?.adminMuted}<MicOff size={18} aria-hidden="true" />{:else}<Mic size={18} aria-hidden="true" />{/if}
       </IconButton>
+      <QuickAudio direction="input" />
+    </div>
+    <div class="voice-split" role="group" aria-label="Playback">
       <IconButton label={ownMember?.adminDeafened ? "Server deafened" : ownMember?.deafened ? "Undeafen" : "Deafen"}
         disabled={!canVoice || Boolean(pending) || ownMember?.afk || ownMember?.adminDeafened}
         active={Boolean(ownMember?.deafened || ownMember?.adminDeafened)}
         onclick={() => run("deafen", "set_presence", { muted: null, deafened: !ownMember?.deafened })}>
-        {#if ownMember?.deafened || ownMember?.adminDeafened}<HeadphoneOff size={18} />{:else}<Headphones size={18} />{/if}
+        {#if ownMember?.deafened || ownMember?.adminDeafened}<HeadphoneOff size={18} aria-hidden="true" />{:else}<Headphones size={18} aria-hidden="true" />{/if}
       </IconButton>
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger class="icon-button afk-button" data-afk={ownMember?.afk} aria-label={ownMember?.afk ? "AFK status (away)" : "AFK status"} disabled={!canSetAfk}>
-          AFK <ChevronDown size={12} aria-hidden="true" />
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content class="context-menu" align="start" sideOffset={4}
-            onCloseAutoFocus={(event) => { if (afkFormOpen) event.preventDefault(); }}>
-            <DropdownMenu.Item class="context-menu-item" onSelect={toggleAfk}>{ownMember?.afk ? "Return from AFK" : "Mark as AFK"}</DropdownMenu.Item>
-            <DropdownMenu.Item class="context-menu-item" onSelect={showAfkForm}>Set AFK message</DropdownMenu.Item>
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
-      {#if activeChannel}
-        <span class="toolbar-separator"></span>
-        <IconButton label="Leave voice channel" disabled={!canVoice || Boolean(pending)} onclick={() => run("leave", "leave_channel")} class="leave-icon"><DoorOpen size={18} /></IconButton>
-      {/if}
+      <QuickAudio direction="output" />
     </div>
+    <fieldset class="afk-menu" disabled={!canSetAfk}>
+      <DropdownMenu label={ownMember?.afk ? "AFK (away)" : "AFK"} items={[
+        { label: ownMember?.afk ? "Return from AFK" : "Mark as AFK", onSelect: toggleAfk },
+        { label: "Set AFK message", onSelect: showAfkForm },
+      ]} />
+    </fieldset>
+    {#if activeChannel}
+      <span class="toolbar-separator"></span>
+      <IconButton label="Leave voice channel" disabled={!canVoice || Boolean(pending)} onclick={() => run("leave", "leave_channel")}><DoorOpen size={18} aria-hidden="true" /></IconButton>
+    {/if}
+    {#if workspace.canAdminister}
+      <IconButton label="Server settings" disabled={Boolean(pending)} onclick={workspace.showServerSettings}><Settings2 size={18} aria-hidden="true" /></IconButton>
+    {/if}
+  </div>
   <div class="channel-search">
-    <Search size={16} strokeWidth={1.8} />
-    <input aria-label="Find a channel" placeholder="Find a channel" bind:value={search} disabled={!snapshot?.channels.length} />
+    <Input aria-label="Find a channel" placeholder="Find a channel" bind:value={search} disabled={!snapshot?.channels.length}>
+      {#snippet prefix()}<Search size={16} aria-hidden="true" />{/snippet}
+    </Input>
   </div>
   <div class="channel-scroll">
     <span id="joined-channel-description" class="sr-only">Joined</span>
@@ -374,26 +409,24 @@
     {/if}
   </div>
   <div class="channel-footer">
-    <button class="secondary-button" disabled={!canCreate || Boolean(pending)} onclick={() => showChannelForm()}><Plus size={18} /> Create channel</button>
-    {#if activeChannel}<span>{voiceLabel}</span>{/if}
-    <span>{snapshot ? `${snapshot.presence.length} online` : "No one online"}</span>
+    <Button disabled={!canCreate || Boolean(pending)} onclick={() => showChannelForm()}><Plus size={18} /> Create channel</Button>
   </div>
 </aside>
 
 <PaneDivider label="Resize channel tree" controls="channel-pane" value={workspace.channelWidth} min={222} max={workspace.channelMax} resize={workspace.resizeChannel} />
 
-<main class="room-pane">
+{#snippet chat()}
   <header class="workspace-header">
     <div class="heading-icon"><MessageCircle size={19} /></div>
-    <div class="min-w-0 grow">
+    <div class="flex-content">
       <div class="breadcrumb">Channel chat</div>
       <h2 class="truncate">{currentChannel?.name ?? "Chats"}</h2>
     </div>
     {#if currentChannel?.canEdit}
-      <IconButton label="Edit channel" disabled={!online || Boolean(pending)} onclick={() => showChannelForm(currentChannel)}><ImageIcon size={19} /></IconButton>
+      <IconButton label="Edit channel" disabled={!online || Boolean(pending)} onclick={() => showChannelForm(currentChannel)}><Pencil size={19} aria-hidden="true" /></IconButton>
     {/if}
     {#if currentChannel && !isInRoom}
-      <button class="secondary-button" onclick={() => joinChannel(currentChannel!)} disabled={!online || Boolean(pending)}><Headphones size={16} /> Join voice</button>
+      <Button onclick={() => joinChannel(currentChannel!)} disabled={!online || Boolean(pending)}><Headphones size={16} /> Join voice</Button>
     {/if}
   </header>
 
@@ -408,7 +441,7 @@
             {@const name = senderName(entry.senderId)}
             <article class="chat-message">
               <Avatar {name} />
-              <div class="min-w-0 flex-1">
+              <div class="flex-content">
                 <div class="chat-meta"><strong>{name}</strong><time datetime={new Date(entry.createdAt).toISOString()}>{messageTime.format(entry.createdAt)}</time></div>
                 <p>{entry.text}</p>
               </div>
@@ -422,20 +455,42 @@
         {/if}
       </div>
       <form class="composer" onsubmit={sendMessage}>
-        <input aria-label="Channel message" placeholder={canChat ? `Message #${currentChannel?.name}` : "Join a channel to send a message"} disabled={!canChat} maxlength={2000} bind:value={message} />
-        <button type="submit" class="send-button" aria-label="Send message" disabled={!canChat || !message.trim() || Boolean(pending)}><Send size={17} /></button>
+        <div class="composer-field">
+          <Input aria-label="Channel message" placeholder={canChat ? `Message #${currentChannel?.name}` : "Join a channel to send a message"} disabled={!canChat} maxlength={2000} bind:value={message} />
+        </div>
+        <Button type="submit" class="send-button" variant="alternate" aria-label="Send message" disabled={!canChat || !message.trim() || Boolean(pending)}><Send size={17} /></Button>
       </form>
     </section>
   </div>
+{/snippet}
+
+<main class="room-pane">
+  {#if workspace.serverSettings}
+    {@render workspace.serverSettings()}
+  {:else if workspace.roomView === "channelSettings" && editingChannel}
+    <header class="workspace-header">
+      <div class="heading-icon"><Pencil size={19} aria-hidden="true" /></div>
+      <div class="flex-content">
+        <div class="breadcrumb truncate">{editingChannel.name}</div>
+        <h2 tabindex="-1" {@attach (heading) => heading.focus()}>Channel settings</h2>
+      </div>
+      <IconButton label="Back to chat" disabled={pending === "channel-save"} onclick={closeChannelSettings}><X size={18} aria-hidden="true" /></IconButton>
+    </header>
+    <div class="workspace">
+      {@render channelFormFields()}
+    </div>
+  {:else}
+    {@render chat()}
+  {/if}
 </main>
 
 <Modal bind:open={afkFormOpen} title="AFK message" description="People who can see your voice channel can read this message while you’re AFK." dismissible={pending !== "afk"}>
   {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}
   <form class="dialog-form" onsubmit={saveAfkMessage}>
-    <label>Message <input type="text" maxlength={120} placeholder="Optional" bind:value={afkMessage} /></label>
-    <button class="primary-button justify-center" type="submit" disabled={!canSetAfk || afkFormOrigin !== workspace.serverOrigin}>
+    <label>Message <Input type="text" maxlength={120} placeholder="Optional" bind:value={afkMessage} /></label>
+    <Button variant="alternate" type="submit" disabled={!canSetAfk || afkFormOrigin !== workspace.serverOrigin}>
       {ownMember?.afk ? "Save message" : "Go AFK"}
-    </button>
+    </Button>
   </form>
 </Modal>
 
@@ -443,38 +498,43 @@
   {#snippet icon()}<LockKeyhole size={21} />{/snippet}
   {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}
   <form class="dialog-form" onsubmit={submitPassword}>
-    <label>Channel password<input type="password" required bind:value={channelPassword} /></label>
-    <button class="primary-button justify-center" type="submit" disabled={Boolean(pending)}>{pending === "join" ? "Joining…" : "Join voice"}</button>
+    <label>Channel password<Input type="password" required bind:value={channelPassword} /></label>
+    <Button variant="alternate" type="submit" disabled={Boolean(pending)}>{pending === "join" ? "Joining…" : "Join voice"}</Button>
   </form>
 </Modal>
 
-<Modal bind:open={channelFormOpen} title={editingChannel ? "Edit channel" : "Create a channel"}
-  description={editingChannel ? editingChannel.name : "Add a voice channel to this server."} dismissible={pending !== "channel-save"}>
-  {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}
-  <form class="dialog-form" onsubmit={saveChannel}>
-    <label>Channel name<input required maxlength={80} bind:value={newChannelName} /></label>
-    <label>Description<textarea rows="2" maxlength={1000} bind:value={channelDescription}></textarea></label>
+{#snippet channelFormFields()}
+  <form class="dialog-form" bind:this={channelForm} onsubmit={saveChannel}>
+    {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}
+    <label>Channel name<Input required maxlength={80} bind:value={newChannelName} /></label>
+    <label>Description<Textarea rows={2} maxlength={1000} bind:value={channelDescription} /></label>
     {#if canSetChannelAccess}
-      <label>Parent channel
-        <select bind:value={parentChannelId}>
-          <option value="">Top level</option>
-          {#each possibleParents as parent (parent.id)}<option value={parent.id}>{parent.name}</option>{/each}
-        </select>
-      </label>
-      <label>Capacity<input type="number" min="1" max="1024" placeholder="Server default" bind:value={channelCapacity} /></label>
+      {#if channelForm}
+        <BitsConfig defaultPortalTo={channelForm}>
+          <SelectField label="Parent channel" options={parentOptions} placeholder="Current parent unavailable"
+            bind:value={() => selectedParent, selectParent} />
+        </BitsConfig>
+      {/if}
+      <label>Capacity<Input type="number" min="1" max="1024" placeholder="Server default" bind:value={channelCapacity} /></label>
       <label>{editingChannel?.passwordRequired ? "New password" : "Channel password"}
-        <input type="password" autocomplete="new-password" maxlength="128" disabled={removeChannelPassword} bind:value={newChannelPassword}
+        <Input type="password" autocomplete="new-password" maxlength={128} disabled={removeChannelPassword} bind:value={newChannelPassword}
           placeholder={editingChannel?.passwordRequired ? "Leave blank to keep current password" : "Optional"} />
       </label>
       {#if editingChannel?.passwordRequired}
-        <label class="checkbox-label"><input type="checkbox" bind:checked={removeChannelPassword} /> Remove channel password</label>
+        <Checkbox label="Remove channel password" bind:checked={removeChannelPassword} />
       {/if}
     {/if}
     {#if workspace.channelBackgrounds}
-      <label>Background image URL <input type="url" pattern="https://.+" maxlength={512} placeholder="https://example.com/channel.jpg"
+      <label>Background image URL <Input type="url" pattern="https://.+" maxlength={512} placeholder="https://example.com/channel.jpg"
         autocomplete="off" spellcheck="false" title="Use an HTTPS image URL" bind:value={backgroundImageUrl} /></label>
       {#if editingChannel}<p class="field-hint">Clear the URL to remove the background.</p>{/if}
     {/if}
-    <button class="primary-button justify-center" type="submit" disabled={Boolean(pending)}>{editingChannel ? "Save changes" : "Create channel"}</button>
+    <Button variant="alternate" type="submit" disabled={Boolean(pending)}>{editingChannel ? "Save changes" : "Create channel"}</Button>
   </form>
-</Modal>
+{/snippet}
+
+{#if createChannelOpen}
+  <Modal bind:open={createChannelOpen} title="Create a channel" description="Add a voice channel to this server." dismissible={pending !== "channel-save"}>
+    {@render channelFormFields()}
+  </Modal>
+{/if}
