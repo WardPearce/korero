@@ -21,22 +21,26 @@ const configuration = object({
     setup_seconds: integer(30, 86400), ticket_seconds: integer(2, 120), refresh_retry_seconds: integer(1, 60), max_sessions: integer(1, 1000) }),
   limits: object({ connections_per_account: integer(1, 32), pending_connections: integer(1, 2048), pending_connections_per_ip: integer(1, 2048),
     transports: integer(2, 16), producers: integer(1, 16), consumers: integer(1, 1024), users_per_channel: integer(1, 1024),
-    websocket_bytes: integer(4096, 262144), websocket_pending: integer(1, 128), websocket_requests_per_minute: integer(10, 10000),
-    media_per_minute: integer(1, 5000), ice_restarts_per_minute: integer(1, 100), auth_per_minute: integer(1, 1000),
-    registration_per_minute: integer(1, 1000), upgrades_per_minute: integer(1, 1000), max_channels: integer(1, 10000) }),
-  messaging: object({ persistence: t.Boolean(), retention_hours: integer(1, 8760), max_length: integer(1, 8192), per_minute: integer(1, 1000) }),
+    websocket_bytes: integer(4096, 262144), websocket_pending: integer(1, 128), websocket_requests_per_minute: integer(10, 60000),
+    media_per_minute: integer(1, 20000), ice_restarts_per_minute: integer(1, 1000), channel_joins_per_minute: integer(1, 1000),
+    attachment_uploads_per_minute: integer(1, 10000), attachment_downloads_per_minute: integer(1, 10000),
+    attachment_download_bytes_per_minute: integer(1048576, 1073741824), attachment_uploads_concurrent: integer(1, 256),
+    auth_per_minute: integer(1, 1000), registration_per_minute: integer(1, 1000), upgrades_per_minute: integer(1, 1000), max_channels: integer(1, 10000) }),
+  messaging: object({ persistence: t.Boolean(), retention_hours: integer(1, 8760), max_length: integer(1, 8192), per_minute: integer(1, 10000) }),
 });
 type Settings = typeof configuration.static;
 const defaults: Settings = {
   server: { name: "Voice Server", host: "::", port: 8443, max_users: 128, registration: "open", origins: [], public_addresses: [], trusted_proxies: [], password: "" },
   tls: { mode: "self-signed", certificate: "", private_key: "", names: [] },
   media: { listen: [], listen_ips: [], listen_ip: "", announced_address: "", announced_ipv6: "", port: 8444, workers: 1,
-    target_audio_bitrate: 48000, enable_udp: true, enable_tcp: true, ice_servers: [] },
+    target_audio_bitrate: 64000, enable_udp: true, enable_tcp: true, ice_servers: [] },
   authentication: { access_seconds: 900, refresh_seconds: 7776000, setup_seconds: 900, ticket_seconds: 20, refresh_retry_seconds: 10, max_sessions: 32 },
   limits: { connections_per_account: 4, pending_connections: 32, pending_connections_per_ip: 4, transports: 2, producers: 1, consumers: 128, users_per_channel: 32,
-    websocket_bytes: 65536, websocket_pending: 16, websocket_requests_per_minute: 1200, media_per_minute: 360, ice_restarts_per_minute: 6,
+    websocket_bytes: 65536, websocket_pending: 16, websocket_requests_per_minute: 3600, media_per_minute: 1800, ice_restarts_per_minute: 30,
+    channel_joins_per_minute: 60, attachment_uploads_per_minute: 120, attachment_downloads_per_minute: 240,
+    attachment_download_bytes_per_minute: 134217728, attachment_uploads_concurrent: 32,
     auth_per_minute: 30, registration_per_minute: 12, upgrades_per_minute: 60, max_channels: 1024 },
-  messaging: { persistence: false, retention_hours: 24, max_length: 2000, per_minute: 20 },
+  messaging: { persistence: false, retention_hours: 24, max_length: 2000, per_minute: 120 },
 };
 export const localAddresses = () => [...new Set(Object.values(networkInterfaces()).flatMap((entries) =>
   (entries ?? []).filter(({ address }) => !address.toLowerCase().startsWith("fe80:")).map(({ address }) => address)))];

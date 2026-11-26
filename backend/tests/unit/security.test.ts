@@ -38,6 +38,32 @@ test("checks the complete TOML configuration before startup", async () => {
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test("realtime and attachment rate limits have relaxed defaults and accept host overrides", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "voice-limits-"));
+  try {
+    const defaults = await loadConfig({ directory });
+    expect(defaults.limits).toMatchObject({ websocket_requests_per_minute: 3600, media_per_minute: 1800,
+      ice_restarts_per_minute: 30, channel_joins_per_minute: 60, attachment_uploads_per_minute: 120,
+      attachment_downloads_per_minute: 240, attachment_download_bytes_per_minute: 134217728,
+      attachment_uploads_concurrent: 32 });
+    expect(defaults.messaging.per_minute).toBe(120);
+    expect(defaults.limits.auth_per_minute).toBe(30);
+    const file = join(directory, "server.toml");
+    await Bun.write(file, `[limits]
+channel_joins_per_minute = 90
+attachment_download_bytes_per_minute = 268435456
+[messaging]
+per_minute = 150
+`);
+    const configured = await loadConfig({ file, directory });
+    expect(configured.limits.channel_joins_per_minute).toBe(90);
+    expect(configured.limits.attachment_download_bytes_per_minute).toBe(268435456);
+    expect(configured.messaging.per_minute).toBe(150);
+    await Bun.write(file, "[limits]\nchannel_joins_per_minute = 0");
+    await expect(loadConfig({ file, directory })).rejects.toThrow("Invalid configuration");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("worker extraction checks the embedded digest, persisted digest and symlinks", async () => {
   const directory = await mkdtemp(join(tmpdir(), "voice-worker-"));
   const originalWorker = process.env.MEDIASOUP_WORKER_BIN;

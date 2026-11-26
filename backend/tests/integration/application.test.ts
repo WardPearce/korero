@@ -39,7 +39,8 @@ test("connection info keeps diagnostics scoped to the session and visible channe
 });
 
 test("attachments follow session ownership, channel permissions, history and deletion", async () => {
-  const server = await fixture({ environment: { VOICE_MESSAGING_PERSISTENCE: "true" } });
+  const server = await fixture({ environment: { VOICE_MESSAGING_PERSISTENCE: "true",
+    VOICE_LIMITS_ATTACHMENT_DOWNLOAD_BYTES_PER_MINUTE: "33554432" } });
   try {
     const owner = await server.owner();
     const member = await server.register("Member");

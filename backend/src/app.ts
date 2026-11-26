@@ -21,8 +21,8 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
   const authentication = new RateLimit(config.limits.auth_per_minute);
   const registration = new RateLimit(config.limits.registration_per_minute);
   const globalAuth = new RateLimit(Math.max(240, config.limits.auth_per_minute * 8), 1);
-  const attachmentRequests = new RateLimit(30);
-  const attachmentDownloads = new RateLimit(60);
+  const attachmentRequests = new RateLimit(config.limits.attachment_uploads_per_minute);
+  const attachmentDownloads = new RateLimit(config.limits.attachment_downloads_per_minute);
   const connectionInfoRequests = new RateLimit(30);
   const attachmentUploadsInProgress = new Set<string>();
   const attachmentPath = "/api/v1/chat/attachments";
@@ -55,7 +55,7 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
     attachmentRequests.take(accountId);
     const limit = attachmentBodyLimit(realtime.maxAttachmentBytes);
     if (Number(request.headers.get("content-length")) > limit) realtime.attachmentTooLarge();
-    if (attachmentUploadsInProgress.has(accountId) || attachmentUploadsInProgress.size >= 8) fail("RATE_LIMITED");
+    if (attachmentUploadsInProgress.has(accountId) || attachmentUploadsInProgress.size >= config.limits.attachment_uploads_concurrent) fail("RATE_LIMITED");
     const reader = request.body?.getReader() ?? fail("INVALID_REQUEST");
     attachmentUploadsInProgress.add(accountId);
     const decoder = new TextDecoder("utf-8", { fatal: true });

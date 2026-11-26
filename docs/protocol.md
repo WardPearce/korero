@@ -248,8 +248,12 @@ Persistent attachments expire and are deleted with their message. In-memory
 attachments are available for up to one hour. The in-memory quotas are 8 MiB per
 sender and 32 MiB per server by default. A higher file limit raises those caps to
 at least one file per sender and four files per server. Persistent storage is
-limited to 32 MiB per sender and 256 MiB per server. Each account has a download
-budget of 60 requests and 32 MiB of decoded file data, refilled over one minute.
+limited to 32 MiB per sender and 256 MiB per server. By default each account has a
+download budget of 240 requests and 128 MiB of decoded file data, refilled over one
+minute, and uploads are capped at 120 requests per minute. Hosts can adjust these
+with `limits.attachment_downloads_per_minute`,
+`limits.attachment_download_bytes_per_minute` and
+`limits.attachment_uploads_per_minute`.
 
 AFK is connection-scoped. While `afk` is true, both `muted` and `deafened` are
 reported as true and the server closes and blocks producers and consumers for
@@ -328,7 +332,7 @@ If the worker resets or the client changes rooms, discard stale media IDs and tr
 Voice uses Opus at 48 kHz. SDP advertises Opus with two-channel capability
 as required for interop. Clients default to mono capture and can negotiate stereo,
 DTX, FEC and a target 20 ms packetization interval where supported. The advertised
-target bitrate defaults to 48 kbit/s. A channel's `audioBitrate` can override
+target bitrate defaults to 64 kbit/s. A channel's `audioBitrate` can override
 the server default with a value from 32000 to 128000 bits per second. Setting it
 requires `manageSettings` and the applicable channel editing permissions. Use
 `null` to inherit the server default. Use the effective bitrate in the sender's

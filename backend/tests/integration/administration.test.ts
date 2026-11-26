@@ -349,7 +349,7 @@ test("live server preferences and paged audit history enforce role permissions",
     expect((await remove(listener.name)).response.status).toBe(409);
     await server.call(roles, { accountId: registered.account.id, role: "Member" }, owner.accessToken, "PATCH");
     expect((await remove(listener.name)).response.status).toBe(200);
-    expect(await ownerWs.rpc("state.get")).toMatchObject({ motd: "", targetAudioBitrate: 48000 });
+    expect(await ownerWs.rpc("state.get")).toMatchObject({ motd: "", targetAudioBitrate: 64000 });
     for (let index = 0; index < 101; index++) {
       const updated = await server.call("/api/v1/account", { displayName: `Name ${index}` }, member.accessToken, "PATCH");
       expect(updated.response.status).toBe(200);

@@ -30,7 +30,6 @@ const liveAttachmentLimit = 32 * bytesPerMiB;
 const storedAttachmentLimit = 256 * bytesPerMiB;
 const liveAttachmentLimitPerAccount = 8 * bytesPerMiB;
 const storedAttachmentLimitPerAccount = maxSupportedAttachmentMiB * bytesPerMiB;
-const downloadBytesPerMinute = maxSupportedAttachmentMiB * bytesPerMiB;
 const registrationGrants = new Set<Permission>(memberPermissions);
 const configurableRoles = new Set<Role>(editableBuiltInRoles);
 const videoPermissions = { screen: "shareScreen", camera: "useCamera" } satisfies Record<VideoSource, Permission>;
@@ -55,7 +54,7 @@ export class Realtime {
   private readonly liveAttachments = new Map<string, LiveAttachment>();
   private readonly liveAttachmentBytesByAccount = new Map<string, number>();
   private liveAttachmentBytes = 0;
-  private readonly attachmentDownloadRate = new RateLimit(downloadBytesPerMinute);
+  private readonly attachmentDownloadRate: RateLimit;
   private readonly requestRate: RateLimit;
   private readonly messageRate: RateLimit;
   private readonly directMessages: DirectMessages;
@@ -102,7 +101,8 @@ export class Realtime {
     this.requestRate = new RateLimit(config.limits.websocket_requests_per_minute);
     this.mediaRate = new RateLimit(config.limits.media_per_minute);
     this.iceRate = new RateLimit(config.limits.ice_restarts_per_minute);
-    this.joinRate = new RateLimit(12);
+    this.joinRate = new RateLimit(config.limits.channel_joins_per_minute);
+    this.attachmentDownloadRate = new RateLimit(config.limits.attachment_download_bytes_per_minute);
     this.messageRate = new RateLimit(config.messaging.per_minute);
     this.pendingLimitPerIp = Math.min(config.limits.pending_connections_per_ip, Math.max(1, Math.floor(config.limits.pending_connections / 2)));
     this.timer = setInterval(() => this.sweep(), 1000);

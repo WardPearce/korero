@@ -1,8 +1,10 @@
 <script lang="ts">
   import { Radio } from "@lucide/svelte";
   import { onDestroy, onMount, untrack } from "svelte";
+  import { BitsConfig } from "bits-ui";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
+  import SelectField from "#lib/components/fields/SelectField.svelte";
   import { getAudioSettings } from "#lib/media/audio.svelte";
   import { call, messageFrom } from "#lib/connection/client";
   import IconButton from "#lib/components/IconButton.svelte";
@@ -33,6 +35,7 @@
   let routed: Route | null = null;
   let lease: ReturnType<typeof setInterval> | undefined;
   let acknowledged = false;
+  let fields = $state<HTMLElement>();
   const snapshot = $derived(workspace.view.snapshot);
   const ownMember = $derived(snapshot?.members.find((member) => member.connectionId === snapshot?.connectionId));
   const channels = $derived(snapshot?.channels.filter((channel) => channel.canWhisperTo) ?? []);
@@ -41,6 +44,17 @@
     Boolean(snapshot?.channelId) && !ownMember?.muted && !ownMember?.deafened && !ownMember?.adminMuted &&
     !ownMember?.adminDeafened && !ownMember?.afk);
   const activeTarget = $derived(workspace.view.whisperChannelId);
+  const channelOptions = $derived([
+    { value: "", label: "Choose a channel" },
+    ...channels.map((channel) => ({
+      value: channel.id,
+      label: `${channel.name}${snapshot?.channelMembers?.[channel.id]?.length ? "" : " (empty)"}`
+    }))
+  ]);
+  const modeOptions = [
+    { value: "hold", label: "Push-to-talk" },
+    { value: "toggle", label: "Toggle-to-talk" }
+  ] as const;
   const canStart = $derived(canTalk && Boolean(target && snapshot?.channelMembers?.[target.id]?.length &&
     (!target.passwordRequired || password)));
   const incoming = $derived(snapshot?.whispers ?? []);
@@ -61,6 +75,11 @@
     targetId = id;
     password = "";
     error = "";
+  }
+
+  function setMode(next: "hold" | "toggle") {
+    mode = next;
+    saveSettings();
   }
 
   function stopLease() {
@@ -189,53 +208,40 @@
 {/if}
 
 <Modal bind:open title="Channel whisper" description="Speak to people in another channel while staying in your current channel.">
-  <div class="whisper-fields">
-    <label>Target channel
-      <select value={targetId} disabled={busy || Boolean(wanted)} onchange={(event) => setTarget(event.currentTarget.value)}>
-        <option value="">Choose a channel</option>
-        {#each channels as channel (channel.id)}
-          <option value={channel.id}>{channel.name}{snapshot?.channelMembers?.[channel.id]?.length ? "" : " (empty)"}</option>
-        {/each}
-      </select>
-    </label>
-    {#if target?.passwordRequired}
-      <label>Channel password
-        <Input type="password" bind:value={password} maxlength={128} disabled={busy || Boolean(wanted)} />
-      </label>
+  <div class="whisper-fields" bind:this={fields}>
+    {#if fields}
+      <BitsConfig defaultPortalTo={fields}>
+        <SelectField label="Target channel" options={channelOptions} placeholder="Choose a channel"
+          disabled={busy || Boolean(wanted)} bind:value={() => targetId, setTarget} />
+        {#if target?.passwordRequired}
+          <label>Channel password
+            <Input type="password" bind:value={password} maxlength={128} disabled={busy || Boolean(wanted)} />
+          </label>
+        {/if}
+        <SelectField label="Activation" options={modeOptions}
+          disabled={busy || Boolean(wanted)} bind:value={() => mode, setMode} />
+        <TalkKey label="Whisper shortcut" {shortcut} disabled={busy || Boolean(wanted)}
+          onchange={(value) => { shortcut = value; saveSettings(); }} />
+        <p class="field-hint">
+          {mode === "hold" ? "Hold" : "Press"} <kbd>{talkShortcutLabel(shortcut)}</kbd> while VNX.chat is focused.
+        </p>
+        {#if error}<p class="notice" role="alert">{error}</p>{/if}
+        <div class="dialog-actions">
+          <Button variant={wanted ? "destructive" : "default"} disabled={!wanted && (busy || !canStart)}
+            onpointerdown={pointerDown} onpointerup={endHold} onpointercancel={endHold} onlostpointercapture={endHold}
+            onkeydown={(event) => buttonKey(event, true)} onkeyup={(event) => buttonKey(event, false)}
+            onclick={() => { if (mode === "toggle") toggle(); }}>
+            {busy ? (wanted ? "Connecting…" : "Stopping…")
+              : mode === "toggle" ? (wanted ? "Stop whisper" : "Start whisper") : (wanted ? "Whispering…" : "Hold to whisper")}
+          </Button>
+        </div>
+      </BitsConfig>
     {/if}
-    <label>Activation
-      <select bind:value={mode} disabled={busy || Boolean(wanted)} onchange={saveSettings}>
-        <option value="hold">Push-to-talk</option>
-        <option value="toggle">Toggle-to-talk</option>
-      </select>
-    </label>
-    <TalkKey label="Whisper shortcut" {shortcut} disabled={busy || Boolean(wanted)}
-      onchange={(value) => { shortcut = value; saveSettings(); }} />
-    <p class="field-hint">
-      {mode === "hold" ? "Hold" : "Press"} <kbd>{talkShortcutLabel(shortcut)}</kbd> while VNX.chat is focused.
-    </p>
-    {#if error}<p class="notice" role="alert">{error}</p>{/if}
-    <div class="dialog-actions">
-      <Button variant={wanted ? "destructive" : "default"} disabled={!wanted && (busy || !canStart)}
-        onpointerdown={pointerDown} onpointerup={endHold} onpointercancel={endHold} onlostpointercapture={endHold}
-        onkeydown={(event) => buttonKey(event, true)} onkeyup={(event) => buttonKey(event, false)}
-        onclick={() => { if (mode === "toggle") toggle(); }}>
-        {busy ? (wanted ? "Connecting…" : "Stopping…")
-          : mode === "toggle" ? (wanted ? "Stop whisper" : "Start whisper") : (wanted ? "Whispering…" : "Hold to whisper")}
-      </Button>
-    </div>
   </div>
 </Modal>
 
 <style>
   .whisper-fields { display: grid; gap: .75rem; }
   .whisper-fields label { display: grid; gap: .35rem; }
-  .whisper-fields select {
-    background: var(--background);
-    border: 1px solid var(--input);
-    border-radius: var(--radius);
-    min-height: var(--control-height);
-    padding-inline: .6rem;
-  }
   .whisper-status { flex: 1 0 100%; font-size: .8rem; color: var(--muted-foreground); overflow-wrap: anywhere; }
 </style>

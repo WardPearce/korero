@@ -68,6 +68,19 @@ by default. Configure `limits.pending_connections` and
 `limits.pending_connections_per_ip` on the host. For pools with two or more
 slots, one source can use at most half the pool.
 
+Realtime and attachment rate limits are per-minute token buckets and can be
+raised or lowered on the host. The defaults are 3600 WebSocket requests, 1800
+media operations, 30 ICE restarts, 60 channel joins and 120 chat messages per
+minute, plus 120 attachment uploads, 240 attachment downloads and 128 MiB of
+downloaded file data per account per minute. Up to 32 attachment uploads run
+concurrently. The matching settings are `limits.websocket_requests_per_minute`,
+`limits.media_per_minute`, `limits.ice_restarts_per_minute`,
+`limits.channel_joins_per_minute`, `messaging.per_minute`,
+`limits.attachment_uploads_per_minute`, `limits.attachment_downloads_per_minute`,
+`limits.attachment_download_bytes_per_minute` and
+`limits.attachment_uploads_concurrent`. HTTP authentication and registration
+limits are unchanged.
+
 - `self-signed` is the default. Clients verify a public-key pin.
 - `manual` loads `tls.certificate` and an owner-only `tls.private_key`. Use PEM,
   including intermediary certificates in the certificate file when applicable.
