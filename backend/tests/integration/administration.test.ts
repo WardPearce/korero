@@ -1,7 +1,69 @@
 import { expect, test } from "bun:test";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { fixture, testIdentity, until, type Device, type Snapshot } from "../server";
 import { LOBBY } from "../../src/database";
+
+test("built-in role permissions apply to connected accounts and protect the registration role", async () => {
+  const server = await fixture();
+  try {
+    const owner = await server.owner();
+    const member = await server.register("Member");
+    const guest = await server.register("Guest");
+    const roles = "/api/v1/admin/roles";
+    const edit = (name: string, permissions: string[], token = owner.accessToken) =>
+      server.call(`${roles}/definition`, { name, permissions }, token, "PATCH");
+    const assign = (accountId: string, role: string) => server.call(roles, { accountId, role }, owner.accessToken, "PATCH");
+    expect((await assign(guest.account.id, "Guest")).response.status).toBe(200);
+    expect((await edit("Member", ["join", "kick"])).response.status).toBe(409);
+    expect((await edit("Administrator", ["join"])).response.status).toBe(403);
+    expect((await edit("Owner", ["join"])).response.status).toBe(403);
+    expect((await edit("Guest", ["join", "text"], member.accessToken)).response.status).toBe(403);
+
+    const ownerWs = await server.ws(owner);
+    const memberWs = await server.ws(member);
+    const guestWs = await server.ws(guest);
+    try {
+      const { channelId: studio } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Studio" });
+      await ownerWs.rpc("channel.join", { channelId: studio });
+      await memberWs.rpc("channel.join", { channelId: LOBBY });
+      await guestWs.rpc("channel.join", { channelId: LOBBY });
+      await expect(guestWs.rpc("message.send", { channelId: LOBBY, text: "Hello" })).rejects.toThrow("FORBIDDEN");
+      expect((await edit("Guest", ["join", "text"])).response.status).toBe(200);
+      expect(await guestWs.rpc("state.get")).toMatchObject({ account: { role: "Guest" }, canSendText: true });
+      await guestWs.rpc("message.send", { channelId: LOBBY, text: "Hello" });
+
+      const upload = { channelId: LOBBY, connectionId: memberWs.state.connectionId, name: "test.txt", data: "YQ==", text: "" };
+      const attachmentPath = "/api/v1/chat/attachments";
+      expect((await server.call(attachmentPath, upload, member.accessToken)).response.status).toBe(200);
+      const screen = { kind: "video", direction: "send" };
+      const camera = { ...screen, videoSource: "camera" };
+      const transport = await memberWs.rpc<{ id: string }>("media.transport.create", screen);
+      expect((await edit("Member", ["join", "text", "speak", "useCamera"])).response.status).toBe(200);
+      expect(await memberWs.rpc("state.get")).toMatchObject({ channelId: LOBBY, canSendText: true, canAttachFiles: false,
+        canShareScreen: false, canUseCamera: true, directMessages: { canSend: false },
+        channels: expect.arrayContaining([expect.objectContaining({ id: studio, canWhisperTo: false })]) });
+      await expect(memberWs.rpc("media.transport.stats", { transportId: transport.id })).rejects.toThrow("NOT_FOUND");
+      await expect(memberWs.rpc("media.transport.create", screen)).rejects.toThrow("FORBIDDEN");
+      await memberWs.rpc("media.transport.create", camera);
+      await expect(memberWs.rpc("media.transport.create", { direction: "send", whisperChannelId: studio })).rejects.toThrow("FORBIDDEN");
+      expect((await server.fail(attachmentPath, upload, member.accessToken)).status).toBe(403);
+      await expect(memberWs.rpc("direct.send", { accountId: owner.account.id, id: crypto.randomUUID(),
+        nonce: randomBytes(12).toString("base64url"), ciphertext: randomBytes(25).toString("base64url"),
+        signature: randomBytes(64).toString("base64url") })).rejects.toThrow("FORBIDDEN");
+      await expect(ownerWs.rpc("channel.override", { channelId: studio, role: "Member", permission: "editChannels", allow: true }))
+        .rejects.toThrow("CONFLICT");
+      const listing = await server.call("/api/v1/admin/accounts", undefined, owner.accessToken);
+      expect(listing.payload).toMatchObject({ defaultRole: "Member", customRoles: [], builtInRoles: expect.arrayContaining([
+        expect.objectContaining({ name: "Guest", editable: true, permissions: ["join", "text"] }),
+        expect.objectContaining({ name: "Member", editable: true, permissions: ["join", "text", "speak", "useCamera"] }),
+      ]) });
+    } finally {
+      for (const socket of [ownerWs, memberWs, guestWs]) socket.close();
+      await Promise.all([ownerWs.closed, memberWs.closed, guestWs.closed]);
+    }
+  } finally { await server.cleanup(); }
+});
 
 test("identity enrollment, role hierarchy, and server administration are enforced by the API", async () => {
   const server = await fixture();
@@ -22,7 +84,7 @@ test("identity enrollment, role hierarchy, and server administration are enforce
     expect((await server.fail(roles, { accountId: owner.account.id, role: "Member" }, alice.accessToken, "PATCH")).status).toBe(403);
     const accounts = await server.call("/api/v1/admin/accounts", undefined, alice.accessToken);
     expect(accounts.payload).toMatchObject({ accounts: expect.arrayContaining([{ id: owner.account.id,
-      displayName: "Operator", role: "Owner", editable: false }]) });
+      displayName: "Operator", role: "Owner", badge: null, editable: false }]) });
 
     const configPath = "/api/v1/admin/configuration";
     const file = join(server.directory, "server.toml");
@@ -48,6 +110,46 @@ test("identity enrollment, role hierarchy, and server administration are enforce
     expect((await server.call(passwordPath, { password: null }, alice.accessToken, "PATCH")).payload)
       .toEqual({ passwordRequired: false });
     expect((await server.call(loginPath, await server.proof("login", aliceIdentity))).response.status).toBe(200);
+  } finally { await server.cleanup(); }
+});
+
+test("the server counts unique accounts and shares badges from authorized account edits", async () => {
+  const server = await fixture();
+  try {
+    const owner = await server.owner();
+    const admin = await server.register("Administrator");
+    const identity = testIdentity();
+    const member = await server.register("Member", identity);
+    await server.call("/api/v1/admin/roles", { accountId: admin.account.id, role: "Administrator" }, owner.accessToken, "PATCH");
+    const badges = "/api/v1/admin/badges";
+    const target = { accountId: member.account.id, badge: "  Event host  " };
+    expect((await server.fail(badges, { ...target, accountId: admin.account.id }, member.accessToken, "PATCH")).status).toBe(403);
+    expect((await server.fail(badges, { ...target, accountId: owner.account.id }, admin.accessToken, "PATCH")).status).toBe(403);
+    expect((await server.fail(badges, { ...target, badge: "\n" }, admin.accessToken, "PATCH")).status).toBe(400);
+    expect((await server.call(badges, target, admin.accessToken, "PATCH")).payload).toEqual({ badge: "Event host" });
+
+    const observer = await server.ws(owner);
+    expect(observer.state).toMatchObject({ totalUsers: 3, presence: [{ accountId: owner.account.id, connections: 1 }] });
+    await server.register("Offline user");
+    await until(() => observer.received.some(({ type }) => type === "state.invalidated"), Boolean);
+    expect(await observer.rpc("state.get")).toMatchObject({ totalUsers: 4, presence: [{ accountId: owner.account.id }] });
+
+    const memberWs = await server.ws(member);
+    await memberWs.rpc("channel.join", { channelId: LOBBY });
+    const login = await server.call<Device>("/api/v1/auth/identity/login", await server.proof("login", identity));
+    const secondDevice = await server.ws(login.payload);
+    try {
+      expect(await observer.rpc("state.get")).toMatchObject({ totalUsers: 4, presence: [
+        { accountId: owner.account.id, connections: 1 }, { accountId: member.account.id, connections: 2 },
+      ], channelMembers: { [LOBBY]: [{ accountId: member.account.id, role: "Member", badge: "Event host" }] } });
+      expect((await server.call(badges, { ...target, badge: null }, admin.accessToken, "PATCH")).payload).toEqual({ badge: null });
+      await until(() => observer.received.some(({ type, payload }) => type === "channel.member" &&
+        payload.accountId === member.account.id && payload.badge === null), Boolean);
+      expect(await memberWs.rpc("state.get")).toMatchObject({ account: { role: "Member", badge: null } });
+    } finally {
+      for (const socket of [observer, memberWs, secondDevice]) socket.close();
+      await Promise.all([observer.closed, memberWs.closed, secondDevice.closed]);
+    }
   } finally { await server.cleanup(); }
 });
 

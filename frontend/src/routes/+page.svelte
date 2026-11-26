@@ -12,7 +12,6 @@
     Download, Mail, Server, Settings2, X,
   } from "@lucide/svelte";
   import { tick } from "svelte";
-  import Avatar from "#lib/components/Avatar.svelte";
   import ChannelMember from "#lib/components/server/ChannelMember.svelte";
   import ContextActions from "#lib/components/ContextActions.svelte";
   import IconButton from "#lib/components/IconButton.svelte";
@@ -22,8 +21,9 @@
   import { getAudioSettings } from "#lib/media/audio.svelte";
   import WhisperControls from "#lib/components/media/WhisperControls.svelte";
   import { playUiSound } from "#lib/ui-sounds";
-  import { messageTime, nativeApp, type Channel } from "#lib/connection/client";
+  import { nativeApp, type Channel } from "#lib/connection/client";
   import ChatComposer from "#lib/components/chat/ChatComposer.svelte";
+  import ChatMessage from "#lib/components/chat/ChatMessage.svelte";
   import DirectMessages from "#lib/components/chat/DirectMessages.svelte";
   import RichMessage from "#lib/components/chat/RichMessage.svelte";
   import ScreenSharing from "#lib/components/media/ScreenSharing.svelte";
@@ -40,6 +40,7 @@
   const actionError = $derived(workspace.actionError);
   let createChannelOpen = $state(false);
   let channelForm = $state<HTMLFormElement>();
+  let channelFooter = $state<HTMLDivElement>();
   let editingChannel = $state.raw<Channel | null>(null);
   let newChannelName = $state("");
   let channelDescription = $state("");
@@ -433,6 +434,12 @@
       <h1 class="truncate">{serverTitle}</h1>
     </div>
   </div>
+  {#if online && snapshot}
+    <div class="server-counts">
+      {#if snapshot.totalUsers !== undefined}<span>{snapshot.totalUsers.toLocaleString()} total</span>{/if}
+      <span class="online-count">{snapshot.presence.length.toLocaleString()} online</span>
+    </div>
+  {/if}
   <div class="voice-toolbar" role="group" aria-label="Voice controls">
     <div class="voice-split" role="group" aria-label="Microphone">
       <IconButton label={ownMember?.muted ? "Unmute microphone" : "Mute microphone"}
@@ -507,8 +514,10 @@
       <div class="channel-empty"><p>{snapshot ? "No channels are available." : "Connect to view channels."}</p></div>
     {/if}
   </div>
-  <div class="channel-footer">
-    <Button variant="outline" disabled={!canCreate || Boolean(pending)} onclick={() => showChannelForm()}><Plus size={18} /> Create channel</Button>
+  <div class="channel-footer" bind:this={channelFooter}>
+    <Button variant="outline" title="Create channel" disabled={!canCreate || Boolean(pending)} onclick={() => showChannelForm()}>
+      <Plus size={18} aria-hidden="true" /> Channel
+    </Button>
   </div>
 </aside>
 
@@ -542,31 +551,26 @@
     {#if actionError || view.error || view.voiceError}
       <div class="notice" role="status"><CircleAlert size={17} /><span>{actionError || view.error || view.voiceError}</span></div>
     {/if}
-    {#if online && snapshot?.channelId}
+    {#if online && snapshot?.channelId && channelFooter}
       {#key snapshot.connectionId + "/" + snapshot.channelId}
-        {#if workspace.screenSharing}<ScreenSharing {snapshot} visible={isInRoom} />{/if}
-        {#if snapshot.cameras}<ScreenSharing {snapshot} visible={isInRoom} source="camera" />{/if}
+        {#if snapshot.cameras}<ScreenSharing {snapshot} controlsTarget={channelFooter} visible={isInRoom} source="camera" />{/if}
+        {#if workspace.screenSharing}<ScreenSharing {snapshot} controlsTarget={channelFooter} visible={isInRoom} />{/if}
       {/key}
     {/if}
     <section class="chat-pane" aria-label="Channel chat">
       <div class="chat-log" {@attach attachMessageList} role="log" aria-label="Channel messages">
         {#if isInRoom && view.messages.length}
-          {#each view.messages as entry (entry.id)}
-            {@const name = senderName(entry.senderId)}
-            <article class="chat-message">
-              <Avatar {name} />
-              <div class="flex-content">
-                <div class="chat-meta"><strong>{name}</strong><time datetime={new Date(entry.createdAt).toISOString()}>{messageTime.format(entry.createdAt)}</time></div>
-                <RichMessage text={entry.text} html={entry.html} />
-                {#if entry.attachment && snapshot}
-                  {@const connectionId = snapshot.connectionId}
-                  <Button type="button" variant="outline" class="chat-attachment" disabled={!canChat || Boolean(pending)}
-                    onclick={() => workspace.runAction("attachment-download", () => downloadAttachment(workspace.serverOrigin, connectionId, entry))}>
-                    <Download size={15} /><span class="truncate">{entry.attachment.name}</span>
-                  </Button>
-                {/if}
-              </div>
-            </article>
+          {#each view.messages as entry, index (entry.id)}
+            <ChatMessage message={entry} previous={view.messages[index - 1]} name={senderName(entry.senderId)}>
+              <RichMessage text={entry.text} html={entry.html} />
+              {#if entry.attachment && snapshot}
+                {@const connectionId = snapshot.connectionId}
+                <Button type="button" variant="outline" class="chat-attachment" disabled={!canChat || Boolean(pending)}
+                  onclick={() => workspace.runAction("attachment-download", () => downloadAttachment(workspace.serverOrigin, connectionId, entry))}>
+                  <Download size={15} /><span class="truncate">{entry.attachment.name}</span>
+                </Button>
+              {/if}
+            </ChatMessage>
           {/each}
         {:else}
           <div class="chat-empty">
@@ -672,6 +676,17 @@
 {/if}
 
 <style>
+  .server-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .25rem 1rem;
+    padding: .35rem var(--ui-gap);
+    border-bottom: 1px solid var(--border);
+    color: var(--muted-foreground);
+    font-size: var(--type-small);
+  }
+  .online-count { display: inline-flex; align-items: center; gap: .35rem; }
+  .online-count::before { content: ""; width: .4rem; height: .4rem; border-radius: 50%; background: var(--success); }
   .server-motd {
     margin: .5rem .5rem 0;
     padding: .5rem .75rem;

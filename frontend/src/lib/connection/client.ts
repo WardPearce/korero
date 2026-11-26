@@ -8,6 +8,7 @@ export interface Account {
   id: string;
   displayName: string;
   role: string;
+  badge?: string | null;
 }
 
 export interface Channel {
@@ -39,6 +40,7 @@ export interface Member {
   adminMuted: boolean;
   adminDeafened?: boolean;
   role?: string;
+  badge?: string | null;
   speaking?: boolean;
 }
 
@@ -46,6 +48,7 @@ export interface Snapshot {
   connectionId: string;
   account: Account;
   channelId: string | null;
+  totalUsers?: number;
   channels: Channel[];
   presence: { accountId: string; displayName: string; connections: number }[];
   members: Member[];
@@ -59,8 +62,10 @@ export interface Snapshot {
   maxAttachmentBytes?: number;
   canReorderChannels?: boolean;
   canSendText?: boolean;
-  directMessages?: { maxBytes: number; persistent: boolean };
+  canAttachFiles?: boolean;
+  directMessages?: { maxBytes: number; persistent: boolean; canSend?: boolean };
   canShareScreen?: boolean;
+  canUseCamera?: boolean;
   whispers?: { producerId: string; from: string }[];
   screens?: ScreenShare[];
   cameras?: ScreenShare[];

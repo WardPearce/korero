@@ -71,6 +71,20 @@
       "when": 1795676164557,
       "tag": "0009_encrypted_direct_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1795677457152,
+      "tag": "0010_role_capabilities",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1795678033915,
+      "tag": "0011_account_badges",
+      "breakpoints": true
     }
   ]
 }

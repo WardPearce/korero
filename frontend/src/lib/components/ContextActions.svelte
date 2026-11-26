@@ -3,13 +3,19 @@
   import type { Snippet } from "svelte";
 
   type Action = { label: string; onSelect: () => void; disabled?: boolean };
-  type TriggerEvents = { onkeydown?: (event: KeyboardEvent) => void; onclick?: (event: MouseEvent) => void };
+  type TriggerEvents = {
+    onkeydown?: (event: KeyboardEvent) => void;
+    onclick?: (event: MouseEvent) => void;
+    ondblclick?: () => void;
+  };
 
-  let { trigger, actions, disabled = false, openOnClick = false }: {
+  let { trigger, actions = [], content, disabled = false, openOnClick = false, onDoubleClick }: {
     trigger: Snippet<[TriggerEvents]>;
-    actions: Action[];
+    actions?: Action[];
+    content?: Snippet;
     disabled?: boolean;
     openOnClick?: boolean;
+    onDoubleClick?: () => void;
   } = $props();
 
   function openAtTrigger(target: EventTarget | null) {
@@ -27,22 +33,27 @@
   }
 
   function openFromClick(event: MouseEvent) {
+    if (onDoubleClick && event.detail > 0 && !(event instanceof PointerEvent && event.pointerType === "touch")) return;
     openAtTrigger(event.currentTarget);
   }
 </script>
 
-{#if disabled || !actions.length}
+{#if disabled || (!actions.length && !content)}
   {@render trigger({})}
 {:else}
   <div class="context-row">
     <ContextMenu.Root>
       <ContextMenu.Trigger>
-        {@render trigger({ onkeydown: openFromKeyboard, onclick: openOnClick ? openFromClick : undefined })}
+        {@render trigger({ onkeydown: openFromKeyboard, onclick: openOnClick ? openFromClick : undefined, ondblclick: onDoubleClick })}
       </ContextMenu.Trigger>
       <ContextMenu.Content class="max-w-[calc(100vw-1rem)]">
-        {#each actions as action (action.label)}
-          <ContextMenu.Item disabled={action.disabled} onSelect={action.onSelect}>{action.label}</ContextMenu.Item>
-        {/each}
+        {#if content}
+          {@render content()}
+        {:else}
+          {#each actions as action (action.label)}
+            <ContextMenu.Item disabled={action.disabled} onSelect={action.onSelect}>{action.label}</ContextMenu.Item>
+          {/each}
+        {/if}
       </ContextMenu.Content>
     </ContextMenu.Root>
   </div>

@@ -1,4 +1,6 @@
 mod identity;
+#[cfg(target_os = "linux")]
+mod browser_media;
 
 use anyhow::{ensure, Context, Result};
 use korero_native::{
@@ -140,7 +142,10 @@ async fn fetch(
         || (method == "GET" && endpoint.strip_prefix("/api/v1/chat/attachments/").is_some_and(|id| {
             id.len() == 36 && id.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
         }));
-    ensure!(is_public || is_account || is_administration || is_attachment, "Unsupported client HTTP operation");
+    let is_connection_info = method == "GET" && path.strip_prefix("/api/v1/connections/").is_some_and(|id| {
+        id.len() == 36 && id.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+    });
+    ensure!(is_public || is_account || is_administration || is_attachment || is_connection_info, "Unsupported client HTTP operation");
     let method = Method::from_bytes(method.as_bytes())?;
     let (status, body) = if is_public {
         server.http(method, &path, body, None).await?
@@ -344,6 +349,20 @@ async fn screen_request(connection_id: String, channel_id: String, kind: String,
     controller.screen_request(connection_id, channel_id, kind, payload).await.map_err(display)
 }
 
+#[cfg(target_os = "linux")]
+#[tauri::command]
+async fn open_browser_media(
+    connection_id: String,
+    channel_id: String,
+    source: String,
+    share: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let controller = state.0.lock().await.controller.clone().ok_or("Connect to a server first")?;
+    browser_media::open(app, controller, connection_id, channel_id, source, share).await.map_err(display)
+}
+
 #[tauri::command]
 async fn save_channel(payload: Value, state: State<'_, AppState>) -> CommandResult<()> {
     dispatch(&state, Action::SaveChannel(payload)).await
@@ -458,12 +477,35 @@ async fn configure_talk_shortcut(shortcut: Option<String>, app: AppHandle) -> Co
 }
 
 #[tauri::command]
-async fn microphone_test(state: State<'_, AppState>) -> CommandResult<f64> {
+async fn microphone_test(state: State<'_, AppState>) -> CommandResult<Value> {
     let _profile = state.1.lock().await;
     if voice_state(state.clone()).await?.view.snapshot["channelId"].is_string() {
         return Err("Leave the voice channel before testing the microphone".into());
     }
-    tauri::async_runtime::spawn_blocking(media::test_microphone).await
+    tauri::async_runtime::spawn_blocking(|| {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let sample = media::test_microphone()?;
+        let data_len = (sample.pcm.len() * 2) as u32;
+        let mut wav = Vec::with_capacity(44 + data_len as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // Mono
+        wav.extend_from_slice(&sample.sample_rate.to_le_bytes());
+        wav.extend_from_slice(&(sample.sample_rate * 2).to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_len.to_le_bytes());
+        wav.extend(sample.pcm.into_iter().flat_map(i16::to_le_bytes));
+        Ok::<_, anyhow::Error>(serde_json::json!({
+            "gatePeak": sample.gate_peak,
+            "recording": STANDARD.encode(wav),
+        }))
+    }).await
         .map_err(|error| error.to_string())?.map_err(display)
 }
 
@@ -535,6 +577,8 @@ pub fn run() {
             send_message,
             direct_request,
             screen_request,
+            #[cfg(target_os = "linux")]
+            open_browser_media,
             save_channel,
             member_action,
             set_member_volume,

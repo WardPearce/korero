@@ -7,7 +7,7 @@ import { accountIdentities, accounts, accountRoles, bans, invitations, refreshHi
 import { Credentials, equalDigest, randomToken } from "../security/credentials";
 import { fail, ProtocolError } from "../security/errors";
 
-export type Account = { id: string; displayName: string; role: Role; createdAt: number };
+export type Account = typeof accounts.$inferSelect & { role: Role };
 const { accessDigest: _, ...sessionColumns } = getTableColumns(sessions);
 export type Session = Omit<typeof sessions.$inferSelect, "accessDigest">;
 type IdentityOperation = "login" | "register" | "bootstrap";
@@ -32,7 +32,7 @@ function invitationScope(actor: Account) {
 }
 
 function getAccount(db: Queries, id: string): Account {
-  const row = db.select({ id: accounts.id, displayName: accounts.displayName, createdAt: accounts.createdAt, role: accountRoles.role })
+  const row = db.select({ ...getTableColumns(accounts), role: accountRoles.role })
     .from(accounts).innerJoin(accountRoles, eq(accounts.id, accountRoles.accountId)).where(eq(accounts.id, id)).get();
   if (!row) fail("NOT_FOUND");
   return row;
@@ -61,6 +61,7 @@ export class Auth {
   private passwordWork = 0;
   onRevoked: (sessionIds: Set<string>) => void = () => {};
   onAccountChanged: (accountId: string) => void = () => {};
+  onAccountCreated: () => void = () => {};
   constructor(private readonly db: Store, private readonly credentials: Credentials, private readonly config: Config) {
     if (this.passwordLocked && config.server.password) {
       this.environmentPasswordHash = Bun.password.hashSync(config.server.password, passwordOptions);
@@ -144,7 +145,7 @@ export class Auth {
   }
 
   bootstrap(token: string, name: string, device: string, identity: IdentityChallenge) {
-    const result = this.db.transaction((tx) => {
+    const { result, created } = this.db.transaction((tx) => {
       if (hasOwner(tx)) fail("NOT_FOUND");
       const row = tx.select().from(setup).where(eq(setup.id, 1)).get();
       if (!row || row.expiresAt <= Date.now() || !equalDigest(row.digest, this.credentials.digest("setup", token))) fail("AUTH_FAILED");
@@ -155,20 +156,21 @@ export class Auth {
         if (isBanned(tx, existing.accountId)) fail("FORBIDDEN");
         tx.update(accountRoles).set({ role: "Owner" }).where(eq(accountRoles.accountId, existing.accountId)).run();
         audit(tx, existing.accountId, "setup.consumed", existing.accountId);
-        return { account: getAccount(tx, existing.accountId), ...this.createSession(tx, existing.accountId, device) };
+        return { created: false, result: { account: getAccount(tx, existing.accountId), ...this.createSession(tx, existing.accountId, device) } };
       }
       const result = this.createAccount(tx, name, device, "Owner", identity);
       audit(tx, result.account.id, "setup.consumed", result.account.id);
-      return result;
+      return { created: true, result };
     }, { behavior: "immediate" });
-    this.onAccountChanged(result.account.id);
+    if (created) this.onAccountCreated();
+    else this.onAccountChanged(result.account.id);
     return result;
   }
 
   async register(name: string, device: string, identity: IdentityChallenge, invitation?: string, password?: string) {
     if (this.config.server.registration === "disabled") fail("FORBIDDEN");
     const hash = invitation ? undefined : await this.verifyPassword(password);
-    return this.db.transaction((tx) => {
+    const result = this.db.transaction((tx) => {
       if (!invitation && this.passwordHash() !== hash) fail("CONFLICT");
       const mode = this.config.server.registration;
       if (mode === "disabled") fail("FORBIDDEN");
@@ -192,6 +194,8 @@ export class Auth {
       audit(tx, result.account.id, "account.registered", result.account.id, { role, invitationId });
       return result;
     }, { behavior: "immediate" });
+    this.onAccountCreated();
+    return result;
   }
 
   private createAccount(db: Queries, name: string, device: string, role: Role, { publicKey, origin }: IdentityChallenge) {
@@ -204,7 +208,7 @@ export class Auth {
     db.insert(accountRoles).values({ accountId: id, role }).run();
     db.insert(accountIdentities).values({ accountId: id, publicKey, origin }).run();
     audit(db, id, "identity.attached", id);
-    return { account: { id, displayName: name, role, createdAt }, ...this.createSession(db, id, device) };
+    return { account: { id, displayName: name, role, createdAt, badge: null }, ...this.createSession(db, id, device) };
   }
 
   challengeIdentity(serverId: string, operation: IdentityOperation, publicKey: string, deviceName: string, origin: string) {

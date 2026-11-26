@@ -2,10 +2,14 @@
   import SliderField from "#lib/components/fields/SliderField.svelte";
   import { getAudioSettings } from "#lib/media/audio.svelte";
 
-  let { setting, label, min = 0 }: {
-    setting: "inputLevel" | "outputLevel" | "activityThreshold";
+  let { setting, label, min = 0, max = 100, step = 1, unit = "" }: {
+    setting: "inputLevel" | "outputLevel" | "activityThreshold" | "activityHoldMs"
+      | "gateThresholdDb" | "gateAttenuationDb" | "gateHoldMs";
     label: string;
     min?: number;
+    max?: number;
+    step?: number;
+    unit?: string;
   } = $props();
 
   const audio = getAudioSettings();
@@ -38,5 +42,5 @@
 <svelte:window onpointerup={finishDrag} onpointercancel={finishDrag} />
 
 <div class="audio-level" onpointerdowncapture={startDrag}>
-  <SliderField {label} {min} {disabled} bind:value={() => preview ?? audio.profile[setting], update} />
+  <SliderField {label} {min} {max} {step} {unit} {disabled} bind:value={() => preview ?? audio.profile[setting], update} />
 </div>

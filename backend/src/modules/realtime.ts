@@ -1,18 +1,20 @@
-import { and, desc, eq, gt, gte, inArray, like, lt, sum } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, inArray, like, lt, sum } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Config } from "../config";
-import { audit, channelPermissions, DEFAULT_ROLE_KEY, INITIAL_ROLE, LOBBY, permissions, roles, type Permission, type Role, type Store } from "../database";
+import { audit, channelPermissions, defaultPermissions, DEFAULT_ROLE_KEY, editableBuiltInRoles, INITIAL_ROLE, LOBBY,
+  memberPermissions, permissions, roles, type Permission, type Role, type Store } from "../database";
 import { accounts, accountRoles, attachments, auditEvents, bans, channelOverrides, channels, hearingRestrictions, messages, rolePermissions, rolesTable, settings, speakingRestrictions } from "../database/schema";
 import { attachmentDataLength, bytesPerMiB, decode, defaultAttachmentMiB, maxSupportedAttachmentMiB, type httpBodies, type Request } from "../protocol";
 import { errorResponse, fail, ProtocolError, RateLimit } from "../security/errors";
 import { Auth, isBanned, type Account, type Session } from "./auth";
 import { DirectMessages } from "./direct-messages";
-import { Media, type WhisperRoute } from "./media";
+import { Media, type VideoSource, type WhisperRoute } from "./media";
 
 type Channel = typeof channels.$inferSelect;
-type Socket = { sendText(data: string): number; close(code?: number, reason?: string): unknown; terminate(): unknown };
+type Socket = { sendText(data: string): number; ping(data: Buffer): number; close(code?: number, reason?: string): unknown; terminate(): unknown };
 type Peer = { id: string; socket: Socket; source: string; session: Session | null; account: Account | null; channelId: string | null; membershipEpoch: number;
+  connectedAt: number; latencyMs: number | null; probe?: { token: Buffer; sentAt: number };
   afk: boolean; afkMessage: string;
   muted: boolean; deafened: boolean; adminMuted: boolean; adminDeafened: boolean; deadline: number; closed: boolean; pending: number;
   queue: Promise<void>; latest: number; replayBytes: number; replies: Map<number, { digest: string; reply: string; size: number }> };
@@ -22,13 +24,16 @@ type ChannelChange = Extract<Request, { type: "channel.edit" | "channel.create" 
 const compareChannels = (a: Channel, b: Channel) =>
   a.position - b.position || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
 const replyWindow = 16;
+const probeIntervalSeconds = 10;
 const replayByteLimit = 262144;
 const liveAttachmentLimit = 32 * bytesPerMiB;
 const storedAttachmentLimit = 256 * bytesPerMiB;
 const liveAttachmentLimitPerAccount = 8 * bytesPerMiB;
 const storedAttachmentLimitPerAccount = maxSupportedAttachmentMiB * bytesPerMiB;
 const downloadBytesPerMinute = maxSupportedAttachmentMiB * bytesPerMiB;
-const registrationGrants = new Set<Permission>(["join", "speak", "text"]);
+const registrationGrants = new Set<Permission>(memberPermissions);
+const configurableRoles = new Set<Role>(editableBuiltInRoles);
+const videoPermissions = { screen: "shareScreen", camera: "useCamera" } satisfies Record<VideoSource, Permission>;
 const auditActor = alias(accounts, "audit_actor_account");
 const auditTarget = alias(accounts, "audit_target_account");
 
@@ -105,6 +110,7 @@ export class Realtime {
       for (const peer of this.peers.values()) if (peer.session && ids.has(peer.session.id)) this.disconnect(peer, 4401, "Session revoked");
     };
     auth.onAccountChanged = (id) => this.accountChanged(id);
+    auth.onAccountCreated = () => this.broadcastAll("state.invalidated", {});
     media.event = (channelId, type, payload) => {
       if (type === "channel.voiceActivity") this.broadcastVisible(channelId, type, payload);
       else this.broadcast(this.memberships.get(channelId), type, payload);
@@ -124,6 +130,7 @@ export class Realtime {
     this.pending++;
     this.pendingByIp.set(source, pendingFromSource + 1);
     this.peers.set(id, { id: randomUUID(), socket, source, session: null, account: null, channelId: null, membershipEpoch: 0,
+      connectedAt: 0, latencyMs: null,
       afk: false, afkMessage: "",
       muted: false, deafened: false, adminMuted: false, adminDeafened: false, deadline: Date.now() + 5000, closed: false,
       pending: 0, queue: Promise.resolve(), latest: 0, replayBytes: 0, replies: new Map() });
@@ -142,6 +149,21 @@ export class Realtime {
     const peer = this.peers.get(id);
     if (peer) this.disconnect(peer);
     this.peers.delete(id);
+  }
+  receivedPong(id: string, data: Buffer) {
+    const peer = this.peers.get(id);
+    if (!peer?.probe || peer.closed || !peer.probe.token.equals(data)) return;
+    peer.latencyMs = Math.round(performance.now() - peer.probe.sentAt);
+    peer.probe = undefined;
+  }
+  private probeConnection(peer: Peer) {
+    if (peer.probe) peer.latencyMs = null;
+    const token = randomBytes(8);
+    peer.probe = { token, sentAt: performance.now() };
+    if (peer.socket.ping(token) === 0) {
+      peer.probe = undefined;
+      peer.latencyMs = null;
+    }
   }
   private releasePending(source: string) {
     this.pending--;
@@ -176,6 +198,7 @@ export class Realtime {
           if (!session) this.disconnect(peer, 4401, "Session expired");
           else peer.session = session;
         }
+        if (!peer.closed && this.tick % probeIntervalSeconds === 0) this.probeConnection(peer);
       }
     }
     this.tick++;
@@ -332,7 +355,7 @@ export class Realtime {
   }
   listAccounts(accountId: string, after?: string) {
     const actor = this.authorize(accountId, "manageRoles");
-    const rows = this.db.select({ id: accounts.id, displayName: accounts.displayName, role: accountRoles.role })
+    const rows = this.db.select({ id: accounts.id, displayName: accounts.displayName, badge: accounts.badge, role: accountRoles.role })
       .from(accounts).innerJoin(accountRoles, eq(accounts.id, accountRoles.accountId))
       .where(after ? gt(accounts.id, after) : undefined).orderBy(accounts.id).limit(51).all();
     const accountsPage = rows.slice(0, 50).map((account) => ({
@@ -342,9 +365,11 @@ export class Realtime {
     const customRoles = [...this.customRoles.keys()];
     return { accounts: accountsPage, next: rows.length > 50 ? accountsPage.at(-1)!.id : null,
       roles: this.lowerRoles(actor).filter((role) => this.canAssign(actor, role)),
+      builtInRoles: canDefineRoles ? roles.map((name) => ({ name, permissions: [...this.roleGrants.get(name) ?? []],
+        editable: configurableRoles.has(name), defaultPermissions: [...defaultPermissions[name]] })) : [],
       customRoles: canDefineRoles ? customRoles.map((name) => ({ name, permissions: [...this.roleGrants.get(name) ?? []] })) : [],
       assignablePermissions: canDefineRoles ? permissions.filter((permission) => this.allowed(actor, permission)) : [],
-      canDefineRoles };
+      canDefineRoles, defaultRole: this.defaultRole, registrationPermissions: [...registrationGrants] };
   }
   setRole(actor: Account, accountId: string, role: Role) {
     this.require(actor, "manageRoles");
@@ -358,15 +383,29 @@ export class Realtime {
     }, { behavior: "immediate" });
     this.accountChanged(accountId);
   }
+  setBadge(actorId: string, accountId: string, label: string | null) {
+    const actor = this.authorize(actorId, "manageRoles");
+    const target = this.auth.account(accountId);
+    this.subordinate(actor, target);
+    const badge = label?.trim() ?? null;
+    if (target.badge !== badge) {
+      this.db.transaction((tx) => {
+        tx.update(accounts).set({ badge }).where(eq(accounts.id, accountId)).run();
+        audit(tx, actor.id, "account.badge_changed", accountId, { previousBadge: target.badge, badge });
+      }, { behavior: "immediate" });
+      this.accountChanged(accountId);
+    }
+    return { badge };
+  }
   defineRole(accountId: string, name: Role, grants: Permission[], create: boolean) {
     const actor = this.authorize(accountId, "manageRoles");
     if (this.rank(actor.role) < this.rank("Administrator")) fail("FORBIDDEN");
-    const existing = this.customRoles.get(name);
     if (create) {
       if ([...roles, ...this.customRoles.keys()].some((role) => role.toLowerCase() === name.toLowerCase())) {
         throw new ProtocolError("CONFLICT", "A role with that name already exists.");
       }
-    } else if (existing === undefined) {
+    } else if (!this.customRoles.has(name) && !configurableRoles.has(name)) {
+      if (roles.some((role) => role === name)) fail("FORBIDDEN");
       fail("NOT_FOUND");
     }
     const unique = new Set(grants);
@@ -379,16 +418,16 @@ export class Realtime {
       return { name, permissions: previousPermissions };
     }
     // Negative database ranks distinguish custom roles from the fixed built-in ranks.
-    const rank = existing ?? Math.min(0, ...this.customRoles.values()) - 1;
+    const rank = create ? Math.min(0, ...this.customRoles.values()) - 1 : undefined;
     this.db.transaction((tx) => {
-      if (create) tx.insert(rolesTable).values({ name, rank }).run();
+      if (rank !== undefined) tx.insert(rolesTable).values({ name, rank }).run();
       else tx.delete(rolePermissions).where(eq(rolePermissions.role, name)).run();
       if (unique.size) tx.insert(rolePermissions).values([...unique].map((permission) => ({ role: name, permission }))).run();
       audit(tx, actor.id, create ? "role.created" : "role.permissions_changed", name, {
         previousPermissions, permissions: [...unique],
       });
     }, { behavior: "immediate" });
-    this.customRoles.set(name, rank);
+    if (rank !== undefined) this.customRoles.set(name, rank);
     this.roleGrants.set(name, unique);
     this.recheckAll();
     return { name, permissions: [...unique] };
@@ -416,11 +455,10 @@ export class Realtime {
     return {};
   }
   private registrationRoles() {
-    const eligible = [...this.customRoles.keys()].filter((role) =>
+    return ["Guest", INITIAL_ROLE, ...this.customRoles.keys()].filter((role) =>
       [...this.roleGrants.get(role) ?? []].every((permission) => registrationGrants.has(permission)) &&
       [...this.overrides.values()].every((overrides) =>
-        permissions.every((permission) => registrationGrants.has(permission) || overrides.get(`${role}/${permission}`) !== true)));
-    return ["Guest", INITIAL_ROLE, ...eligible];
+        channelPermissions.every((permission) => registrationGrants.has(permission) || overrides.get(`${role}/${permission}`) !== true)));
   }
   get targetAudioBitrate() {
     return process.env.VOICE_MEDIA_TARGET_AUDIO_BITRATE !== undefined ? this.config.media.target_audio_bitrate :
@@ -523,30 +561,48 @@ export class Realtime {
     return this.connected.get(id) ?? fail("NOT_FOUND");
   }
   private member(peer: Peer) {
-    return { connectionId: peer.id, accountId: peer.account!.id, displayName: peer.account!.displayName,
+    const { id, displayName, role, badge } = peer.account!;
+    return { connectionId: peer.id, accountId: id, displayName, role, badge,
       afk: peer.afk, afkMessage: peer.afk ? peer.afkMessage : "",
-      role: peer.account!.role, muted: peer.muted || peer.afk, deafened: peer.deafened || peer.afk, adminMuted: peer.adminMuted,
+      muted: peer.muted || peer.afk, deafened: peer.deafened || peer.afk, adminMuted: peer.adminMuted,
       adminDeafened: peer.adminDeafened };
+  }
+  connectionInfo(session: Session, connectionId: string) {
+    const peer = this.peer(connectionId);
+    const channel = peer.channelId ? this.catalog.get(peer.channelId) : undefined;
+    const canSeeChannel = channel && this.allowed(this.auth.account(session.accountId), "join", channel);
+    if (peer.session?.id !== session.id && !canSeeChannel) fail("NOT_FOUND");
+    return { displayName: peer.account!.displayName, channelName: canSeeChannel ? channel.name : null,
+      connectedSeconds: Math.floor((performance.now() - peer.connectedAt) / 1000), latencyMs: peer.latencyMs };
   }
   private snapshot(peer: Peer) {
     const account = peer.account!;
+    const joinedChannel = peer.channelId ? this.channel(peer.channelId) : undefined;
+    const canSpeak = !!joinedChannel && this.allowed(account, "speak", joinedChannel);
+    const canSendText = !!joinedChannel && this.allowed(account, "text", joinedChannel);
+    const canWhisper = canSpeak && this.allowed(account, "whisper", joinedChannel);
     const visible = [...this.catalog.values()].filter((channel) => this.allowed(account, "join", channel));
     const visibleIds = new Set(visible.map(({ id }) => id));
     const lowerRoles = this.lowerRoles(account);
-    return { connectionId: peer.id, account, channelId: peer.channelId,
+    const { totalUsers } = this.db.select({ totalUsers: count() }).from(accounts).get()!;
+    return { connectionId: peer.id, account, channelId: peer.channelId, totalUsers,
       whispers: peer.channelId ? this.media.whispers(peer.channelId) : [],
       screens: peer.channelId ? this.media.screens(peer.channelId) : [],
       cameras: peer.channelId ? this.media.cameras(peer.channelId) : [],
-      canSendText: peer.channelId ? this.allowed(account, "text", this.channel(peer.channelId)) : false,
-      directMessages: { maxBytes: this.directMessages.maxBytes, persistent: this.config.messaging.persistence },
-      canShareScreen: peer.channelId ? this.allowed(account, "speak", this.channel(peer.channelId)) : false,
+      canSendText,
+      canAttachFiles: canSendText && this.allowed(account, "attachFiles", joinedChannel),
+      directMessages: { maxBytes: this.directMessages.maxBytes, persistent: this.config.messaging.persistence,
+        canSend: this.allowed(account, "sendDirectMessages") },
+      canShareScreen: canSpeak && this.allowed(account, "shareScreen", joinedChannel),
+      canUseCamera: canSpeak && this.allowed(account, "useCamera", joinedChannel),
       channels: visible.sort(compareChannels).map(
         (channel) => {
           const { id, name, parentId, description, position, capacity, temporary, passwordHash, backgroundImageUrl } = channel;
           const canEdit = this.allowed(account, "editChannels", channel);
           return { id, name, parentId: parentId && visibleIds.has(parentId) ? parentId : null, description, position, capacity,
             temporary, passwordRequired: !!passwordHash, backgroundImageUrl, audioBitrate: channel.audioBitrate,
-            canWhisperTo: id !== peer.channelId && this.allowed(account, "speak", channel),
+            canWhisperTo: id !== peer.channelId && canWhisper && this.allowed(account, "speak", channel) &&
+              this.allowed(account, "whisper", channel),
             canSetAudioBitrate: this.allowed(account, "manageSettings") && canEdit,
             canEdit, canReparent: canEdit && id !== LOBBY,
             canSetPassword: id !== LOBBY && canEdit,
@@ -606,14 +662,21 @@ export class Realtime {
     if (!this.allowed(peer.account!, "join", channel)) {
       this.leave(peer);
       this.event(peer, "channel.changed", { channelId: null });
-    } else if (!this.allowed(peer.account!, "speak", channel)) this.media.stopSending(peer.id);
-    else this.media.recheckWhispers(peer.id, (whisper) => this.canWhisper(peer, whisper));
+      return;
+    }
+    const account = peer.account!;
+    const canSpeak = this.allowed(account, "speak", channel);
+    if (!canSpeak) this.media.stopSending(peer.id);
+    this.media.recheckVideo(peer.id, (source) => canSpeak && this.allowed(account, videoPermissions[source], channel));
+    if (canSpeak) this.media.recheckWhispers(peer.id, (whisper) => this.canWhisper(peer, whisper));
   }
   private canWhisper(peer: Peer, { channelId, passwordHash }: WhisperRoute) {
     const channel = this.catalog.get(channelId);
-    return !!channel && channel.id !== peer.channelId && channel.passwordHash === passwordHash &&
-      Boolean(this.memberships.get(channelId)?.size) && this.allowed(peer.account!, "join", channel) &&
-      this.allowed(peer.account!, "speak", channel);
+    const account = peer.account!;
+    return !!peer.channelId && !!channel && channel.id !== peer.channelId && channel.passwordHash === passwordHash &&
+      Boolean(this.memberships.get(channelId)?.size) && this.allowed(account, "join", channel) &&
+      this.allowed(account, "speak", channel) && this.allowed(account, "whisper", channel) &&
+      this.allowed(account, "whisper", this.channel(peer.channelId));
   }
   private recheckAll() {
     for (const group of this.online.values()) for (const peer of [...group]) this.recheck(peer);
@@ -816,7 +879,8 @@ export class Realtime {
 
   uploadAttachment(session: Session, payload: typeof httpBodies.attachmentUpload.static) {
     const peer = this.attachmentPeer(session, payload.connectionId);
-    this.textChannel(peer, payload.channelId);
+    const channel = this.textChannel(peer, payload.channelId);
+    this.require(peer.account!, "attachFiles", channel);
     const maxBytes = this.maxAttachmentBytes;
     if (payload.data.length > attachmentDataLength(maxBytes)) this.attachmentTooLarge();
     const data = Buffer.from(payload.data, "base64");
@@ -867,6 +931,7 @@ export class Realtime {
       if (group.size >= this.config.limits.connections_per_account || !group.size && this.online.size >= this.config.server.max_users) fail("LIMIT");
       peer.session = session;
       peer.account = this.auth.account(session.accountId);
+      peer.connectedAt = performance.now();
       peer.adminMuted = !!this.db.select({ accountId: speakingRestrictions.accountId }).from(speakingRestrictions)
         .where(eq(speakingRestrictions.accountId, session.accountId)).get();
       peer.adminDeafened = !!this.db.select({ accountId: hearingRestrictions.accountId }).from(hearingRestrictions)
@@ -875,6 +940,7 @@ export class Realtime {
       group.add(peer);
       this.online.set(session.accountId, group);
       this.connected.set(peer.id, peer);
+      this.probeConnection(peer);
       audit(this.db, session.accountId, "connection.opened", null, { connectionId: peer.id });
       this.presenceAccount(session.accountId, peer);
       return this.snapshot(peer);
@@ -905,6 +971,7 @@ export class Realtime {
         this.require(current, "join", channel);
         if (send) {
           this.require(current, "speak", channel);
+          if (send !== "audio") this.require(current, videoPermissions[send], channel);
           if ((send === "audio" && peer.muted) || peer.adminMuted || peer.deafened || peer.adminDeafened || peer.afk) fail("FORBIDDEN");
         }
         if (receive && (peer.deafened || peer.adminDeafened || peer.afk)) fail("FORBIDDEN");
@@ -981,7 +1048,7 @@ export class Realtime {
         this.require(actor, "editChannels");
         this.require(actor, permission);
         if (this.rank(role) >= this.rank(actor.role)) fail("FORBIDDEN");
-        if (role === this.defaultRole && this.customRoles.has(role) && allow && !registrationGrants.has(permission)) {
+        if (role === this.defaultRole && allow && !registrationGrants.has(permission)) {
           throw new ProtocolError("CONFLICT", "Choose a different default role before granting elevated permissions to this role.");
         }
         this.db.transaction((tx) => {
@@ -1096,7 +1163,7 @@ export class Realtime {
       case "direct.history": return this.directMessages.history(actor.id, request.payload.accountId, request.payload.before);
       case "direct.send": {
         const { accountId, id } = request.payload;
-        this.require(actor, "text");
+        this.require(actor, "sendDirectMessages");
         this.messageRate.take(actor.id);
         this.directMessages.peer(actor.id, accountId);
         if (isBanned(this.db, accountId)) fail("NOT_FOUND");

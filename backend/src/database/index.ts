@@ -13,13 +13,17 @@ export const LOBBY = "00000000-0000-4000-8000-000000000001";
 export const DEFAULT_ROLE_KEY = "defaultRole";
 export const INITIAL_ROLE = "Member";
 export const roles = ["Guest", "Member", "Moderator", "Administrator", "Owner"] as const;
+export const editableBuiltInRoles = ["Guest", "Member", "Moderator"] as const;
 export type Role = string;
 export const permissions = ["join", "speak", "text", "createChannels", "editChannels", "deleteChannels", "move", "mute", "kick",
-  "ban", "manageRoles", "manageInvitations", "manageSettings", "viewAdmin"] as const;
+  "ban", "manageRoles", "manageInvitations", "manageSettings", "viewAdmin", "attachFiles", "sendDirectMessages",
+  "shareScreen", "useCamera", "whisper"] as const;
 export type Permission = typeof permissions[number];
-export const channelPermissions = ["join", "speak", "text", "createChannels", "editChannels", "deleteChannels", "move", "mute"] as const;
-const defaultPermissions: Record<typeof roles[number], readonly Permission[]> = {
-  Guest: ["join"], Member: ["join", "speak", "text"], Moderator: ["join", "speak", "text", "move", "mute", "kick", "manageInvitations"],
+export const channelPermissions = ["join", "speak", "text", "createChannels", "editChannels", "deleteChannels", "move", "mute",
+  "attachFiles", "shareScreen", "useCamera", "whisper"] as const;
+export const memberPermissions = ["join", "speak", "text", "attachFiles", "sendDirectMessages", "shareScreen", "useCamera", "whisper"] as const;
+export const defaultPermissions: Record<typeof roles[number], readonly Permission[]> = {
+  Guest: ["join"], Member: memberPermissions, Moderator: [...memberPermissions, "move", "mute", "kick", "manageInvitations"],
   Administrator: permissions, Owner: permissions,
 };
 
@@ -66,7 +70,8 @@ export function openDatabase(directory: string) {
       if (!tx.select().from(schema.metadata).limit(1).get()) {
         tx.insert(schema.metadata).values({ key: "serverId", value: randomUUID() }).run();
         tx.insert(schema.channels).values({ id: LOBBY, name: "Lobby" }).run();
-        tx.insert(schema.permissionsTable).values(permissions.map((name) => ({ name }))).run();
+        tx.insert(schema.permissionsTable).values(permissions.map((name) => ({ name })))
+          .onConflictDoNothing({ target: schema.permissionsTable.name }).run();
         tx.insert(schema.rolesTable).values(roles.map((name, rank) => ({ name, rank }))).run();
         tx.insert(schema.rolePermissions).values(roles.flatMap((role) =>
           defaultPermissions[role].map((permission) => ({ role, permission })))).run();

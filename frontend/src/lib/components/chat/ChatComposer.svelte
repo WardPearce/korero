@@ -22,7 +22,7 @@
   let field = $state<HTMLInputElement | null>(null);
   let fileInput = $state<HTMLInputElement>();
   let pickerOpen = $state(false);
-  const attaching = $derived(workspace.maxAttachmentBytes > 0);
+  const attaching = $derived(workspace.maxAttachmentBytes > 0 && workspace.view.snapshot?.canAttachFiles !== false);
   const busy = $derived(Boolean(workspace.pending));
   const rich = $derived(workspace.richChat);
   const placeholder = $derived(enabled ? `Message #${channelName}` : "Join a channel to send a message");
@@ -153,6 +153,10 @@
     const snapshot = workspace.view.snapshot;
     if (!enabled || busy || draftTooLong || snapshot?.channelId !== channelId || (!text && !file)) return;
     const attachment = file;
+    if (attachment && !attaching) {
+      workspace.actionError = "Remove the attachment to send this message. Your role cannot upload files in this channel.";
+      return;
+    }
     if (attachment && !validAttachment(attachment)) return;
     const markup = rich && text && editor ? formattedMessage(editor) : undefined;
     const html = markup ? sanitizeChatHtml(markup) || undefined : undefined;

@@ -30,6 +30,7 @@ Standard WebRTC encrypts media on each link to the SFU using DTLS-SRTP. The SFU 
 server operator can access voice in transit and channel chat. The server never records
 voice packets, has no telemetry, and offers optional chat persistence, disabled by default. Attachments
 require an active session with matching channel membership and text permission.
+Uploading also requires the attachment permission.
 With persistence enabled, attachments are stored in SQLite and expire with their
 messages. Otherwise, they stay in memory for up to one hour. Connection IPs are used
 for rate limiting in memory and can be visible to the network and infrastructure.

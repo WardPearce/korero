@@ -2,6 +2,42 @@ import { expect, test } from "bun:test";
 import { fixture, openSocket, type Snapshot, until } from "../server";
 import { LOBBY } from "../../src/database";
 
+test("connection info keeps diagnostics scoped to the session and visible channel members", async () => {
+  const server = await fixture();
+  try {
+    const owner = await server.owner();
+    const member = await server.register("Viewer");
+    const ownerWs = await server.ws(owner);
+    const memberWs = await server.ws(member);
+    try {
+      const path = `/api/v1/connections/${ownerWs.state.connectionId}`;
+      type ConnectionInfo = { displayName: string; channelName: string | null; connectedSeconds: number; latencyMs: number | null };
+      const info = (token: string) => server.call<ConnectionInfo>(path, undefined, token);
+      expect((await server.fail(path)).status).toBe(401);
+      expect((await info(member.accessToken)).response.status).toBe(404);
+      const own = await until(() => info(owner.accessToken), ({ response, payload }) => response.ok && payload.latencyMs !== null);
+      expect(own.payload).toEqual({ displayName: "Owner", channelName: null, connectedSeconds: expect.any(Number), latencyMs: expect.any(Number) });
+
+      const { channelId } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Studio" });
+      await ownerWs.rpc("channel.join", { channelId });
+      const visible = await info(member.accessToken);
+      expect(visible.response.status).toBe(200);
+      expect(visible.payload).toEqual({ displayName: "Owner", channelName: "Studio", connectedSeconds: expect.any(Number), latencyMs: expect.any(Number) });
+
+      await ownerWs.rpc("channel.override", { channelId, role: "Member", permission: "join", allow: false });
+      expect((await info(member.accessToken)).response.status).toBe(404);
+      expect((await info(owner.accessToken)).response.status).toBe(200);
+      ownerWs.close();
+      await ownerWs.closed;
+      expect((await info(owner.accessToken)).response.status).toBe(404);
+    } finally {
+      ownerWs.close();
+      memberWs.close();
+      await Promise.all([ownerWs.closed, memberWs.closed]);
+    }
+  } finally { await server.cleanup(); }
+});
+
 test("attachments follow session ownership, channel permissions, history and deletion", async () => {
   const server = await fixture({ environment: { VOICE_MESSAGING_PERSISTENCE: "true" } });
   try {

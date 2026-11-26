@@ -1,12 +1,12 @@
 <script lang="ts">
   import { ArrowLeft, LockKeyhole, Send } from "@lucide/svelte";
   import { onMount, tick } from "svelte";
-  import Avatar from "#lib/components/Avatar.svelte";
+  import ChatMessage from "./ChatMessage.svelte";
   import IconButton from "#lib/components/IconButton.svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
   import { Textarea } from "#lib/components/ui/textarea/index.js";
-  import { directRequest, messageFrom, messageTime, type DirectMessage } from "#lib/connection/client";
+  import { directRequest, messageFrom, type DirectMessage } from "#lib/connection/client";
   import { directConversation, type DirectCursor, type DirectPacket, type DirectPage, type DirectPeer } from "#lib/chat/direct-crypto";
   import { getIdentity } from "#lib/identity/identity";
   import { preferences } from "#lib/preferences";
@@ -17,7 +17,8 @@
   const snapshot = $derived(workspace.view.snapshot!);
   const policy = $derived(snapshot.directMessages!);
   const online = $derived(snapshot.presence.some((peer) => peer.accountId === accountId));
-  const canSend = $derived(snapshot.serverPermissions.includes("text") && (online || policy.persistent));
+  const canSendDirectMessages = $derived(policy.canSend ?? snapshot.serverPermissions.includes("text"));
+  const canSend = $derived(canSendDirectMessages && (online || policy.persistent));
   let peer = $state.raw<DirectPeer>();
   let conversation = $state.raw<Awaited<ReturnType<typeof directConversation>>>();
   let mode = $state<"loading" | "verify" | "verified" | "error">("loading");
@@ -193,21 +194,17 @@
           </Button>
         </div>
       {/if}
-      {#each messages as message (message.id)}
+      {#each messages as message, index (message.id)}
         {@const name = message.senderId === snapshot.account.id ? snapshot.account.displayName : peer?.displayName ?? "Contact"}
-        <article class="chat-message">
-          <Avatar {name} />
-          <div class="flex-content">
-            <div class="chat-meta"><strong>{name}</strong><time datetime={new Date(message.createdAt).toISOString()}>{messageTime.format(message.createdAt)}</time></div>
-            {#await conversation.decrypt(message)}
-              <p class="text-muted-foreground">Decrypting…</p>
-            {:then text}
-              <p>{text}</p>
-            {:catch}
-              <p class="form-error">Message could not be verified or decrypted.</p>
-            {/await}
-          </div>
-        </article>
+        <ChatMessage {message} previous={messages[index - 1]} {name}>
+          {#await conversation.decrypt(message)}
+            <p class="text-muted-foreground">Decrypting…</p>
+          {:then text}
+            <p>{text}</p>
+          {:catch}
+            <p class="form-error">Message could not be verified or decrypted.</p>
+          {/await}
+        </ChatMessage>
       {:else}
         <div class="chat-empty">
           <LockKeyhole size={23} />
@@ -218,8 +215,8 @@
     {#if error}<p class="form-error px-3" role="alert">{error}</p>{/if}
     {#if !online && !policy.persistent}
       <p class="px-3 text-sm text-muted-foreground">This contact is offline. The server does not retain direct messages.</p>
-    {:else if !snapshot.serverPermissions.includes("text")}
-      <p class="px-3 text-sm text-muted-foreground">Your account does not have permission to send messages on this server.</p>
+    {:else if !canSendDirectMessages}
+      <p class="px-3 text-sm text-muted-foreground">Your role cannot send direct messages on this server.</p>
     {/if}
     <form class="composer" onsubmit={send}>
       <Textarea rows={2} maxlength={policy.maxBytes} disabled={!canSend || pending}

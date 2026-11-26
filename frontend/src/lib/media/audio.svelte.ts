@@ -6,6 +6,8 @@ import { globalTalkShortcut, isTypingTalkShortcut, matchesTalkShortcut, releases
 
 interface AudioDevice { id: string; label: string }
 interface AudioDevices { input: AudioDevice[]; output: AudioDevice[]; micTest: boolean }
+interface MicrophoneResult { gatePeak: number; recording: string }
+interface MicrophoneSample { gatePeak: number; recording: Blob }
 
 export class AudioSettings {
   readonly available = nativeApp();
@@ -15,7 +17,7 @@ export class AudioSettings {
   deviceError = $state("");
   applying = $state(false);
   testing = $state(false);
-  peak = $state<number | null>(null);
+  sample = $state.raw<MicrophoneSample | null>(null);
   talking = $state(false);
   globalActive = $state(false);
   shortcutError = $state("");
@@ -95,7 +97,7 @@ export class AudioSettings {
       await this.configureMicrophone(profile);
       this.profile = profile;
       if (key === "transmitMode" || key === "talkShortcut" || key === "globalTalkShortcut") await this.registerShortcut();
-      this.peak = null;
+      this.sample = null;
       await preferences.local.put({ key: "audio", value: profile });
     } catch (error) {
       this.error = messageFrom(error);
@@ -107,11 +109,13 @@ export class AudioSettings {
   async test() {
     if (!this.devices?.micTest || this.testing || this.applying) return;
     this.testing = true;
-    this.peak = null;
+    this.sample = null;
     this.error = "";
     try {
       await this.load();
-      this.peak = await call<number>("microphone_test");
+      const { gatePeak, recording } = await call<MicrophoneResult>("microphone_test");
+      const pcm = Uint8Array.from(atob(recording), (byte) => byte.charCodeAt(0));
+      this.sample = { gatePeak, recording: new Blob([pcm], { type: "audio/wav" }) };
     } catch (error) {
       this.error = messageFrom(error);
     } finally {

@@ -30,6 +30,7 @@ interface Workspace {
   readonly directAccountId: string | null;
   readonly unreadDirectAccounts: ReadonlySet<string>;
   showDirectMessages(accountId?: string): void;
+  showConnectionInfo(connectionId: string): void;
   showConnect(address?: string): void;
   showServerSettings(): void;
   run(action: string, command: string, args?: Record<string, unknown>): Promise<boolean>;

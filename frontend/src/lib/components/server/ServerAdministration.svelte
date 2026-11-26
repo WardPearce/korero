@@ -35,11 +35,27 @@
   type RoleDefinition = Roles["customRoles"][number];
   type Permission = RoleDefinition["permissions"][number];
   const permissionLabels: Record<Permission, string> = {
-    join: "Join channels", speak: "Speak in voice", text: "Send messages", createChannels: "Create channels",
+    join: "See and join channels", speak: "Speak in voice", text: "Read and send channel messages", createChannels: "Create channels",
     editChannels: "Edit channels", deleteChannels: "Delete channels", move: "Move members", mute: "Mute members",
-    kick: "Kick members", ban: "Ban members", manageRoles: "Manage role assignments", manageInvitations: "Manage invitations",
+    kick: "Kick members", ban: "Ban members", manageRoles: "Assign roles", manageInvitations: "Manage invitations",
     manageSettings: "Manage server settings", viewAdmin: "View diagnostics and audit log",
+    attachFiles: "Upload attachments", sendDirectMessages: "Send direct messages", shareScreen: "Share screen",
+    useCamera: "Use camera", whisper: "Whisper to other channels",
   };
+  const permissionGroups = [
+    { label: "Channel access and voice", permissions: ["join", "speak", "shareScreen", "useCamera", "whisper"] },
+    { label: "Messaging", permissions: ["text", "attachFiles", "sendDirectMessages"] },
+    { label: "Channel management", permissions: ["createChannels", "editChannels", "deleteChannels"] },
+    { label: "Moderation", permissions: ["move", "mute", "kick", "ban"] },
+    { label: "Server administration", permissions: ["manageRoles", "manageInvitations", "manageSettings", "viewAdmin"] },
+  ] satisfies { label: string; permissions: Permission[] }[];
+  const roleTemplates: RoleDefinition[] = [
+    { name: "Listener", permissions: ["join"] },
+    { name: "Text-only", permissions: ["join", "text"] },
+    { name: "Presenter", permissions: ["join", "speak", "shareScreen", "useCamera"] },
+    { name: "Channel Manager", permissions: ["join", "speak", "text", "createChannels", "editChannels", "deleteChannels", "move"] },
+    { name: "Invitation Manager", permissions: ["join", "manageInvitations"] },
+  ];
   type ServerPreferences = Extract<Awaited<ReturnType<ReturnType<typeof apiFor>["admin"]["preferences"]["get"]>>["data"], { motd: string }>;
   type InvitationList = Extract<Awaited<ReturnType<ReturnType<typeof apiFor>["admin"]["invitations"]["get"]>>["data"], { invitations: unknown }>;
   type Invitation = InvitationList["invitations"][number];
@@ -71,9 +87,17 @@
   let bannerUrl = $state("");
   let roleEditing = $state(false);
   let editedRole = $state("");
+  let editingBadge = $state("");
+  let badgeDraft = $state("");
   let deletingRole = $state("");
   let roleName = $state("");
+  let selectedTemplate = $state("");
   let rolePermissions = $state<Permission[]>([]);
+  const roleDefaults = $derived(members?.builtInRoles?.find(({ name }) => name === editedRole)?.defaultPermissions);
+  const editingDefaultRole = $derived(Boolean(editedRole && editedRole === members?.defaultRole));
+  const templateOptions = $derived(roleTemplates.filter(({ permissions }) =>
+    permissions.every((permission) => members?.assignablePermissions.includes(permission)))
+    .map(({ name }) => ({ label: name, value: name })));
   let serverPreferences = $state.raw<ServerPreferences | null>(null);
   let motd = $state("");
   let defaultRole = $state("");
@@ -123,6 +147,7 @@
       if (!response.data || !("accounts" in response.data)) throw requestError({ value: response.data });
       members = response.data;
       pages = nextPages;
+      editingBadge = "";
     });
   }
 
@@ -132,7 +157,7 @@
     error = "";
     notice = "";
     if (next === "overview") await loadPreferences();
-    if (next === "roles" && !members) await loadMembers(pages);
+    if (next === "roles") await loadMembers(pages);
     if (next === "password") await loadPassword();
     if (next === "banner") bannerUrl = bannerImageUrl ?? "";
     if (next === "invitation") await loadInvitations();
@@ -152,12 +177,41 @@
     if (error) select.value = account.role;
   }
 
+  function editBadge(account: Roles["accounts"][number]) {
+    editingBadge = account.id;
+    badgeDraft = account.badge ?? "";
+  }
+
+  async function saveBadge(event: SubmitEvent, account: Roles["accounts"][number]) {
+    event.preventDefault();
+    await run(async () => {
+      const response = await apiFor(origin).admin.badges.patch({ accountId: account.id, badge: badgeDraft.trim() || null });
+      if (response.error) throw requestError(response.error);
+      if (!response.data || !("badge" in response.data)) throw requestError({ value: response.data });
+      const { badge } = response.data;
+      if (members) {
+        members = { ...members, accounts: members.accounts.map((row) => row.id === account.id ? { ...row, badge } : row) };
+      }
+      editingBadge = "";
+      notice = badge ? `Badge saved for ${account.displayName}.` : `Badge removed for ${account.displayName}.`;
+    });
+  }
+
   function editRole(role?: RoleDefinition) {
     deletingRole = "";
+    selectedTemplate = "";
     editedRole = role?.name ?? "";
     roleName = editedRole;
     rolePermissions = [...role?.permissions ?? []];
     roleEditing = true;
+  }
+
+  function applyRoleTemplate(name: string) {
+    const template = roleTemplates.find((role) => role.name === name);
+    if (!template) return;
+    selectedTemplate = name;
+    roleName = template.name;
+    rolePermissions = [...template.permissions];
   }
 
   function deleteRole(name: string) {
@@ -223,10 +277,14 @@
       if (!response.data || !("name" in response.data)) throw requestError({ value: response.data });
       const role = response.data;
       if (members) {
+        const builtInRoles = members.builtInRoles ?? [];
+        const isBuiltIn = builtInRoles.some(({ name }) => name === role.name);
         members = {
           ...members,
           roles: editedRole ? members.roles : [...members.roles, role.name],
-          customRoles: editedRole ? members.customRoles.map((item) => item.name === role.name ? role : item) : [...members.customRoles, role],
+          builtInRoles: builtInRoles.map((item) => item.name === role.name ? { ...item, permissions: role.permissions } : item),
+          customRoles: isBuiltIn ? members.customRoles :
+            editedRole ? members.customRoles.map((item) => item.name === role.name ? role : item) : [...members.customRoles, role],
         };
       }
       roleEditing = false;
@@ -419,44 +477,93 @@
     {:else if tab === "roles" && permissions.includes("manageRoles")}
       {#if members}
         {#if members.canDefineRoles}
-          <section class="role-settings" aria-label="Custom roles">
+          <section class="role-settings" aria-label="Role definitions">
             <div class="role-heading">
-              <h3>Custom roles</h3>
+              <h3>{roleEditing ? editedRole ? `Edit ${editedRole}` : "Create role" : "Role permissions"}</h3>
               {#if !roleEditing}<Button variant="outline" disabled={busy} onclick={() => editRole()}>Create role</Button>{/if}
             </div>
             {#if roleEditing}
               <form class="dialog-form" onsubmit={saveRole}>
-                <label>Role name<Input required maxlength={80} disabled={busy || Boolean(editedRole)} bind:value={roleName} /></label>
-                <fieldset class="role-permissions" disabled={busy}>
-                  <legend>Permissions</legend>
-                  {#each members.assignablePermissions as permission (permission)}
-                    <Checkbox label={permissionLabels[permission]} disabled={busy}
-                      bind:checked={() => rolePermissions.includes(permission), (checked) => setRolePermission(permission, checked)} />
+                {#if !editedRole}
+                  <SelectField label="Start from a template" placeholder="Choose a template (optional)" options={templateOptions}
+                    disabled={busy} bind:value={() => selectedTemplate, applyRoleTemplate} />
+                  <label>Role name<Input required maxlength={80} disabled={busy} bind:value={roleName} /></label>
+                {/if}
+                {#if editingDefaultRole}
+                  <p class="field-hint">New accounts receive this role. Choose a different default in Overview to grant channel management, moderation, or administration permissions.</p>
+                {/if}
+                {#if members.assignablePermissions.includes("shareScreen")}
+                  <p class="field-hint">Screen sharing, camera, and whispering also require voice access. Attachments require channel chat access.</p>
+                {/if}
+                <div class="permission-groups">
+                  {#each permissionGroups as group (group.label)}
+                    {@const options = group.permissions.filter((permission) => members?.assignablePermissions.includes(permission))}
+                    {#if options.length}
+                      <fieldset class="permission-group" disabled={busy}>
+                        <legend>{group.label}</legend>
+                        {#each options as permission (permission)}
+                          <Checkbox label={permissionLabels[permission]}
+                            disabled={busy || (editingDefaultRole && !members.registrationPermissions?.includes(permission))}
+                            bind:checked={() => rolePermissions.includes(permission), (checked) => setRolePermission(permission, checked)} />
+                        {/each}
+                      </fieldset>
+                    {/if}
                   {/each}
-                </fieldset>
+                </div>
                 <div class="dialog-actions">
+                  {#if roleDefaults}
+                    <Button variant="outline" type="button" disabled={busy}
+                      onclick={() => { rolePermissions = [...roleDefaults]; }}>Restore defaults</Button>
+                  {/if}
                   <Button variant="outline" type="button" disabled={busy} onclick={() => { roleEditing = false; }}>Cancel</Button>
                   <Button variant="default" type="submit" disabled={busy}>{editedRole ? "Save permissions" : "Create role"}</Button>
                 </div>
               </form>
-            {:else if members.customRoles.length}
-              <ul class="admin-members">
-                {#each members.customRoles as role (role.name)}
-                  <li><span class="truncate">{role.name}</span>
-                    <div class="dialog-actions">
-                      {#if deletingRole === role.name}
-                        <Button variant="outline" disabled={busy} onclick={() => { deletingRole = ""; }}>Cancel</Button>
-                        <Button variant="default" disabled={busy} onclick={() => deleteRole(role.name)}>Confirm deletion</Button>
-                      {:else}
+            {:else}
+              {#if members.builtInRoles?.length}
+                <h4>Built-in roles</h4>
+                <ul class="role-list">
+                  {#each members.builtInRoles as role (role.name)}
+                    <li>
+                      <div>
+                        <strong>{role.name}</strong>
+                        {#if members.defaultRole === role.name}<p class="field-hint">Default for new accounts</p>{/if}
+                      </div>
+                      {#if role.editable}
                         <Button variant="outline" aria-label={`Edit permissions for ${role.name}`} disabled={busy} onclick={() => editRole(role)}>Edit</Button>
-                        {#if extended}
-                          <Button variant="outline" aria-label={`Delete ${role.name}`} disabled={busy} onclick={() => { deletingRole = role.name; }}>Delete</Button>
-                        {/if}
+                      {:else}
+                        <span class="field-hint">Full server access</span>
                       {/if}
-                    </div>
-                  </li>
-                {/each}
-              </ul>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+              <h4>Custom roles</h4>
+              {#if members.customRoles.length}
+                <ul class="role-list">
+                  {#each members.customRoles as role (role.name)}
+                    <li>
+                      <div class="shrinkable">
+                        <strong class="truncate" title={role.name}>{role.name}</strong>
+                        {#if members.defaultRole === role.name}<p class="field-hint">Default for new accounts</p>{/if}
+                      </div>
+                      <div class="dialog-actions">
+                        {#if deletingRole === role.name}
+                          <Button variant="outline" disabled={busy} onclick={() => { deletingRole = ""; }}>Cancel</Button>
+                          <Button variant="default" disabled={busy} onclick={() => deleteRole(role.name)}>Confirm deletion</Button>
+                        {:else}
+                          <Button variant="outline" aria-label={`Edit permissions for ${role.name}`} disabled={busy} onclick={() => editRole(role)}>Edit</Button>
+                          {#if extended}
+                            <Button variant="outline" aria-label={`Delete ${role.name}`} disabled={busy} onclick={() => { deletingRole = role.name; }}>Delete</Button>
+                          {/if}
+                        {/if}
+                      </div>
+                    </li>
+                  {/each}
+                </ul>
+              {:else}
+                <p class="field-hint">No custom roles yet.</p>
+              {/if}
             {/if}
           </section>
         {/if}
@@ -466,6 +573,7 @@
             <li>
               <span class="shrinkable">
                 <strong class="truncate" title={account.displayName}>{account.displayName}</strong>
+                {#if account.badge}<span class="member-badge" title={account.badge}>{account.badge}</span>{/if}
                 <small class="field-hint">{account.id}</small>
               </span>
               {#if account.editable}
@@ -476,6 +584,21 @@
                 </select>
               {:else}
                 <span>{account.role}</span>
+              {/if}
+              {#if account.editable && account.badge !== undefined}
+                {#if editingBadge === account.id}
+                  <form class="badge-form" onsubmit={(event) => saveBadge(event, account)}>
+                    <label>Badge for {account.displayName}<Input bind:value={badgeDraft} maxlength={32} disabled={busy} /></label>
+                    <p class="field-hint">Clear the label to remove the badge.</p>
+                    <div class="dialog-actions">
+                      <Button variant="outline" type="button" disabled={busy} onclick={() => { editingBadge = ""; }}>Cancel</Button>
+                      <Button type="submit" disabled={busy || (badgeDraft.trim() || null) === account.badge}>Save badge</Button>
+                    </div>
+                  </form>
+                {:else}
+                  <Button variant="outline" disabled={busy} aria-label={`${account.badge ? "Edit" : "Set"} badge for ${account.displayName}`}
+                    onclick={() => editBadge(account)}>{account.badge ? "Edit badge" : "Set badge"}</Button>
+                {/if}
               {/if}
             </li>
           {/each}
@@ -576,6 +699,16 @@
 </div>
 
 <style>
+  .badge-form { width: 100%; display: grid; gap: .4rem; }
+  .badge-form label { display: grid; gap: .25rem; }
+  .role-settings { margin-block-end: 1rem; }
+  .role-settings h4 { margin-block-start: .4rem; font-weight: 600; }
+  .role-list { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); }
+  .role-list li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .6rem; padding: .55rem .75rem; }
+  .role-list li + li { border-block-start: 1px solid var(--border); }
+  .permission-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: .75rem; }
+  .permission-group { display: flex; flex-direction: column; gap: .55rem; padding: .65rem .75rem; border: 1px solid var(--border); border-radius: var(--radius-md); }
+  .permission-group legend { padding-inline: .25rem; font-weight: 600; }
   .invite-panel, .existing-invites { display: grid; gap: 1rem; padding: var(--ui-gap); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
   .invite-heading, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
   .invite-heading h3, .section-heading h3 { margin: .2rem 0; }

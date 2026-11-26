@@ -868,7 +868,11 @@
                     "editChannels",
                     "deleteChannels",
                     "move",
-                    "mute"
+                    "mute",
+                    "attachFiles",
+                    "shareScreen",
+                    "useCamera",
+                    "whisper"
                   ]
                 },
                 "allow": {
@@ -3618,7 +3622,7 @@
         },
         "permissions": {
           "minItems": 0,
-          "maxItems": 14,
+          "maxItems": 19,
           "type": "array",
           "items": {
             "default": "join",
@@ -3637,9 +3641,41 @@
               "manageRoles",
               "manageInvitations",
               "manageSettings",
-              "viewAdmin"
+              "viewAdmin",
+              "attachFiles",
+              "sendDirectMessages",
+              "shareScreen",
+              "useCamera",
+              "whisper"
             ]
           }
+        }
+      }
+    },
+    "accountBadge": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "accountId",
+        "badge"
+      ],
+      "properties": {
+        "accountId": {
+          "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+          "type": "string"
+        },
+        "badge": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "maxLength": 32,
+              "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },

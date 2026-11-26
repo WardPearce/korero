@@ -1,11 +1,12 @@
 <script lang="ts">
   import { Button } from "#lib/components/ui/button/index.js";
   import SliderField from "#lib/components/fields/SliderField.svelte";
-  import { HeadphoneOff, MicOff, Volume2 } from "@lucide/svelte";
+  import { Activity, Ban, HeadphoneOff, LogOut, MessageCircle, MicOff, Shield, Volume2 } from "@lucide/svelte";
   import { tick } from "svelte";
   import Avatar from "#lib/components/Avatar.svelte";
   import ContextActions from "#lib/components/ContextActions.svelte";
   import Modal from "#lib/components/Modal.svelte";
+  import * as ContextMenu from "#lib/components/ui/context-menu/index.js";
   import { nativeApp, type Channel, type Member, type MemberRequest } from "#lib/connection/client";
   import { getWorkspace } from "#lib/workspace";
 
@@ -14,44 +15,24 @@
   const voiceAvailable = nativeApp();
   const snapshot = $derived(workspace.view.snapshot);
   const ownAccount = $derived(member.accountId === snapshot?.account.id);
+  const canOpenDirectMessage = $derived(!ownAccount && Boolean(snapshot?.directMessages && workspace.serverId));
   const canModerate = $derived(!ownAccount && Boolean(member.role && snapshot?.lowerRoles?.includes(member.role)));
+  const displayedRole = $derived(member.role === "Guest" || member.role === "Member" ? undefined : member.role);
   const roles = $derived(canModerate ? snapshot?.assignableRoles ?? [] : []);
+  const canMute = $derived(canModerate && channel.canMute);
+  const canKick = $derived(canModerate && snapshot?.serverPermissions.includes("kick"));
+  const canBan = $derived(canModerate && snapshot?.serverPermissions.includes("ban"));
   const speaking = $derived(!member.afk && (member.speaking ?? workspace.view.speaking.includes(member.connectionId)));
   const canAdjustVolume = $derived(voiceAvailable && !ownAccount && snapshot?.lowerRoles !== undefined);
   let dialog = $state<"volume" | "kick" | "ban">("volume");
   let dialogOpen = $state(false);
   let volume = $state(100);
 
-  const actions = $derived.by(() => {
-    const actions: { label: string; onSelect: () => void; disabled?: boolean }[] = [];
-    if (!ownAccount && snapshot?.directMessages && workspace.serverId) {
-      actions.push({ label: "Direct message…", onSelect: () => workspace.showDirectMessages(member.accountId) });
-    }
-    if (canAdjustVolume) actions.push({ label: "User volume…", onSelect: () => showDialog("volume") });
-    if (canModerate && channel.canMute) {
-      actions.push(
-        { label: member.adminMuted ? "Server unmute" : "Server mute",
-          onSelect: () => act({ kind: "moderation.mute", payload: { connectionId: member.connectionId, muted: !member.adminMuted } }) },
-        { label: member.adminDeafened ? "Server undeafen" : "Server deafen",
-          onSelect: () => act({ kind: "moderation.deafen", payload: { connectionId: member.connectionId, deafened: !member.adminDeafened } }) },
-      );
-    }
-    if (canModerate && snapshot?.serverPermissions.includes("kick")) {
-      actions.push({ label: "Kick from server…", onSelect: () => showDialog("kick") });
-    }
-    if (canModerate && snapshot?.serverPermissions.includes("ban")) {
-      actions.push({ label: "Ban from server…", onSelect: () => showDialog("ban") });
-    }
-    for (const role of roles) {
-      actions.push({
-        label: member.role === role ? `Role: ${role} (current)` : `Set role: ${role}`,
-        disabled: member.role === role,
-        onSelect: () => act({ kind: "role.set", payload: { accountId: member.accountId, role } }),
-      });
-    }
-    return actions;
-  });
-  const enabled = $derived(workspace.view.phase === "online" && !workspace.pending && Boolean(actions.length));
+  const enabled = $derived(workspace.view.phase === "online" && !workspace.pending);
+
+  function openDirectMessage() {
+    workspace.showDirectMessages(member.accountId);
+  }
 
   function act(request: MemberRequest) {
     void workspace.memberAction(request);
@@ -77,13 +58,61 @@
 </script>
 
 <li>
-  <ContextActions {actions} disabled={!enabled} openOnClick>
+  <ContextActions disabled={!enabled} openOnClick onDoubleClick={canOpenDirectMessage ? openDirectMessage : undefined}>
+    {#snippet content()}
+      {#if displayedRole}
+        <ContextMenu.Label class="wrap-anywhere">Role: {displayedRole}</ContextMenu.Label>
+        <ContextMenu.Separator />
+      {/if}
+      {#if canOpenDirectMessage}
+        <ContextMenu.Item onSelect={openDirectMessage}><MessageCircle /> Direct message</ContextMenu.Item>
+      {/if}
+      {#if canAdjustVolume}
+        <ContextMenu.Item onSelect={() => showDialog("volume")}><Volume2 /> Change volume…</ContextMenu.Item>
+      {/if}
+      <ContextMenu.Item onSelect={() => workspace.showConnectionInfo(member.connectionId)}><Activity /> Connection info</ContextMenu.Item>
+      {#if roles.length}
+        <ContextMenu.Separator />
+        <ContextMenu.Sub>
+          <ContextMenu.SubTrigger><Shield /> Roles</ContextMenu.SubTrigger>
+          <ContextMenu.SubContent class="max-h-(--bits-context-menu-content-available-height) overflow-y-auto">
+            <ContextMenu.RadioGroup value={member.role ?? ""} onValueChange={(role) => act({ kind: "role.set", payload: { accountId: member.accountId, role } })}>
+              {#each roles as role (role)}
+                <ContextMenu.RadioItem value={role} disabled={role === member.role} closeOnSelect>{role}</ContextMenu.RadioItem>
+              {/each}
+            </ContextMenu.RadioGroup>
+          </ContextMenu.SubContent>
+        </ContextMenu.Sub>
+      {/if}
+      {#if canMute || canKick || canBan}
+        <ContextMenu.Separator />
+        <ContextMenu.Group>
+          <ContextMenu.GroupHeading>Moderation</ContextMenu.GroupHeading>
+          {#if canMute}
+            <ContextMenu.Item onSelect={() => act({ kind: "moderation.mute", payload: { connectionId: member.connectionId, muted: !member.adminMuted } })}>
+              <MicOff /> {member.adminMuted ? "Server unmute" : "Server mute"}
+            </ContextMenu.Item>
+            <ContextMenu.Item onSelect={() => act({ kind: "moderation.deafen", payload: { connectionId: member.connectionId, deafened: !member.adminDeafened } })}>
+              <HeadphoneOff /> {member.adminDeafened ? "Server undeafen" : "Server deafen"}
+            </ContextMenu.Item>
+          {/if}
+          {#if canKick}
+            <ContextMenu.Item onSelect={() => showDialog("kick")}><LogOut /> Kick from server…</ContextMenu.Item>
+          {/if}
+          {#if canBan}
+            <ContextMenu.Item variant="destructive" onSelect={() => showDialog("ban")}><Ban /> Ban from server…</ContextMenu.Item>
+          {/if}
+        </ContextMenu.Group>
+      {/if}
+    {/snippet}
     {#snippet trigger(props)}
       <button {...props} type="button" class="tree-member member-target" tabindex={enabled ? 0 : -1}
         aria-haspopup={enabled ? "menu" : undefined}>
         <Avatar name={member.displayName} small {speaking} afk={member.afk} />
         <span class="member-details">
           <span class="truncate" title={member.displayName}>{member.displayName}</span>
+          {#if displayedRole}<span class="member-badge member-role" title={displayedRole}>{displayedRole}</span>{/if}
+          {#if member.badge}<span class="member-badge" title={member.badge}>{member.badge}</span>{/if}
           {#if member.afk}
             <span class="afk-label">AFK</span>
             {#if member.afkMessage}<span class="afk-message">{member.afkMessage}</span>{/if}

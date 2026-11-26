@@ -178,6 +178,15 @@ async function start(db: Store, auth: Auth, config: Config) {
     realtime = new Realtime(db, auth, media, config);
     const app = createApp(config, auth, media, realtime, { serverId, fingerprint: tls?.fingerprint });
     app.listen({ hostname: config.server.host, port: config.server.port, reusePort: false,
+      websocket: {
+        // Elysia's route-level pong handler drops the frame payload.
+        pong(socket, payload) {
+          const data: unknown = socket.data;
+          if (data && typeof data === "object" && "id" in data && typeof data.id === "string") {
+            realtime?.receivedPong(data.id, payload);
+          }
+        },
+      },
       ...(tls ? { tls: { key: tls.key, cert: tls.cert, secureOptions: constants.SSL_OP_NO_TLSv1 | constants.SSL_OP_NO_TLSv1_1 } } : {}) });
     stopListener = () => app.stop(true);
     printStartup(config, serverId, tls?.fingerprint, auth.issueSetup());

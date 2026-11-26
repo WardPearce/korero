@@ -1,11 +1,12 @@
 <script lang="ts">
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
-  import { ArrowLeft, Fingerprint, Headphones, Palette, UserRound } from "@lucide/svelte";
+  import { ArrowLeft, Fingerprint, Headphones, MessageCircle, Palette, UserRound } from "@lucide/svelte";
   let { children } = $props();
   const categories = [
     { path: "/settings", label: "Account", icon: UserRound },
     { path: "/settings/appearance", label: "Appearance", icon: Palette },
+    { path: "/settings/chat", label: "Chat", icon: MessageCircle },
     { path: "/settings/audio", label: "Audio", icon: Headphones },
     { path: "/settings/identity", label: "Identity", icon: Fingerprint },
   ] as const;

@@ -36,6 +36,9 @@ export const httpBodies = {
   serverPassword: object({ password: nullable(password) }),
   invitationUpdate: object({ expiresAt: optional(nullable(invitationExpiry)), usesLeft: optional(nullable(int(0, 10000))) }),
   roleDefinition: object({ name: roleName, permissions: list(t.UnionEnum([...permissions]), permissions.length) }),
+  accountBadge: object({ accountId: id, badge: nullable(t.String({
+    minLength: 1, maxLength: 32, pattern: "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
+  })) }),
   deleteRole: object({ name: roleName }),
   serverPreferences: object({
     motd: optional(t.String({ maxLength: 1000, pattern: "^[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]*$" })),

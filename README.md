@@ -13,8 +13,9 @@ and the native audio test.
 
 Right-click a connected server and choose **Server administration**. Use
 **Overview** to set the message of the day, the default role for new accounts,
-and the default Opus bitrate for voice channels. Use **Roles** to manage custom
-roles and assign them to accounts. **Audit log** shows account activity,
+and the default Opus bitrate for voice channels. Use **Roles** to edit Guest,
+Member, and Moderator permissions, create roles from templates, or assign roles
+to accounts. **Audit log** shows account activity,
 connections, voice channel joins and leaves, moderation, and server changes.
 Filter by event type or actor account ID.
 
@@ -49,12 +50,13 @@ codes with your contact in person or over a trusted channel. Both accounts use
 the same server. The server relays encrypted messages and holds them for offline
 delivery only when message persistence is enabled.
 
-Choose **Share screen**, set resolution, frame rate, video bitrate and optional source
+Choose **Screenshare**, set resolution, frame rate, video bitrate and optional source
 audio, then choose a window, browser tab or full display in the system picker.
+Screenshare defaults to 1080p and 6,000 kbps.
 The preview stays local until you choose **Go live**. Available sources and source
-audio depend on your browser and operating system. On Linux, the desktop webview
-uses WebKitGTK and the desktop screen-sharing portal. Microphone voice uses the
-desktop app.
+audio depend on your browser and operating system. On Linux, when the system
+webview lacks WebRTC, video opens in your default browser and uses the active
+desktop channel. Keep the desktop app connected while using the video tab.
 
 Choose **Turn on camera** in your current channel. Set resolution, frame rate
 and bitrate, then preview the camera and choose **Start camera**. Other channel

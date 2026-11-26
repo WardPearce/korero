@@ -13,6 +13,11 @@ export interface AudioPreferences {
   talkShortcut: TalkShortcut;
   globalTalkShortcut: boolean;
   activityThreshold: number;
+  activityHoldMs: number;
+  noiseGate: boolean;
+  gateThresholdDb: number;
+  gateAttenuationDb: number;
+  gateHoldMs: number;
   noiseSuppression: boolean;
   automaticGain: boolean;
   echoCancellation: boolean;
@@ -20,8 +25,9 @@ export interface AudioPreferences {
 
 export const defaultAudio: AudioPreferences = {
   input: "", output: "", inputLevel: 100, outputLevel: 100,
-  transmitMode: "open", activityThreshold: 8,
+  transmitMode: "open", activityThreshold: 8, activityHoldMs: 250,
   talkShortcut: { code: "KeyV", alt: true, ctrl: false, shift: false, meta: false }, globalTalkShortcut: false,
+  noiseGate: false, gateThresholdDb: -45, gateAttenuationDb: 30, gateHoldMs: 150,
   noiseSuppression: true, automaticGain: true, echoCancellation: true,
 };
 

@@ -18,6 +18,7 @@
   import IdentitySetup from "#lib/components/IdentitySetup.svelte";
   import IconButton from "#lib/components/IconButton.svelte";
   import Modal from "#lib/components/Modal.svelte";
+  import ConnectionInfo from "#lib/components/server/ConnectionInfo.svelte";
   import ServerAdministration from "#lib/components/server/ServerAdministration.svelte";
   import {
     apiFor, call, messageFrom, nativeApp, offline, requestError, shortHost, watchVoice,
@@ -26,10 +27,19 @@
   import { authenticateIdentity, identityError, loadIdentity } from "#lib/identity/identity";
   import { browserServerOrigin, browserSession } from "#lib/connection/browser-session";
   import { applyAppearance, readAppearance } from "#lib/theme";
+  import { readChatDisplay, saveChatDisplay, setChatDisplay, type ChatDisplay } from "#lib/chat/chat-display";
   import { setWorkspace, type ChannelPlacement, type MobilePane, type RoomView } from "#lib/workspace";
 
   let { children } = $props();
   const audio = setAudioSettings(new AudioSettings());
+  let chatDisplay = $state.raw(readChatDisplay());
+  setChatDisplay({
+    get value() { return chatDisplay; },
+    update(value: ChatDisplay) {
+      chatDisplay = value;
+      return saveChatDisplay(value);
+    },
+  });
 
   type Target = { origin: string; info: ServerInfo };
   const deviceName = "VNX.chat";
@@ -82,6 +92,7 @@
   let mobilePane = $state<MobilePane>("room");
   let roomView = $state<RoomView>("chat");
   let directAccountId = $state<string | null>(null);
+  let connectionInfo = $state.raw<{ origin: string; viewerId: string; connectionId: string } | null>(null);
   let unreadDirectAccounts = $state.raw<ReadonlySet<string>>(new Set());
 
   let me = $derived(view.snapshot?.account);
@@ -130,6 +141,7 @@
     get directAccountId() { return directAccountId; },
     get unreadDirectAccounts() { return unreadDirectAccounts; },
     showDirectMessages,
+    showConnectionInfo,
     showConnect,
     showServerSettings,
     run,
@@ -529,10 +541,17 @@
     openWorkspace("room");
   }
 
+  function showConnectionInfo(connectionId: string) {
+    if (!online || !serverOrigin || !view.snapshot) return;
+    connectionInfo = { origin: serverOrigin, viewerId: view.snapshot.connectionId, connectionId };
+  }
+
   function serverActions(entry: SavedServer) {
     const actions = [];
-    if (entry.origin === serverOrigin && canAdminister) {
-      actions.push({ label: "Server administration", onSelect: showServerSettings });
+    if (entry.origin === serverOrigin && online && view.snapshot) {
+      const { connectionId } = view.snapshot;
+      actions.push({ label: "Connection info", onSelect: () => showConnectionInfo(connectionId) });
+      if (canAdminister) actions.push({ label: "Server administration", onSelect: showServerSettings });
     }
     actions.push({ label: "Remove server", onSelect: () => {
       removingServer = entry;
@@ -679,6 +698,15 @@
     </form>
   {/if}
 </Modal>
+
+{#if connectionInfo && online && connectionInfo.origin === serverOrigin && connectionInfo.viewerId === view.snapshot?.connectionId}
+  {#key connectionInfo}
+    <Modal bind:open={() => true, (open) => { if (!open) connectionInfo = null; }}
+      title="Connection info" description="Latency measures the round trip to the server.">
+      <ConnectionInfo origin={connectionInfo.origin} connectionId={connectionInfo.connectionId} />
+    </Modal>
+  {/key}
+{/if}
 
 <Modal bind:open={removeServerOpen} title="Remove server?" description={removingServer?.name ?? "Remove this server from your list."} dismissible={!removing}>
   {#if removeError}<p class="form-error" role="alert">{removeError}</p>{/if}

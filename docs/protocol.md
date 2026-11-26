@@ -34,14 +34,16 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | POST `/api/v1/auth/logout` | Access token | — | `{}` |
 | POST `/api/v1/auth/logout-all` | Access token | — | `{}` |
 | POST `/api/v1/auth/connection-ticket` | Access token | — | `{ticket, expiresAt}` |
+| GET `/api/v1/connections/:id` | Access token for the same session or a viewer with access to the member’s channel | — | `{displayName, channelName, connectedSeconds, latencyMs}` |
 | GET `/api/v1/account` | Access token | — | Account |
 | PATCH `/api/v1/account` | Access token | `displayName` | Account |
 | GET `/api/v1/account/sessions` | Access token | — | Array of `id, deviceName, createdAt, lastActive, expiresAt` |
 | POST `/api/v1/chat/attachments` | Access token and matching connection | `connectionId, channelId, text, html?, name, data` | `{messageId}` |
 | GET `/api/v1/chat/attachments/:messageId` | Access token and matching connection | Query `connectionId` | `{data}` |
 | DELETE `/api/v1/account/sessions/:id` | Access token | — | `{}` |
-| GET `/api/v1/admin/accounts` | `manageRoles` | Query `after?` account ID | `accounts, next, roles, canDefineRoles, customRoles, assignablePermissions` |
+| GET `/api/v1/admin/accounts` | `manageRoles` | Query `after?` account ID | `accounts, next, roles, canDefineRoles, builtInRoles, customRoles, assignablePermissions, defaultRole, registrationPermissions` |
 | PATCH `/api/v1/admin/roles` | `manageRoles` | `accountId, role` | `{role}` |
+| PATCH `/api/v1/admin/badges` | `manageRoles` | `accountId, badge` | `{badge}` |
 | POST `/api/v1/admin/roles` | Administrator or Owner | `name, permissions` | `{name, permissions}` |
 | PATCH `/api/v1/admin/roles/definition` | Administrator or Owner | `name, permissions` | `{name, permissions}` |
 | DELETE `/api/v1/admin/roles/definition` | Administrator or Owner | `name` | `{}` |
@@ -57,7 +59,7 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | GET `/api/v1/admin/password` | `manageSettings` | — | `{passwordRequired, passwordLocked}` |
 | PATCH `/api/v1/admin/password` | `manageSettings` when `VOICE_SERVER_PASSWORD` is unset | `password` or `null` to remove it | `{passwordRequired}` |
 
-An Account object has `id, displayName, role, createdAt`. Session responses have
+An Account object has `id, displayName, role, createdAt, badge`. Session responses have
 `sessionId, accessToken, refreshToken, accessExpiresAt, refreshExpiresAt` at the top
 level alongside `account` for sign-in and account creation. Session listings
 contain no token values. The capability response supplies ICE server settings
@@ -76,9 +78,15 @@ Preferences apply live. Set `motd` to an empty string to clear the message.
 Set `defaultAudioBitrate` to null to use the configured server value. The
 `VOICE_MEDIA_TARGET_AUDIO_BITRATE` environment variable locks that default.
 Changing `defaultRole` also requires `manageRoles` and affects new registrations.
-The available choices include Guest, Member, and eligible custom roles with
-basic member permissions. A custom role can be deleted after it is unassigned
-from all accounts and replaced as the default, if selected.
+Guest, Member, and custom roles are eligible if their server grants and channel
+allows are within `registrationPermissions`. The current registration role can
+receive grants only within that list. A custom role can be deleted after it is
+unassigned from all accounts and replaced as the default, if selected.
+
+Administrators and the Owner can update the grants for Guest, Member, Moderator,
+and custom roles through `PATCH /api/v1/admin/roles/definition`. Each `builtInRoles`
+entry has `name, permissions, editable, defaultPermissions`. Role grants apply to
+connected accounts immediately and trigger `state.invalidated`.
 
 Role changes require the actor to rank above both the account’s current role and
 its new role and to hold the new role’s permissions. Custom roles share a rank
@@ -151,17 +159,21 @@ below the high-water mark returns `CONFLICT`. A malformed envelope without a usa
 ID receives an error with ID zero if the socket remains writable. A reconnect does
 not replay mutations. Reconcile state before retrying operations across connections.
 
-A successful snapshot has `connectionId, account, channelId, channels, presence,
+A successful snapshot has `connectionId, account, channelId, channels, totalUsers, presence,
 members, serverPermissions, lowerRoles, assignableRoles, bannerImageUrl, canReorderChannels`.
+`totalUsers` counts registered accounts, including offline accounts. Each presence entry
+represents one online account, even when that account has multiple connected devices.
 Extended administration adds `motd` and the effective server `targetAudioBitrate`
 in bits per second. Changes to either value trigger `state.invalidated`.
 `lowerRoles` lists roles below the caller in the server hierarchy. `assignableRoles`
 lists roles the caller can assign to a subordinate account. The channel list has
 `id, parentId, name, description, position, capacity, temporary, passwordRequired, canMute, canReparent`.
 Invisible parents are represented as null. Members have `connectionId, accountId,
-displayName, role, muted, deafened, adminMuted, adminDeafened` and cover the socket's
+displayName, role, badge, muted, deafened, adminMuted, adminDeafened` and cover the socket's
 current channel. Presence entries have
-`accountId, displayName, connections` and count all online devices by account.
+`accountId, displayName, connections`. Badges are cosmetic text labels of up to 32
+characters. The badge endpoint accepts `null` to clear a badge. It only allows edits
+to other accounts below the caller's role, and records changes in the audit log.
 
 Oversized frames, a full pending request queue or outbound backpressure may close
 the socket. Treat close code 4401 as a need to reauthenticate, 4403 as a kick, and
@@ -229,8 +241,9 @@ An attachment is sent as one channel message with an optional caption. Use stand
 padded base64 for `data`. Server info and connection snapshots advertise the current
 decoded file limit as `maxAttachmentBytes`. Administrators can set `maxAttachmentMiB`
 from 1 to 32 in `PATCH /api/v1/admin/preferences`. The default is 4 MiB.
-Upload and download both require text permission in the connection's
-current channel. Downloads return encoded data separately from history and events.
+Upload and download both require `text` permission in the connection's
+current channel. Uploads also require `attachFiles` permission, reflected by the
+snapshot's `canAttachFiles` field. Downloads return encoded data separately from history and events.
 Persistent attachments expire and are deleted with their message. In-memory
 attachments are available for up to one hour. The in-memory quotas are 8 MiB per
 sender and 32 MiB per server by default. A higher file limit raises those caps to
@@ -247,8 +260,8 @@ AFK. An empty string clears the message.
 
 ## Encrypted direct messages
 
-Snapshots advertise `directMessages: {maxBytes, persistent}`. Both accounts live
-on the selected server. Sending requires server-level `text` permission and a
+Snapshots advertise `directMessages: {maxBytes, persistent, canSend}`. Both accounts live
+on the selected server. Sending requires server-level `sendDirectMessages` permission and a
 recipient with an enrolled identity. The server derives the sender from the
 authenticated socket and delivers `direct.created` to both accounts’ active
 devices. Packets include `id, senderId, recipientId, createdAt, nonce, ciphertext,
@@ -322,7 +335,8 @@ requires `manageSettings` and the applicable channel editing permissions. Use
 Opus codec options. Actual throughput depends on the encoder and network.
 
 Servers advertising `screenSharing` support a separate screen transport in each
-direction. Screen sharing uses VP8 and can include one Opus source-audio track.
+direction. Publishing requires `speak` and `shareScreen` in the joined channel,
+reflected by the snapshot's `canShareScreen` field. Screen sharing uses VP8 and can include one Opus source-audio track.
 Publish optional source audio before publishing video. Discover both IDs in the
 snapshot's `screens` array or through `media.screenAvailable`. A repeat event for
 the same video producer updates its audio ID. Consuming screen media requires
@@ -331,7 +345,7 @@ a screen receive transport. `media.producers` lists microphone audio.
 A microphone send transport can set `whisperChannelId` to route only to a
 different occupied channel. The sender stays joined to their source channel.
 Close the normal microphone send transport before requesting a whisper transport.
-The sender needs permission to speak in the source and to join and speak in the
+The sender needs `speak` and `whisper` in both channels and `join` in the
 destination. Supply `whisperPassword` when the destination has a password. The
 destination password and both channels' permissions are rechecked during the
 route lifetime. The destination receives the usual microphone producer events
@@ -345,7 +359,8 @@ An array in the snapshot's `cameras` field indicates webcam support. For camera
 send and receive transports use `kind: "video"` with `videoSource: "camera"`.
 Camera transports carry VP8 video at up to 6 Mbit/s. They are separate from
 screen transports, which continue to use the default video source. A camera
-produces one video track and uses the joined channel's speak permission. Self-mute
+produces one video track and requires `speak` and `useCamera` in the joined channel,
+reflected by the snapshot's `canUseCamera` field. Self-mute
 affects microphone voice while camera video stays on. Discover camera producers
 in `cameras` or through `media.cameraAvailable`.
 

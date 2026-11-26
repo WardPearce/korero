@@ -4,6 +4,8 @@ import { call, nativeApp, type ScreenShare } from "../connection/client";
 
 type ScreenCapabilities = RtpCapabilities & { iceServers: RTCIceServer[] };
 export type VideoSource = "screen" | "camera";
+export type MediaRequest = <T>(kind: string, payload: Record<string, unknown>) => Promise<T>;
+export const supportsWebRtc = () => typeof globalThis.RTCPeerConnection === "function";
 export interface ScreenSettings {
   resolution: number | null;
   frameRate: number;
@@ -29,9 +31,11 @@ export class ScreenMedia {
     private readonly channelId: string,
     private readonly failed: (message: string) => void,
     private readonly source: VideoSource = "screen",
+    private readonly relay?: MediaRequest,
   ) {}
 
   private request<T>(kind: string, payload: Record<string, unknown>) {
+    if (this.relay) return this.relay<T>(kind, payload);
     const { connectionId, channelId } = this;
     return nativeApp()
       ? call<T>("screen_request", { connectionId, channelId, kind, payload })
@@ -43,6 +47,7 @@ export class ScreenMedia {
   }
 
   private async connect(direction: "send" | "receive") {
+    if (!supportsWebRtc()) throw new Error("This browser does not support WebRTC. Open VNX.chat in a browser with WebRTC support.");
     const { Device } = await import("mediasoup-client");
     this.checkOpen();
     const { iceServers, ...routerRtpCapabilities } = await this.request<ScreenCapabilities>("media.capabilities", { kind: "video" });

@@ -11,6 +11,7 @@ export const rolePermissions = sqliteTable("role_permissions", {
 }, (table) => [primaryKey({ columns: [table.role, table.permission] })]);
 export const accounts = sqliteTable("accounts", {
   id: text().primaryKey(), displayName: text("display_name").notNull(), createdAt: integer("created_at").notNull(),
+  badge: text(),
 });
 export const accountRoles = sqliteTable("account_roles", {
   accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),

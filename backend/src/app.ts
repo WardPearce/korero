@@ -23,6 +23,7 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
   const globalAuth = new RateLimit(Math.max(240, config.limits.auth_per_minute * 8), 1);
   const attachmentRequests = new RateLimit(30);
   const attachmentDownloads = new RateLimit(60);
+  const connectionInfoRequests = new RateLimit(30);
   const attachmentUploadsInProgress = new Set<string>();
   const attachmentPath = "/api/v1/chat/attachments";
   const proxyIps = new Set(config.server.trusted_proxies.map(normalizeIp));
@@ -159,6 +160,17 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
       return auth.ticket(bearer(request));
     })
     .get("/api/v1/account", ({ request }) => auth.account(bearer(request).accountId))
+    .get("/api/v1/connections/:id", ({ request, params }) => {
+      const session = bearer(request);
+      connectionInfoRequests.take(session.accountId);
+      return realtime.connectionInfo(session, params.id);
+    }, {
+      params: t.Object({ id }),
+      response: { 200: t.Object({
+        displayName: t.String(), channelName: t.Nullable(t.String()),
+        connectedSeconds: t.Integer({ minimum: 0 }), latencyMs: t.Nullable(t.Integer({ minimum: 0 })),
+      }, { additionalProperties: false }) },
+    })
     .post(attachmentPath, ({ request, body }) => realtime.uploadAttachment(bearer(request), body), {
       body: httpBodies.attachmentUpload,
       parse: parseAttachment,
@@ -183,6 +195,8 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
     }, { body: httpBodies.bootstrap })
     .get("/api/v1/admin/accounts", ({ request, query }) => realtime.listAccounts(bearer(request).accountId, query.after),
       { query: t.Object({ after: t.Optional(id) }) })
+    .patch("/api/v1/admin/badges", ({ request, body }) =>
+      realtime.setBadge(bearer(request).accountId, body.accountId, body.badge), { body: httpBodies.accountBadge })
     .patch("/api/v1/admin/roles", ({ request, body }) => {
       realtime.setRole(auth.account(bearer(request).accountId), body.accountId, body.role);
       return { role: body.role };

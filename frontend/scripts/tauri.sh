@@ -8,6 +8,9 @@ case ${1:-} in
     if [[ $(uname -sm) == 'Linux x86_64' ]]; then
       bash scripts/prepare-media.sh --if-needed
     fi
+    if [[ $(uname -s) == Linux && $1 == dev ]]; then
+      bun run build:browser-media
+    fi
     ;;
 esac
 

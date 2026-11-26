@@ -350,10 +350,29 @@ body {
 }
 .member-target:not([aria-haspopup]) { cursor: default; }
 .member-details { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; margin-right: auto; }
+.member-badge {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  padding-inline: .35rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted-foreground);
+  font-size: var(--type-caption);
+  line-height: 1.35;
+  vertical-align: middle;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.member-role { background: var(--accent); color: var(--accent-foreground); }
 .afk-message { color: var(--muted-foreground); font-size: var(--type-caption); }
 .afk-label { font-size: var(--type-caption); font-weight: 700; }
 .afk-message { overflow-wrap: anywhere; }
 .channel-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
   padding: 8px 12px;
   border-top: 1px solid var(--border);
 }
@@ -411,12 +430,7 @@ a.icon-button:hover, .file-control:hover { box-shadow: var(--shadow-hover); }
 .chat-log { flex: 1; min-height: 0; overflow: auto; }
 .chat-empty { display: grid; place-content: center; justify-items: center; gap: 10px; height: 100%; padding: var(--ui-gap); text-align: center; }
 .chat-empty svg { color: var(--info); }
-.chat-empty p, .chat-meta time { color: var(--muted-foreground); font-size: var(--type-small); }
-.chat-message { display: flex; gap: 10px; padding: calc(var(--ui-gap) * .55) var(--ui-gap); }
-.chat-message:hover { background: var(--muted); }
-.chat-message p { overflow-wrap: anywhere; white-space: pre-wrap; }
-.chat-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
-.chat-meta strong { overflow-wrap: anywhere; }
+.chat-empty p { color: var(--muted-foreground); font-size: var(--type-small); }
 .composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -568,23 +582,14 @@ a.icon-button:hover, .file-control:hover { box-shadow: var(--shadow-hover); }
 .audio-card h2 { font-size: 1rem; }
 .audio-card-heading { justify-content: space-between; flex-wrap: wrap; }
 .audio-device-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: 16px; }
-.mic-test {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.mic-test, .audio-toggle {
+.audio-toggle {
+  display: grid;
+  justify-items: start;
   padding-top: 8px;
   border-top: 1px solid var(--border);
 }
-.audio-toggle { display: grid; justify-items: start; }
 .audio-toggle .check-control { font-weight: 600; }
-.mic-test h3 { font-size: var(--type-body); }
-.mic-test p, .audio-toggle small, .audio-fields small { color: var(--muted-foreground); font-size: var(--type-small); }
-.mic-result { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; }
-.mic-result meter { flex: 1; }
+.audio-toggle small, .audio-fields small { color: var(--muted-foreground); font-size: var(--type-small); }
 .audio-card kbd { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 4px; }
 .mobile-nav { display: none; }
 
@@ -600,7 +605,7 @@ a.icon-button:hover, .file-control:hover { box-shadow: var(--shadow-hover); }
   [data-slot="button"].rail-connect { max-width: 16rem; }
   .settings-shell { grid-template: auto minmax(0, 1fr) / minmax(0, 1fr); }
   .settings-shell .room-pane { grid-row: 2; }
-  .settings-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; padding: 4px; border: 0; border-bottom: 1px solid var(--border); }
+  .settings-nav { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 4px; border: 0; border-bottom: 1px solid var(--border); }
   .settings-nav .settings-back { display: none; }
   .settings-nav a { flex-direction: column; justify-content: center; gap: 2px; padding: 4px 2px; font-size: var(--type-caption); text-align: center; overflow-wrap: anywhere; }
   .mobile-nav {
@@ -614,36 +619,50 @@ a.icon-button:hover, .file-control:hover { box-shadow: var(--shadow-hover); }
   .mobile-nav :is(a, button) { flex-direction: column; min-width: 0; justify-content: center; gap: 2px; padding: 4px; font-size: var(--type-caption); }
 }
 
-@media (not (prefers-reduced-transparency: reduce)) and (forced-colors: none) {
+[data-glass] {
+  --glass-backdrop:
+    radial-gradient(ellipse at 14% 0%, color-mix(in srgb, var(--primary) 32%, transparent), transparent 64%),
+    radial-gradient(ellipse at 96% 40%, color-mix(in srgb, var(--accent) 25%, transparent), transparent 66%),
+    radial-gradient(ellipse at 48% 105%, color-mix(in srgb, var(--info) 19%, transparent), transparent 62%);
+  --glass-panel: color-mix(in srgb, var(--muted) 58%, transparent);
+  --glass-card: color-mix(in srgb, var(--card) 68%, transparent);
+  --glass-overlay: color-mix(in srgb, var(--popover) 88%, transparent);
+  --glass-edge: color-mix(in srgb, var(--border) 84%, var(--foreground));
+  --glass-highlight: inset 0 1px color-mix(in srgb, var(--foreground) 12%, transparent);
+  --glass-blur: blur(18px) saturate(130%);
+}
+
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
   [data-glass] {
-    --glass-backdrop:
-      radial-gradient(ellipse at 14% 0%, color-mix(in srgb, var(--primary) 32%, transparent), transparent 64%),
-      radial-gradient(ellipse at 96% 40%, color-mix(in srgb, var(--accent) 25%, transparent), transparent 66%),
-      radial-gradient(ellipse at 48% 105%, color-mix(in srgb, var(--info) 19%, transparent), transparent 62%);
-    --glass-panel: color-mix(in srgb, var(--muted) 58%, transparent);
-    --glass-card: color-mix(in srgb, var(--card) 68%, transparent);
-    --glass-overlay: color-mix(in srgb, var(--popover) 88%, transparent);
-    --glass-edge: color-mix(in srgb, var(--border) 84%, var(--foreground));
-    --glass-highlight: inset 0 1px color-mix(in srgb, var(--foreground) 12%, transparent);
+    --glass-backdrop: initial;
+    --glass-panel: initial;
+    --glass-card: initial;
+    --glass-overlay: initial;
+    --glass-edge: initial;
+    --glass-highlight: initial;
+    --glass-blur: initial;
   }
+}
 
-  :root[data-glass] body { background-image: var(--glass-backdrop); }
-  :root[data-glass] :is(.server-rail, .channel-pane, .settings-nav, .mobile-nav) {
-    background-color: var(--glass-panel);
-  }
-  :root[data-glass] :is(.workspace-header, .channel-top, .rail-bottom, .composer, .settings-card, [data-slot="card"]) {
-    background-color: var(--glass-card);
-    border-color: var(--glass-edge);
-    box-shadow: var(--glass-highlight), var(--shadow-raised);
-  }
-  :root[data-glass] .pane-divider { background-color: var(--glass-edge); }
-  :root[data-glass] .pane-divider:is(:hover, :focus-visible) { background-color: var(--foreground); }
+:root[data-glass] body { background-image: var(--glass-backdrop, none); }
+:root[data-glass] :is(.server-rail, .channel-pane, .settings-nav, .mobile-nav) {
+  background-color: var(--glass-panel, var(--muted));
+}
+:root[data-glass] :is(.workspace-header, .channel-top, .channel-footer, .rail-bottom, .voice-toolbar) {
+  background-color: var(--glass-card, transparent);
+  border-color: var(--glass-edge, var(--border));
+  box-shadow: var(--glass-highlight, none);
+}
+:root[data-glass] :is(.composer, .settings-card, [data-slot="card"]) {
+  background-color: var(--glass-card, var(--card));
+  border-color: var(--glass-edge, var(--border));
+}
+:root[data-glass] .pane-divider { background-color: var(--glass-edge, var(--border)); }
+:root[data-glass] .pane-divider:is(:hover, :focus-visible) { background-color: var(--foreground); }
 
-  :root[data-glass] :is(.app-dialog, [data-slot="popover-content"], [data-slot="select-content"],
-    [data-slot^="dropdown-menu-"][data-slot$="-content"], [data-slot^="context-menu-"][data-slot$="-content"]) {
-    background-color: var(--glass-overlay);
-    border-color: var(--glass-edge);
-    -webkit-backdrop-filter: blur(18px) saturate(130%);
-    backdrop-filter: blur(18px) saturate(130%);
-  }
+:root[data-glass] :is(.app-dialog, [data-slot="popover-content"], [data-slot="select-content"],
+  [data-slot^="dropdown-menu-"][data-slot$="-content"], [data-slot^="context-menu-"][data-slot$="-content"]) {
+  background-color: var(--glass-overlay, var(--popover));
+  -webkit-backdrop-filter: var(--glass-blur, none);
+  backdrop-filter: var(--glass-blur, none);
 }

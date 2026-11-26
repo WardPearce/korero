@@ -10,7 +10,8 @@ type Slot = { index: number; worker: Worker | null; server: WebRtcServer | null;
 type Room = { slot: Slot; pending: Promise<{ router: Router; observer: AudioLevelObserver }>; closed: boolean;
   producers: Map<string, { producer: Producer; peerId: string; accountId: string }>; speaking: Set<string> };
 type Kind = "audio" | "video";
-type VideoSource = "screen" | "camera";
+export type VideoSource = "screen" | "camera";
+type SendSource = "audio" | VideoSource;
 export type WhisperRoute = { channelId: string; passwordHash: string | null };
 type Transport = { rtc: WebRtcTransport; direction: "send" | "receive"; kind: Kind; videoSource?: VideoSource; whisper?: WhisperRoute };
 type Resources = { transports: Map<string, Transport>; producers: Map<string, Producer>; consumers: Map<string, Consumer> };
@@ -161,6 +162,12 @@ export class Media {
     }
   }
 
+  recheckVideo(peerId: string, allowed: (source: VideoSource) => boolean) {
+    for (const { rtc, direction, videoSource } of this.resources.get(peerId)?.transports.values() ?? []) {
+      if (direction === "send" && videoSource && !allowed(videoSource)) rtc.close();
+    }
+  }
+
   whispers(channelId: string) {
     return [...(this.rooms.get(channelId)?.producers.values() ?? [])].flatMap(({ producer }) => {
       const from = producer.appData.whisperFrom;
@@ -183,7 +190,7 @@ export class Media {
       .map(({ producer, peerId }) => ({ producerId: producer.id, connectionId: peerId }));
   }
 
-  async handle(peer: Peer, request: MediaRequest, authorize: (send?: Kind, receive?: boolean) => void,
+  async handle(peer: Peer, request: MediaRequest, authorize: (send?: SendSource, receive?: boolean) => void,
     authorizeWhisper: (whisper: WhisperRoute) => boolean, requestedWhisper?: WhisperRoute) {
     authorize();
     const sourceChannelId = peer.channelId ?? fail("FORBIDDEN");
@@ -200,7 +207,7 @@ export class Media {
       if (error instanceof ProtocolError) throw error;
       fail("UNAVAILABLE");
     });
-    const ensureCurrent = (send?: Kind, receive?: boolean) => {
+    const ensureCurrent = (send?: SendSource, receive?: boolean) => {
       authorize(whisper && !closing ? "audio" : send, receive);
       if (peer.membershipEpoch !== epoch || peer.channelId !== sourceChannelId || room.closed) fail("CONFLICT");
       if (whisper && !closing && !authorizeWhisper(whisper)) fail("FORBIDDEN");
@@ -239,7 +246,7 @@ export class Media {
           if (kind === "audio" && direction === "send" && existing.some((entry) =>
             entry.kind === "audio" && entry.direction === "send" && (whisper || entry.whisper))) fail("CONFLICT");
           if (kind === "video") {
-            ensureCurrent(direction === "send" ? kind : undefined, direction === "receive");
+            ensureCurrent(direction === "send" ? videoSource : undefined, direction === "receive");
             if (existing.some((entry) => entry.videoSource === videoSource && entry.direction === direction)) fail("LIMIT");
           } else if (existing.filter((entry) => entry.kind === kind).length >= this.config.limits.transports) fail("LIMIT");
           const rtc = await router.createWebRtcTransport({
@@ -251,7 +258,7 @@ export class Media {
             if (videoSource && direction === "send") {
               await rtc.setMaxIncomingBitrate(videoSource === "camera" ? maxCameraVideoBitrate : maxScreenVideoBitrate + 320000);
             }
-            ensureCurrent(kind === "video" && direction === "send" ? kind : undefined, kind === "video" && direction === "receive");
+            ensureCurrent(direction === "send" ? videoSource : undefined, kind === "video" && direction === "receive");
           } catch (error) { rtc.close(); throw error; }
           resources.transports.set(rtc.id, { rtc, direction, kind, videoSource, whisper });
           let iceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -292,16 +299,16 @@ export class Media {
         case "media.producer.create": {
           const { kind, rtpParameters, transportId } = request.payload;
           const videoSource = resources.transports.get(transportId)?.videoSource;
-          ensureCurrent(videoSource ? "video" : kind);
           if (rtpParameters.codecs.some(({ mimeType }) => !mimeType.toLowerCase().startsWith(kind + "/"))) fail("INVALID_REQUEST");
           if ([...resources.producers.values()].filter((entry) => entry.kind === kind && entry.appData.videoSource === videoSource).length >=
               (videoSource ? 1 : this.config.limits.producers)) fail("LIMIT");
           const rtc = transport(transportId, "send", videoSource ? "video" : "audio", videoSource);
           if (videoSource !== "screen" && kind !== (videoSource ? "video" : "audio")) fail("INVALID_REQUEST");
+          ensureCurrent(videoSource ?? "audio");
           if (videoSource === "camera" && rtpParameters.encodings?.some(({ maxBitrate }) => (maxBitrate ?? 0) > maxCameraVideoBitrate)) fail("INVALID_REQUEST");
           const whisperFrom = whisper ? peer.account!.displayName : undefined;
           const entry = await rtc.produce({ kind, rtpParameters, appData: { videoSource, whisper, whisperFrom } });
-          try { ensureCurrent(videoSource ? "video" : kind); } catch (error) { entry.close(); throw error; }
+          try { ensureCurrent(videoSource ?? "audio"); } catch (error) { entry.close(); throw error; }
           resources.producers.set(entry.id, entry);
           room.producers.set(entry.id, { producer: entry, peerId: peer.id, accountId: peer.account!.id });
           entry.observer.once("close", () => {
@@ -339,9 +346,9 @@ export class Media {
           break;
         }
         case "media.producer.resume": {
-          const purpose = resources.producers.get(request.payload.producerId)?.appData.videoSource ? "video" : "audio";
-          ensureCurrent(purpose);
           const entry = producer(request.payload.producerId);
+          const purpose = (entry.appData.videoSource as VideoSource | undefined) ?? "audio";
+          ensureCurrent(purpose);
           await entry.resume();
           try { ensureCurrent(purpose); } catch (error) { entry.close(); throw error; }
           if (!entry.appData.videoSource) this.event(channelId, "media.producerState", { producerId: entry.id, paused: false });
