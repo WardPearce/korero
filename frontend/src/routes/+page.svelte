@@ -47,6 +47,8 @@
   let afkFormOrigin = $state("");
   let messageList: HTMLDivElement | undefined;
   let lastChatChannel: string | null | undefined;
+  let knownMessageIds = new Set<string>();
+  let initializedMessages = false;
   type Placement = "before" | "after";
   let draggedChannel = $state<{ id: string; origin: string } | null>(null);
   let dropTarget = $state<{ id: string; placement: Placement } | null>(null);
@@ -93,6 +95,18 @@
     const channel = view.snapshot?.channelId;
     const channelChanged = channel !== lastChatChannel;
     lastChatChannel = channel;
+    const messages = view.messages;
+    const latestId = messages.at(-1)?.id;
+    if (!initializedMessages) {
+      knownMessageIds = new Set(messages.map(({ id }) => id));
+      initializedMessages = true;
+    } else if (isInRoom && currentChannel?.id === channel) {
+      const newIncoming = messages.some((entry) => entry.id === latestId && !knownMessageIds.has(entry.id) && entry.senderId !== me?.id);
+      if (newIncoming) playUiSound("message");
+      knownMessageIds = new Set(messages.map(({ id }) => id));
+    } else {
+      knownMessageIds = new Set(messages.map(({ id }) => id));
+    }
     if (view.messages.length && messageList &&
       (channelChanged || messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight < 90)) {
       void scrollMessages();

@@ -1,6 +1,6 @@
 import * as Tone from "tone";
 
-type Sound = "channel" | "connect" | "disconnect" | "mute" | "unmute" | "deafen" | "undeafen";
+type Sound = "channel" | "connect" | "disconnect" | "mute" | "unmute" | "deafen" | "undeafen" | "message";
 
 const notes: Record<Sound, [number, number, number]> = {
   channel: [520, 660, 0.12],
@@ -10,6 +10,7 @@ const notes: Record<Sound, [number, number, number]> = {
   unmute: [390, 520, 0.12],
   deafen: [440, 330, 0.14],
   undeafen: [330, 440, 0.14],
+  message: [740, 880, 0.1],
 };
 
 let synth: Tone.Synth | undefined;
