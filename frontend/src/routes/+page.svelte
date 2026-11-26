@@ -14,6 +14,7 @@
   import Modal from "$lib/Modal.svelte";
   import PaneDivider from "$lib/PaneDivider.svelte";
   import QuickAudio from "$lib/QuickAudio.svelte";
+  import { playUiSound } from "$lib/ui-sounds";
   import { messageTime, nativeApp, type Channel } from "$lib/client";
   import { getWorkspace } from "$lib/workspace";
 
@@ -127,7 +128,7 @@
       channelPassword = "";
       passwordOpen = true;
     } else {
-      await run("join", "join_channel", { channelId: channel.id, password: null });
+      if (await run("join", "join_channel", { channelId: channel.id, password: null })) playUiSound("channel");
     }
   }
 
@@ -135,6 +136,7 @@
     event.preventDefault();
     if (!joining) return;
     if (await run("join", "join_channel", { channelId: joining.id, password: channelPassword })) {
+      playUiSound("channel");
       passwordOpen = false;
       channelPassword = "";
       joining = null;
@@ -354,7 +356,7 @@
       <IconButton label={ownMember?.muted ? "Unmute microphone" : "Mute microphone"}
         disabled={!canVoice || Boolean(pending) || ownMember?.adminMuted || ownMember?.afk}
         active={Boolean(ownMember?.muted || ownMember?.adminMuted)}
-        onclick={() => run("mute", "set_presence", { muted: !ownMember?.muted, deafened: null })}>
+        onclick={async () => { if (await run("mute", "set_presence", { muted: !ownMember?.muted, deafened: null })) playUiSound(ownMember?.muted ? "unmute" : "mute"); }}>
         {#if ownMember?.muted || ownMember?.adminMuted}<MicOff size={18} aria-hidden="true" />{:else}<Mic size={18} aria-hidden="true" />{/if}
       </IconButton>
       <QuickAudio direction="input" />
@@ -363,7 +365,7 @@
       <IconButton label={ownMember?.adminDeafened ? "Server deafened" : ownMember?.deafened ? "Undeafen" : "Deafen"}
         disabled={!canVoice || Boolean(pending) || ownMember?.afk || ownMember?.adminDeafened}
         active={Boolean(ownMember?.deafened || ownMember?.adminDeafened)}
-        onclick={() => run("deafen", "set_presence", { muted: null, deafened: !ownMember?.deafened })}>
+        onclick={async () => { if (await run("deafen", "set_presence", { muted: null, deafened: !ownMember?.deafened })) playUiSound(ownMember?.deafened ? "undeafen" : "deafen"); }}>
         {#if ownMember?.deafened || ownMember?.adminDeafened}<HeadphoneOff size={18} aria-hidden="true" />{:else}<Headphones size={18} aria-hidden="true" />{/if}
       </IconButton>
       <QuickAudio direction="output" />
@@ -376,7 +378,7 @@
     </fieldset>
     {#if activeChannel}
       <span class="toolbar-separator"></span>
-      <IconButton label="Leave voice channel" disabled={!canVoice || Boolean(pending)} onclick={() => run("leave", "leave_channel")}><DoorOpen size={18} aria-hidden="true" /></IconButton>
+      <IconButton label="Leave voice channel" disabled={!canVoice || Boolean(pending)} onclick={async () => { if (await run("leave", "leave_channel")) playUiSound("disconnect"); }}><DoorOpen size={18} aria-hidden="true" /></IconButton>
     {/if}
     {#if workspace.canAdminister}
       <IconButton label="Server settings" disabled={Boolean(pending)} onclick={workspace.showServerSettings}><Settings2 size={18} aria-hidden="true" /></IconButton>

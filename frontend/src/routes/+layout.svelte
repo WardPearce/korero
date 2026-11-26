@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { playUiSound } from "$lib/ui-sounds";
   import { Button, Checkbox, Input, Root } from "gridworkdesign";
   import "../app.css";
 
@@ -397,6 +398,7 @@
     } catch (error) {
       actionError = messageFrom(error);
     }
+    if (view.phase === "online") playUiSound("connect");
     if (remembered) {
       const entry = { name: target.info.name, origin: target.origin };
       savedServers = [entry, ...savedServers.filter(({ origin }) => origin !== target.origin)];
@@ -461,6 +463,7 @@
   async function disconnect() {
     if (connectBusy) return false;
     if (!await run("disconnect", "disconnect")) return false;
+    playUiSound("disconnect");
     roomView = "chat";
     serverInfo = null;
     serverOrigin = "";
@@ -542,13 +545,8 @@
                 <X size={16} aria-hidden="true" />
               </button>
             </div>
-          {:else}
-            <p class="rail-empty">No active connection</p>
           {/if}
-        </section>
-        <section class="rail-section">
-          <div class="rail-section-label"><span>Saved servers</span><Bookmark size={14} strokeWidth={1.6} /></div>
-          {#each savedServers as entry (entry.origin)}
+          {#each savedServers.filter((entry) => entry.origin !== serverOrigin) as entry (entry.origin)}
             <ContextActions actions={serverActions(entry)} disabled={connectBusy || Boolean(pending)}>
               {#snippet trigger(props)}
             <button {...props} tabindex="0" class="rail-server" onclick={() => selectBookmark(entry.origin)}>
@@ -559,7 +557,7 @@
               {/snippet}
             </ContextActions>
           {:else}
-            <p class="rail-empty">Saved servers appear here.</p>
+            {#if !serverOrigin}<p class="rail-empty">No saved servers</p>{/if}
           {/each}
         </section>
       </div>
