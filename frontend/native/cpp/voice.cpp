@@ -48,6 +48,7 @@ std::string as_string(rust::Str text) {
 std::mutex profile_mutex;
 json profile = json::object();
 std::atomic<int64_t> talk_until{0};
+std::atomic<int64_t> whisper_until{0};
 
 int64_t monotonic_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -100,10 +101,11 @@ void select_device(webrtc::AudioDeviceModule& adm, bool input, const std::string
 
 class CaptureControls final : public webrtc::CustomProcessing {
 public:
-  explicit CaptureControls(const json& settings)
+  CaptureControls(const json& settings, const std::atomic<bool>& whisper_route)
       : mode_(settings.value("transmitMode", "open")),
         gain_(settings.value("inputLevel", 100) / 100.0f),
-        threshold_(settings.value("activityThreshold", 8) * 327.68f) {}
+        threshold_(settings.value("activityThreshold", 8) * 327.68f),
+        whisper_route_(whisper_route) {}
 
   void Initialize(int, int) override { release_frames_ = 0; }
   std::string ToString() const override { return "Kōrero capture controls"; }
@@ -111,8 +113,14 @@ public:
   void Process(webrtc::AudioBuffer* audio) override {
     const auto channels = audio->num_channels();
     const auto frames = audio->num_frames();
-    bool active = mode_ == "open" || (mode_ == "pushToTalk" && monotonic_ms() < talk_until.load());
-    if (mode_ == "activity") {
+    const auto now = monotonic_ms();
+    const bool whispering = now < whisper_until.load();
+    const bool routed_to_whisper = whisper_route_.load();
+    bool active;
+    if (whispering || routed_to_whisper) {
+      active = whispering && routed_to_whisper;
+      release_frames_ = 0;
+    } else if (mode_ == "activity") {
       float peak = 0;
       for (size_t channel = 0; channel < channels; ++channel)
         for (size_t frame = 0; frame < frames; ++frame)
@@ -120,6 +128,8 @@ public:
       if (peak >= threshold_) release_frames_ = 25;
       active = release_frames_ > 0;
       if (active) --release_frames_;
+    } else {
+      active = mode_ == "open" || (mode_ == "pushToTalk" && now < talk_until.load());
     }
     for (size_t channel = 0; channel < channels; ++channel)
       for (size_t frame = 0; frame < frames; ++frame)
@@ -129,6 +139,7 @@ public:
 private:
   std::string mode_;
   float gain_, threshold_;
+  const std::atomic<bool>& whisper_route_;
   int release_frames_ = 0;
 };
 
@@ -320,7 +331,7 @@ struct Voice::Impl {
     webrtc::scoped_refptr<webrtc::AudioProcessing> processing;
     if (!synthetic) {
       auto builder = webrtc::BuiltinAudioProcessingBuilder();
-      builder.SetCapturePostProcessing(std::make_unique<CaptureControls>(settings));
+      builder.SetCapturePostProcessing(std::make_unique<CaptureControls>(settings, whisper_route));
       processing = builder.Build(environment);
     }
     factory = webrtc::CreatePeerConnectionFactory(network.get(), worker.get(), signaling.get(), adm,
@@ -348,6 +359,7 @@ struct Voice::Impl {
     send->Close();
     send.reset();
     track = nullptr;
+    whisper_route.store(false);
   }
 
   void stop_receive() {
@@ -367,6 +379,7 @@ struct Voice::Impl {
   webrtc::Environment environment = webrtc::CreateEnvironment();
   webrtc::scoped_refptr<ProbeAudio> probe;
   webrtc::scoped_refptr<webrtc::AudioDeviceModule> adm;
+  std::atomic<bool> whisper_route{false};
   webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> factory;
   mediasoupclient::PeerConnection::Options options;
   json settings;
@@ -402,6 +415,7 @@ void Voice::set_send(rust::Str transport) {
   const auto p = json::parse(as_string(transport));
   impl_->send.reset(impl_->device.CreateSendTransport(&impl_->listeners, p.at("id"),
       p.at("iceParameters"), p.at("iceCandidates"), p.at("dtlsParameters"), &impl_->options));
+  impl_->whisper_route.store(p.value("whisper", false));
   const bool recording = impl_->worker->BlockingCall([&] {
     bool available = false;
     return impl_->adm->RecordingIsAvailable(&available) == 0 && available;
@@ -478,6 +492,10 @@ void set_audio_profile(rust::Str settings) {
 
 void set_push_to_talk(bool pressed) noexcept {
   talk_until.store(pressed ? monotonic_ms() + 650 : 0);
+}
+
+void set_whisper_to_talk(bool pressed) noexcept {
+  whisper_until.store(pressed ? monotonic_ms() + 650 : 0);
 }
 
 rust::String audio_devices() {

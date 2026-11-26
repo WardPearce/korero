@@ -613,3 +613,37 @@ a.icon-button:hover, .file-control:hover { box-shadow: var(--shadow-hover); }
   }
   .mobile-nav :is(a, button) { flex-direction: column; min-width: 0; justify-content: center; gap: 2px; padding: 4px; font-size: var(--type-caption); }
 }
+
+@media (not (prefers-reduced-transparency: reduce)) and (forced-colors: none) {
+  [data-glass] {
+    --glass-backdrop:
+      radial-gradient(ellipse at 14% 0%, color-mix(in srgb, var(--primary) 32%, transparent), transparent 64%),
+      radial-gradient(ellipse at 96% 40%, color-mix(in srgb, var(--accent) 25%, transparent), transparent 66%),
+      radial-gradient(ellipse at 48% 105%, color-mix(in srgb, var(--info) 19%, transparent), transparent 62%);
+    --glass-panel: color-mix(in srgb, var(--muted) 58%, transparent);
+    --glass-card: color-mix(in srgb, var(--card) 68%, transparent);
+    --glass-overlay: color-mix(in srgb, var(--popover) 88%, transparent);
+    --glass-edge: color-mix(in srgb, var(--border) 84%, var(--foreground));
+    --glass-highlight: inset 0 1px color-mix(in srgb, var(--foreground) 12%, transparent);
+  }
+
+  :root[data-glass] body { background-image: var(--glass-backdrop); }
+  :root[data-glass] :is(.server-rail, .channel-pane, .settings-nav, .mobile-nav) {
+    background-color: var(--glass-panel);
+  }
+  :root[data-glass] :is(.workspace-header, .channel-top, .rail-bottom, .composer, .settings-card, [data-slot="card"]) {
+    background-color: var(--glass-card);
+    border-color: var(--glass-edge);
+    box-shadow: var(--glass-highlight), var(--shadow-raised);
+  }
+  :root[data-glass] .pane-divider { background-color: var(--glass-edge); }
+  :root[data-glass] .pane-divider:is(:hover, :focus-visible) { background-color: var(--foreground); }
+
+  :root[data-glass] :is(.app-dialog, [data-slot="popover-content"], [data-slot="select-content"],
+    [data-slot^="dropdown-menu-"][data-slot$="-content"], [data-slot^="context-menu-"][data-slot$="-content"]) {
+    background-color: var(--glass-overlay);
+    border-color: var(--glass-edge);
+    -webkit-backdrop-filter: blur(18px) saturate(130%);
+    backdrop-filter: blur(18px) saturate(130%);
+  }
+}
