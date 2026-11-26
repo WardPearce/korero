@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { Button, Calendar, Checkbox, Collapsible, Input, Textarea, TimeField } from "gridworkdesign";
-  import { fromDateToLocal, getLocalTimeZone, toCalendarDate, toCalendarDateTime, toTime, type DateValue, type Time } from "@internationalized/date";
+  import { Button, Checkbox, Input, SelectField, Textarea } from "gridworkdesign";
   import { onMount } from "svelte";
   import { Settings2, X } from "@lucide/svelte";
   import IconButton from "./IconButton.svelte";
@@ -53,16 +52,12 @@
   let editedInvitation = $state.raw<Invitation | null>(null);
   let deletingInvitation = $state("");
   let invitationLimit = $state<number | undefined>(1);
-  const defaultExpiry = localInvitationExpiry(Date.now() + 86400000);
-  let invitationDay = $state.raw<DateValue | undefined>(toCalendarDate(defaultExpiry));
-  let invitationTime = $state.raw<Time | undefined>(toTime(defaultExpiry));
-  let expiryOpen = $state(false);
-  let invitationExpiry = $derived(invitationDay && invitationTime ? toCalendarDateTime(invitationDay, invitationTime) : undefined);
-  let originalExpiry = $derived(editedInvitation?.expiresAt == null ? undefined : localInvitationExpiry(editedInvitation.expiresAt));
-  let expiryChanged = $derived(invitationExpiry?.toString() !== originalExpiry?.toString());
-  let expiryTitle = $derived(invitationExpiry
-    ? `Expires ${invitationExpiry.toDate(getLocalTimeZone()).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`
-    : invitationDay ? "Set expiration time" : "No expiration");
+  const expiryOptions = ["1 hour", "2 hours", "3 hours", "6 hours", "12 hours", "24 hours", "1 week", "3 months", "Never"] as const;
+  const expirySelectOptions = expiryOptions.map((option) => ({ value: option, label: option }));
+  type ExpiryOption = typeof expiryOptions[number];
+  let invitationExpiry = $state<ExpiryOption>("24 hours");
+  let originalExpiryChoice = $state<ExpiryOption>("24 hours");
+  let expiryChanged = $derived(invitationExpiry !== originalExpiryChoice);
   let invitationChanged = $derived(editedInvitation && (
     invitationLimit !== (editedInvitation.usesLeft ?? undefined) || expiryChanged
   ));
@@ -78,8 +73,18 @@
     if (availableTabs[0]) void selectTab(availableTabs[0].id);
   });
 
-  function localInvitationExpiry(timestamp: number) {
-    return toCalendarDateTime(fromDateToLocal(new Date(timestamp)));
+  function expiryTimestamp(choice: ExpiryOption): number | null {
+    if (choice === "Never") return null;
+    const now = new Date();
+    if (choice === "1 hour") return now.getTime() + 3600000;
+    if (choice === "2 hours") return now.getTime() + 7200000;
+    if (choice === "3 hours") return now.getTime() + 10800000;
+    if (choice === "6 hours") return now.getTime() + 21600000;
+    if (choice === "12 hours") return now.getTime() + 43200000;
+    if (choice === "24 hours") return now.getTime() + 86400000;
+    if (choice === "1 week") return now.getTime() + 604800000;
+    now.setMonth(now.getMonth() + 3);
+    return now.getTime();
   }
 
   async function run(work: () => Promise<void>) {
@@ -226,10 +231,10 @@
     editedInvitation = invitation;
     deletingInvitation = "";
     invitationLimit = invitation ? invitation.usesLeft ?? undefined : 1;
-    const expiry = localInvitationExpiry(invitation?.expiresAt ?? Date.now() + 86400000);
-    invitationDay = invitation?.expiresAt === null ? undefined : toCalendarDate(expiry);
-    invitationTime = toTime(expiry);
-    expiryOpen = false;
+    const expiresAt = invitation?.expiresAt;
+    const match = expiresAt === null ? "Never" : expiresAt === undefined ? "24 hours" : expiryOptions.slice(0, -1).find((option) => Math.abs((expiryTimestamp(option) ?? 0) - expiresAt) < 60000) ?? "24 hours";
+    invitationExpiry = match;
+    originalExpiryChoice = match;
   }
 
   function saveInvitation(event: SubmitEvent) {
@@ -237,8 +242,8 @@
     const editing = editedInvitation;
     if (editing && !invitationChanged) return;
     void run(async () => {
-      const expiresAt = expiryChanged ? invitationExpiry?.toDate(getLocalTimeZone()).getTime() : undefined;
-      if (expiryChanged && expiresAt !== undefined && (!Number.isFinite(expiresAt) || expiresAt <= Date.now())) {
+      const expiresAt = expiryChanged ? expiryTimestamp(invitationExpiry) : undefined;
+      if (expiryChanged && expiresAt !== undefined && expiresAt !== null && (!Number.isFinite(expiresAt) || expiresAt <= Date.now())) {
         throw new Error("Choose a future expiration date.");
       }
       const api = apiFor(origin).admin.invitations;
@@ -255,7 +260,7 @@
         editInvitation(null);
         return;
       }
-      const response = await api.post({ expiresAt, uses: invitationLimit });
+      const response = await api.post({ expiresAt: expiresAt ?? undefined, uses: invitationLimit });
       if (response.error) throw requestError(response.error);
       if (!response.data || !("token" in response.data)) throw requestError({ value: response.data });
       const { id, token } = response.data;
@@ -417,41 +422,33 @@
       </form>
     {:else if tab === "invitation" && permissions.includes("manageInvitations")}
       <form class="dialog-form" onsubmit={saveInvitation}>
-        <h3>{editedInvitation ? `Edit invitation ${editedInvitation.id.slice(0, 8)}` : "Create invitation"}</h3>
+        <section class="invite-panel">
+        <div class="invite-heading"><div><span class="invite-eyebrow">SERVER ACCESS</span><h3>{editedInvitation ? `Edit invitation ${editedInvitation.id.slice(0, 8)}` : "Create an invitation"}</h3><p class="field-hint">Choose how many people can join and when this link expires.</p></div></div>
         <label>{editedInvitation ? "Remaining uses" : "Use limit"}
           <Input type="number" min={editedInvitation ? 0 : 1} max="10000" placeholder="Unlimited" disabled={busy} bind:value={invitationLimit} />
         </label>
-        <div inert={busy}>
-          <Collapsible title={expiryTitle} bind:open={expiryOpen}>
-            <div class="expiry-fields" role="group" aria-label="Invitation expiration">
-              <Calendar label="Expiration date" bind:value={invitationDay} />
-              <TimeField label="Expiration time (local)" bind:value={invitationTime} />
-              <Button class="fit-action" type="button" disabled={!invitationDay} onclick={() => { invitationDay = undefined; }}>
-                Clear expiration
-              </Button>
-            </div>
-          </Collapsible>
-        </div>
-        <p class="field-hint">Leave the use limit blank for unlimited uses.</p>
+        <SelectField label="Expires after" options={expirySelectOptions} disabled={busy} bind:value={invitationExpiry} />
+        <p class="field-hint">Leave the use limit blank for unlimited uses. Three months is calculated from today.</p>
         <div class="dialog-actions">
           {#if editedInvitation}
             <Button type="button" disabled={busy} onclick={() => editInvitation(null)}>Cancel</Button>
           {/if}
           <Button variant="alternate" type="submit"
-            disabled={busy || Boolean(invitationDay && !invitationTime) || Boolean(editedInvitation && !invitationChanged)}>
+            disabled={busy || Boolean(editedInvitation && !invitationChanged)}>
             {editedInvitation ? "Save changes" : "Create invitation"}
           </Button>
         </div>
+        </section>
       </form>
       {#if createdInvitation}
         {@const url = createdInvitation.url}
-        <div class="dialog-form">
+        <div class="dialog-form invite-link">
           <label>Invitation link<Input value={url} readonly /></label>
           <p class="field-hint">Copy this link before creating another invitation or leaving server settings.</p>
           <Button class="fit-action" disabled={busy} onclick={() => copyInvitation(url)}>Copy link</Button>
         </div>
       {/if}
-      <h3>Existing invitations</h3>
+      <section class="existing-invites"><div class="section-heading"><div><span class="invite-eyebrow">LINK MANAGEMENT</span><h3>Existing invitations</h3></div><span class="invite-count">{invitations?.length ?? 0}</span></div>
       {#if invitations?.length}
         <ul class="admin-members">
           {#each invitations as invitation (invitation.id)}
@@ -481,33 +478,17 @@
       {:else if !busy}
         <Button class="fit-action" onclick={loadInvitations}>Load invitations</Button>
       {/if}
+      </section>
     {/if}
   </div>
 </div>
 
 <style>
-  .expiry-fields {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 8px;
-    padding-top: 8px;
-  }
+  .invite-panel, .existing-invites { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid var(--border); background: var(--surface-subtle); margin-block: 1rem; }
+  .invite-heading, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .invite-heading h3, .section-heading h3 { margin: .2rem 0; }
+  .invite-eyebrow { color: var(--foreground-muted); font-size: .72rem; font-weight: 700; letter-spacing: .12em; }
+  .invite-count { min-width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: 999px; background: var(--surface-muted); color: var(--foreground-muted); }
+  .invite-link { padding: 1rem; border: 1px solid var(--border-subtle); }
 
-  .expiry-fields :global(.calendar-root) {
-    box-sizing: border-box;
-    width: min(100%, 19.5rem);
-    padding: 0.5rem;
-  }
-
-  .expiry-fields :global(.calendar-grid) { display: block; }
-
-  .expiry-fields :global(.calendar-row) {
-    display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
-  }
-
-  .expiry-fields :global(.calendar-weekday),
-  .expiry-fields :global(.calendar-cell) { width: auto; }
-
-  .expiry-fields :global(.calendar-day) { min-width: 0; }
 </style>
