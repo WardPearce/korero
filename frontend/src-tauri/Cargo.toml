@@ -3,13 +3,19 @@ name = "korero"
 default-run = "korero"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.95"
 
 [lib]
 name = "korero_app"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "browser-media-probe"
+path = "src/bin/browser-media-probe.rs"
+required-features = ["browser-media-probe"]
+
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "=3.0.0-alpha.4", features = [] }
 
 [dependencies]
 anyhow = "1.0"
@@ -20,23 +26,28 @@ korero-native = { path = "../native", features = ["media"] }
 reqwest = { version = "0.12", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "2", features = [] }
+tauri = { version = "=3.0.0-alpha.6", features = [] }
 tokio = { version = "1", features = ["sync", "time"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+browser-media-probe = []
 
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-korero-audio = { path = "plugins/android-audio" }
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-runtime-wry = "=3.0.0-alpha.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 http-body-util = "0.1"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
-webkit2gtk = "2"
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
-tauri-plugin-global-shortcut = "2"
+dirs = "6"
+tauri-plugin-global-shortcut = "=3.0.0-alpha.3"
+tauri-runtime-cef = "=3.0.0-alpha.7"
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "ios"))'.dependencies]
 keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }

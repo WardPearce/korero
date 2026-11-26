@@ -12,7 +12,7 @@
   import { onMount } from "svelte";
   import { AudioSettings, setAudioSettings } from "#lib/media/audio.svelte";
   import PaneDivider from "#lib/components/PaneDivider.svelte";
-  import { forgetPassword, getMemberVolumes, getSavedPassword, getUsername, migrateSavedServers, preferences, saveMemberVolumes, savePassword, type SavedServer } from "#lib/preferences";
+  import { defaultMemberVolume, forgetPassword, getMemberVolumes, getSavedPassword, getUsername, migrateSavedServers, preferences, saveMemberVolumes, savePassword, type SavedServer } from "#lib/preferences";
   import Avatar from "#lib/components/Avatar.svelte";
   import ContextActions from "#lib/components/ContextActions.svelte";
   import IdentitySetup from "#lib/components/IdentitySetup.svelte";
@@ -88,6 +88,7 @@
   let remembered = $state(true);
   let pending = $state("");
   let memberVolumes = $state.raw<Record<string, number>>({});
+  let memberVolumeUpdate = Promise.resolve(true);
   let actionError = $state("");
   let selectedChannelId = $state<string | null>(null);
   let mobilePane = $state<MobilePane>("room");
@@ -148,7 +149,7 @@
     run,
     runAction,
     memberAction,
-    memberVolume(accountId) { return memberVolumes[accountId] ?? 100; },
+    memberVolume(accountId) { return memberVolumes[accountId] ?? defaultMemberVolume; },
     setMemberVolume,
     reorderChannel,
     disconnect,
@@ -522,15 +523,27 @@
   }
 
   function setMemberVolume(accountId: string, level: number) {
-    return runAction("member-volume", async () => {
-      const serverId = serverInfo?.serverId;
-      await call("set_member_volume", { accountId, level });
-      const next = { ...memberVolumes };
-      if (level === 100) delete next[accountId];
-      else next[accountId] = level;
-      memberVolumes = next;
-      if (serverId) await saveMemberVolumes(serverId, next);
+    const origin = serverOrigin;
+    const serverId = serverInfo?.serverId;
+    const isCurrentServer = () => serverOrigin === origin && serverInfo?.serverId === serverId;
+    memberVolumeUpdate = memberVolumeUpdate.then(async () => {
+      if (!isCurrentServer() || view.phase !== "online" || pending === "disconnect") return false;
+      actionError = "";
+      try {
+        await call("set_member_volume", { accountId, level });
+        if (!isCurrentServer()) return false;
+        const next = { ...memberVolumes };
+        if (level === defaultMemberVolume) delete next[accountId];
+        else next[accountId] = level;
+        memberVolumes = next;
+        if (serverId) await saveMemberVolumes(serverId, next);
+        return true;
+      } catch (error) {
+        if (isCurrentServer()) actionError = messageFrom(error);
+        return false;
+      }
     });
+    return memberVolumeUpdate;
   }
 
   async function disconnect() {

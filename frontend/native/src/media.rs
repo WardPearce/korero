@@ -41,7 +41,7 @@ mod ffi {
         fn set_send(self: Pin<&mut Voice>, transport: &str) -> Result<()>;
         fn set_receive(self: Pin<&mut Voice>, transport: &str) -> Result<()>;
         fn consume(self: Pin<&mut Voice>, parameters: &str) -> Result<()>;
-        fn set_consumer_volume(self: Pin<&mut Voice>, producer_id: &str, level: u8) -> Result<()>;
+        fn set_consumer_volume(self: Pin<&mut Voice>, producer_id: &str, level: u16) -> Result<()>;
         fn close_consumer(self: Pin<&mut Voice>, producer_id: &str) -> Result<()>;
         fn peak(self: &Voice) -> f64;
     }
@@ -134,7 +134,7 @@ enum Operation {
     Send(Option<Value>),
     Receive(Option<Value>),
     Consume(Value),
-    ConsumerVolume(String, u8),
+    ConsumerVolume(String, u16),
     CloseConsumer(String),
     Peak,
     Stop,
@@ -234,7 +234,7 @@ pub struct RoomVoice {
     whisper: Option<(String, Option<String>)>,
     receive_id: Option<String>,
     consumers: HashMap<String, Option<String>>,
-    member_volumes: HashMap<String, u8>,
+    member_volumes: HashMap<String, u16>,
     bitrate: u32,
     pub channel: String,
 }
@@ -246,7 +246,7 @@ impl RoomVoice {
         ice: Value,
         bitrate: u32,
         synthetic: bool,
-        member_volumes: HashMap<String, u8>,
+        member_volumes: HashMap<String, u16>,
     ) -> Result<Self> {
         let router = wire.rpc("media.capabilities", json!({})).await?;
         let (worker, rtp) = VoiceThread::start(wire.clone(), router, ice, synthetic).await?;
@@ -425,7 +425,7 @@ impl RoomVoice {
         Ok(())
     }
 
-    pub async fn set_member_volume(&mut self, account_id: &str, level: u8) -> Result<()> {
+    pub async fn set_member_volume(&mut self, account_id: &str, level: u16) -> Result<()> {
         for (id, owner) in &self.consumers {
             if owner.as_deref() == Some(account_id) {
                 self.worker.request(Operation::ConsumerVolume(id.clone(), level)).await?;

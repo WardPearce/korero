@@ -15,6 +15,8 @@ use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 
+const MAX_MEMBER_VOLUME: u16 = 400;
+
 #[derive(Default)]
 struct Client {
     server: Option<Server>,
@@ -168,7 +170,7 @@ fn strip_credentials(body: &mut Value) {
 
 #[tauri::command]
 async fn start_session(
-    member_volumes: Option<HashMap<String, u8>>,
+    member_volumes: Option<HashMap<String, u16>>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
@@ -186,7 +188,7 @@ async fn start_session(
             .clone()
             .ok_or("Sign in with an identity first")?;
         let mut member_volumes = member_volumes.unwrap_or_default();
-        member_volumes.retain(|_, level| *level < 100);
+        member_volumes.retain(|_, level| *level != 100 && *level <= MAX_MEMBER_VOLUME);
         let controller = Controller::start(session, member_volumes);
         let updates = controller.state.clone();
         client.generation += 1;
@@ -387,9 +389,9 @@ async fn member_action(kind: String, payload: Value, state: State<'_, AppState>)
 }
 
 #[tauri::command]
-async fn set_member_volume(account_id: String, level: u8, state: State<'_, AppState>) -> CommandResult<()> {
-    if level > 100 {
-        return Err("Volume needs to be between 0 and 100".into());
+async fn set_member_volume(account_id: String, level: u16, state: State<'_, AppState>) -> CommandResult<()> {
+    if level > MAX_MEMBER_VOLUME {
+        return Err(format!("Volume needs to be between 0 and {MAX_MEMBER_VOLUME}").into());
     }
     dispatch(&state, Action::MemberVolume { account_id, level }).await
 }
@@ -452,7 +454,7 @@ async fn set_whisper(
 #[tauri::command]
 async fn configure_talk_shortcut(shortcut: Option<String>, app: AppHandle) -> CommandResult<()> {
     #[cfg(desktop)]
-    if let Some(manager) = app.try_state::<tauri_plugin_global_shortcut::GlobalShortcut<tauri::Wry>>() {
+    if let Some(manager) = app.try_state::<tauri_plugin_global_shortcut::GlobalShortcut<tauri::DynRuntime>>() {
         use tauri_plugin_global_shortcut::{Shortcut, ShortcutState};
         let state = app.state::<TalkShortcut>();
         let mut current = state.0.lock().await;
@@ -515,7 +517,7 @@ async fn microphone_test(state: State<'_, AppState>) -> CommandResult<Value> {
 }
 
 #[cfg(target_os = "android")]
-type AndroidAudio = tauri_plugin_korero_audio::AndroidAudio<tauri::Wry>;
+type AndroidAudio = tauri_plugin_korero_audio::AndroidAudio<tauri::DynRuntime>;
 
 #[cfg(target_os = "android")]
 #[no_mangle]
@@ -529,7 +531,19 @@ pub extern "system" fn Java_app_korero_audio_VoicePlugin_initializeRtc(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
     let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = {
+        // The Chromium profile contains the account identity and app preferences.
+        let profile = dirs::data_local_dir()
+            .expect("Could not locate the local application data directory")
+            .join(&context.config().identifier)
+            .join("cef");
+        builder.runtime(tauri_runtime_cef::Cef::default().root_cache_path(profile))
+    };
+    #[cfg(mobile)]
+    let builder = builder.runtime(tauri_runtime_wry::Wry::default());
     #[cfg(desktop)]
     let builder = {
         let builder = builder.manage(TalkShortcut::default());
@@ -538,33 +552,6 @@ pub fn run() {
             std::env::var_os("WAYLAND_DISPLAY").is_none());
         if supported { builder.plugin(tauri_plugin_global_shortcut::Builder::new().build()) } else { builder }
     };
-    #[cfg(target_os = "linux")]
-    let builder = builder
-        .setup(|app| {
-            use webkit2gtk::{SettingsExt, WebViewExt};
-            if let Some(window) = app.get_webview_window("main") {
-                window.with_webview(|webview| {
-                    if let Some(settings) = WebViewExt::settings(&webview.inner()) {
-                        settings.set_enable_media_stream(true);
-                        settings.set_enable_webrtc(true);
-                    }
-                })?;
-            }
-            Ok(())
-        })
-        .on_permission_request(|webview, kind| {
-            use tauri::webview::{PermissionKind, PermissionResponse};
-            if !matches!(kind, PermissionKind::DisplayCapture | PermissionKind::Camera) {
-                return PermissionResponse::Default;
-            }
-            let local = webview.label() == "main" && webview.url().is_ok_and(|url| {
-                (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
-                    || (cfg!(debug_assertions) && webview.app_handle().config().build.dev_url
-                        .as_ref().is_some_and(|dev| url.origin() == dev.origin()))
-            });
-            // Local capture follows an explicit preview or source-picker action.
-            if local { PermissionResponse::Allow } else { PermissionResponse::Deny }
-        });
     #[cfg(target_os = "android")]
     let builder = builder.plugin(tauri_plugin_korero_audio::init());
     builder
@@ -601,7 +588,7 @@ pub fn run() {
             import_identity,
             authenticate_identity,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("Could not start the VNX.chat desktop window");
 }
 

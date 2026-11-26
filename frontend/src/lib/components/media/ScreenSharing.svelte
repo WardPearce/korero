@@ -1,7 +1,7 @@
 <script lang="ts">
   import { BitsConfig, Portal } from "bits-ui";
-  import { Monitor, MonitorUp, Square, Video, VideoOff, X } from "@lucide/svelte";
-  import { onDestroy, untrack } from "svelte";
+  import { ExternalLink, Grip, Monitor, MonitorUp, PanelTop, Play, Square, Video, VideoOff, X } from "@lucide/svelte";
+  import { onDestroy, tick, untrack } from "svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
   import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
@@ -10,9 +10,9 @@
   import { call, messageFrom, nativeApp, type ScreenShare, type Snapshot } from "#lib/connection/client";
   import { chooseScreen, ScreenMedia, supportsWebRtc, type MediaRequest, type VideoSource } from "#lib/media/screen-media";
 
-  let { snapshot, visible, controlsTarget, source = "screen", initialSetup = false, relay }: {
+  let { snapshot, visible, controlsTarget, inlineTarget, onDock, source = "screen", initialSetup = false, relay }: {
     snapshot: Snapshot; visible: boolean; controlsTarget: HTMLElement; source?: VideoSource;
-    initialSetup?: boolean; relay?: MediaRequest;
+    inlineTarget?: HTMLElement; onDock?: () => void; initialSetup?: boolean; relay?: MediaRequest;
   } = $props();
   let setupOpen = $state(untrack(() => initialSetup));
   let setupForm = $state<HTMLFormElement>();
@@ -25,6 +25,13 @@
   let incoming = $state<ScreenMedia>();
   let watched = $state<MediaStream>();
   let watchedId = $state("");
+  let poppedOut = $state(false);
+  let floatingPlayer = $state<HTMLElement>();
+  let playerToggle = $state<HTMLElement | null>(null);
+  let playerPosition = $state<{ x: number; y: number }>();
+  let drag: { id: number; offsetX: number; offsetY: number } | undefined;
+  let streamMuted = $state(true);
+  let streamVolume = $state(1);
   let stoppingShare = $state(false);
   let stoppingWatch = $state(false);
   let error = $state("");
@@ -59,6 +66,7 @@
   const canShare = $derived(canReceive && (camera ? snapshot.canUseCamera ?? snapshot.canShareScreen : snapshot.canShareScreen) !== false && !member?.adminMuted);
   const shares = $derived((availableShares ?? []).filter(({ connectionId }) => connectionId !== snapshot.connectionId));
   const watchedShare = $derived(shares.find(({ producerId }) => producerId === watchedId));
+  const floating = $derived(!camera && Boolean(watched && watchedShare) && (poppedOut || !visible));
 
   $effect(() => {
     if (!setupOpen && !outgoing) releaseCapture();
@@ -244,6 +252,10 @@
     incoming = undefined;
     watched = undefined;
     watchedId = "";
+    poppedOut = false;
+    drag = undefined;
+    streamMuted = true;
+    streamVolume = 1;
     await session.close();
     stoppingWatch = false;
   }
@@ -256,31 +268,138 @@
     element.srcObject = stream;
     return () => { element.srcObject = null; };
   }
+
+  async function togglePopout() {
+    if (floating) {
+      onDock?.();
+      poppedOut = false;
+    } else {
+      poppedOut = true;
+    }
+    await tick();
+    playerToggle?.focus();
+  }
+
+  function positionPlayer(x: number, y: number) {
+    if (!floatingPlayer) return;
+    const margin = 8;
+    playerPosition = {
+      x: Math.max(margin, Math.min(x, document.documentElement.clientWidth - floatingPlayer.offsetWidth - margin)),
+      y: Math.max(margin, Math.min(y, window.innerHeight - floatingPlayer.offsetHeight - margin)),
+    };
+  }
+
+  function keepPlayerInView() {
+    if (floating && playerPosition) positionPlayer(playerPosition.x, playerPosition.y);
+  }
+
+  function startDrag(event: PointerEvent) {
+    if (event.button !== 0 || drag || !floatingPlayer || !(event.currentTarget instanceof HTMLElement)) return;
+    const bounds = floatingPlayer.getBoundingClientRect();
+    drag = { id: event.pointerId, offsetX: event.clientX - bounds.left, offsetY: event.clientY - bounds.top };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveDrag(event: PointerEvent) {
+    if (drag?.id === event.pointerId) positionPlayer(event.clientX - drag.offsetX, event.clientY - drag.offsetY);
+  }
+
+  function finishDrag(event: PointerEvent) {
+    if (drag?.id === event.pointerId) drag = undefined;
+  }
+
+  function moveWithKeyboard(event: KeyboardEvent) {
+    if (!floatingPlayer) return;
+    const directions = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    if (!Object.hasOwn(directions, event.key)) return;
+    event.preventDefault();
+    const [x, y] = directions[event.key as keyof typeof directions];
+    const bounds = floatingPlayer.getBoundingClientRect();
+    positionPlayer(bounds.left + x * 24, bounds.top + y * 24);
+  }
 </script>
 
+<svelte:window onresize={keepPlayerInView} />
+
+{#snippet screenPlayer(stream: MediaStream, share: ScreenShare, detached: boolean)}
+  <header class="player-bar">
+    {#if detached}
+      <Button size="icon-sm" variant="ghost" class="drag-handle" aria-label="Move stream with arrow keys"
+        title="Drag to move stream" onpointerdown={startDrag} onpointermove={moveDrag}
+        onlostpointercapture={finishDrag} onkeydown={moveWithKeyboard}>
+        <Grip aria-hidden="true" />
+      </Button>
+    {/if}
+    <span class="live-dot" aria-hidden="true"></span>
+    <span class="player-name truncate" title={presenter(share.connectionId)}>{presenter(share.connectionId)}’s screen</span>
+    <Button size={detached ? "icon-sm" : "sm"} variant="outline" bind:ref={playerToggle} onclick={togglePopout}
+      aria-label={detached ? "Dock stream" : "Pop out stream"} title={detached ? "Dock stream" : "Pop out stream"}>
+      {#if detached}<PanelTop aria-hidden="true" />
+      {:else}<ExternalLink aria-hidden="true" /> Pop out{/if}
+    </Button>
+    {#if detached}
+      <Button size="icon-sm" variant="ghost" aria-label="Stop watching" title="Stop watching" onclick={stopWatching}>
+        <X aria-hidden="true" />
+      </Button>
+    {/if}
+  </header>
+  <video autoplay playsinline controls aria-label="Shared screen"
+    bind:muted={streamMuted} bind:volume={streamVolume} {@attach (element) => showPreview(element, stream)}></video>
+{/snippet}
+
 {#if visible && (shares.length || watched || (outgoingId && capture) || watchedId || error)}
-  <section class="screen-sharing" aria-label={camera ? "Camera video" : "Screen sharing"}>
-    {#if shares.length}
-      <div class="screen-actions">
-        {#each shares as share (share.producerId)}
-          <Button variant={watchedId === share.producerId ? "default" : "outline"} disabled={!canReceive || stoppingWatch}
-            onclick={() => watchedId === share.producerId ? stopWatching() : watch(share)}>
-            {#if watchedId === share.producerId}<X size={15} /> Stop watching
-            {:else}<WatchIcon size={15} /> Watch {presenter(share.connectionId)}{camera ? "’s camera" : ""}{/if}
-          </Button>
-        {/each}
-      </div>
-    {/if}
-    {#if watched || (outgoingId && capture)}
-      {@const stream = watched ?? capture!}
-      <video autoplay muted playsinline controls={Boolean(watched) && !camera}
-        aria-label={camera ? (watched ? "Shared camera" : "Your camera preview") : (watched ? "Shared screen" : "Your screen preview")}
-        {@attach (element) => showPreview(element, stream)}></video>
-    {:else if watchedId}
-      <p role="status">{camera ? "Opening camera…" : "Opening screen share…"}</p>
-    {/if}
-    {#if error}<p class="form-error" role="alert">{error}</p>{/if}
-  </section>
+  <Portal to={inlineTarget} disabled={!inlineTarget}>
+    <section class="screen-sharing" aria-label={camera ? "Camera video" : "Screen sharing"}>
+      {#if shares.length}
+        <div class="screen-actions">
+          {#each shares as share (share.producerId)}
+            {@const watching = watchedId === share.producerId}
+            {#if camera}
+              <Button variant={watching ? "default" : "outline"} disabled={!canReceive || stoppingWatch}
+                onclick={() => watching ? stopWatching() : watch(share)}>
+                {#if watching}<X size={15} /> Stop watching
+                {:else}<WatchIcon size={15} /> Watch {presenter(share.connectionId)}’s camera{/if}
+              </Button>
+            {:else}
+              <div class="live-share">
+                <span class="live-label"><span class="live-dot" aria-hidden="true"></span> Live</span>
+                <span class="truncate" title={presenter(share.connectionId)}>{presenter(share.connectionId)} is sharing their screen</span>
+                <Button variant={watching ? "outline" : "default"} class="ms-auto" disabled={!canReceive || stoppingWatch}
+                  aria-label={watching ? `Stop watching ${presenter(share.connectionId)}` : `Watch live stream from ${presenter(share.connectionId)}`}
+                  onclick={() => watching ? stopWatching() : watch(share)}>
+                  {#if watching}<X size={15} aria-hidden="true" /> Stop watching
+                  {:else}<Play size={15} aria-hidden="true" /> Watch live stream{/if}
+                </Button>
+              </div>
+            {/if}
+          {/each}
+        </div>
+      {/if}
+      {#if watched && watchedShare && !camera}
+        {#if !floating}{@render screenPlayer(watched, watchedShare, false)}{/if}
+      {:else if (watched && camera) || (outgoingId && capture)}
+        {@const stream = watched ?? capture!}
+        <video autoplay muted playsinline
+          aria-label={camera ? (watched ? "Shared camera" : "Your camera preview") : "Your screen preview"}
+          {@attach (element) => showPreview(element, stream)}></video>
+      {:else if watchedId}
+        <p role="status">{camera ? "Opening camera…" : "Opening screen share…"}</p>
+      {/if}
+      {#if error}<p class="form-error" role="alert">{error}</p>{/if}
+    </section>
+  </Portal>
+{/if}
+
+{#if floating && watched && watchedShare}
+  <Portal to="body">
+    <section class="floating-player" aria-label="Floating live stream" bind:this={floatingPlayer}
+      data-positioned={playerPosition ? "" : undefined}
+      style:left={playerPosition ? playerPosition.x + "px" : undefined}
+      style:top={playerPosition ? playerPosition.y + "px" : undefined}
+      {@attach () => untrack(keepPlayerInView)}>
+      {@render screenPlayer(watched, watchedShare, true)}
+    </section>
+  </Portal>
 {/if}
 
 <Portal to={controlsTarget}>
@@ -343,7 +462,56 @@
 <style>
   .screen-sharing { border-bottom: 1px solid var(--border); }
   .screen-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .screen-actions:has(.live-share) { max-height: 26dvh; overflow-y: auto; }
   .screen-actions, .screen-sharing p { padding: 8px var(--ui-gap); }
+  .live-share, .player-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    background: var(--card);
+  }
+  .live-share {
+    width: 100%;
+    flex-wrap: wrap;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+  .live-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--destructive) 14%, transparent);
+    color: var(--destructive);
+    font-size: var(--type-caption);
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .live-dot { flex: none; width: .45rem; height: .45rem; border-radius: 50%; background: var(--destructive); }
+  .player-bar { padding-inline: var(--ui-gap); }
+  .player-name { flex: 1; min-width: 0; font-size: var(--type-small); font-weight: 600; }
+  .floating-player {
+    position: fixed;
+    z-index: 40;
+    right: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    width: min(32rem, calc(100% - 24px));
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--card);
+    box-shadow: var(--shadow-floating);
+  }
+  .floating-player[data-positioned] { right: auto; bottom: auto; }
+  @media (max-width: 760px) {
+    .floating-player:not([data-positioned]) { top: 12px; bottom: auto; }
+  }
+  .floating-player .player-bar { padding-inline: 6px; }
+  .floating-player :global(.drag-handle) { cursor: grab; touch-action: none; }
+  .floating-player :global(.drag-handle:active) { cursor: grabbing; }
+  .floating-player video { aspect-ratio: 16 / 9; max-height: 50dvh; border-radius: 0; }
   video {
     display: block;
     width: 100%;

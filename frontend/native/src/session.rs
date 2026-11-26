@@ -136,7 +136,7 @@ pub enum Action {
     SaveChannel(Value),
     DeleteChannel(String),
     MemberAction { kind: &'static str, payload: Value },
-    MemberVolume { account_id: String, level: u8 },
+    MemberVolume { account_id: String, level: u16 },
     Disconnect,
 }
 
@@ -152,7 +152,7 @@ pub struct Controller {
 }
 
 impl Controller {
-    pub fn start(session: Session, member_volumes: HashMap<String, u8>) -> Self {
+    pub fn start(session: Session, member_volumes: HashMap<String, u16>) -> Self {
         let (sender, receiver) = mpsc::channel(24);
         let (updates, state) = watch::channel(View::offline());
         tokio::spawn(run(session, receiver, updates, member_volumes));
@@ -192,7 +192,7 @@ async fn run(
     session: Session,
     mut input: mpsc::Receiver<Request>,
     output: watch::Sender<View>,
-    mut member_volumes: HashMap<String, u8>,
+    mut member_volumes: HashMap<String, u16>,
 ) {
     let mut desired = None;
     let mut attempt: u32 = 0;
@@ -304,11 +304,11 @@ struct Active {
     producers: HashMap<String, String>,
     speaking: HashMap<String, bool>,
     own_presence: Presence,
-    member_volumes: HashMap<String, u8>,
+    member_volumes: HashMap<String, u16>,
 }
 
 impl Active {
-    fn new(connection: Connected, member_volumes: HashMap<String, u8>) -> Self {
+    fn new(connection: Connected, member_volumes: HashMap<String, u16>) -> Self {
         let view = View {
             phase: "online",
             snapshot: connection.snapshot.clone(),

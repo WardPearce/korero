@@ -9,13 +9,14 @@
     ondblclick?: () => void;
   };
 
-  let { trigger, actions = [], content, disabled = false, openOnClick = false, onDoubleClick }: {
+  let { trigger, actions = [], content, disabled = false, openOnClick = false, onDoubleClick, onOpenChange }: {
     trigger: Snippet<[TriggerEvents]>;
     actions?: Action[];
     content?: Snippet;
     disabled?: boolean;
     openOnClick?: boolean;
     onDoubleClick?: () => void;
+    onOpenChange?: (open: boolean) => void;
   } = $props();
 
   function openAtTrigger(target: EventTarget | null) {
@@ -42,7 +43,7 @@
   {@render trigger({})}
 {:else}
   <div class="context-row">
-    <ContextMenu.Root>
+    <ContextMenu.Root {onOpenChange}>
       <ContextMenu.Trigger>
         {@render trigger({ onkeydown: openFromKeyboard, onclick: openOnClick ? openFromClick : undefined, ondblclick: onDoubleClick })}
       </ContextMenu.Trigger>

@@ -555,10 +555,10 @@ void Voice::consume(rust::Str parameters) {
   std::unique_ptr<mediasoupclient::Consumer> consumer(impl_->receive->Consume(
       &impl_->listeners, p.at("id"), id, p.at("kind"), &rtp));
   impl_->consumers.emplace(id, std::move(consumer));
-  set_consumer_volume(rust::Str(id.data(), id.size()), p.value("volumeLevel", uint8_t{100}));
+  set_consumer_volume(rust::Str(id.data(), id.size()), p.value("volumeLevel", uint16_t{100}));
 }
 
-void Voice::set_consumer_volume(rust::Str producer_id, uint8_t level) {
+void Voice::set_consumer_volume(rust::Str producer_id, uint16_t level) {
   if (impl_->probe) return;
   const auto found = impl_->consumers.find(as_string(producer_id));
   if (found != impl_->consumers.end()) {

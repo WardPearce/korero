@@ -54,7 +54,7 @@ Choose **Screenshare**, set resolution, frame rate, video bitrate and optional s
 audio, then choose a window, browser tab or full display in the system picker.
 Screenshare defaults to 1080p and 6,000 kbps.
 The preview stays local until you choose **Go live**. Available sources and source
-audio depend on your browser and operating system. On Linux, when the system
+audio depend on your browser and operating system. On Linux, when the embedded
 webview lacks WebRTC, video opens in your default browser and uses the active
 desktop channel. Keep the desktop app connected while using the video tab.
 

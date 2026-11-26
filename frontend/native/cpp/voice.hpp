@@ -20,7 +20,7 @@ public:
   void set_send(rust::Str transport);
   void set_receive(rust::Str transport);
   void consume(rust::Str parameters);
-  void set_consumer_volume(rust::Str producer_id, uint8_t level);
+  void set_consumer_volume(rust::Str producer_id, uint16_t level);
   void close_consumer(rust::Str producer_id);
   double peak() const;
 

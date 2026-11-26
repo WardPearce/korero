@@ -42,6 +42,7 @@
   let createChannelOpen = $state(false);
   let channelForm = $state<HTMLFormElement>();
   let channelFooter = $state<HTMLDivElement>();
+  let screenShareTarget = $state<HTMLDivElement>();
   let editingChannel = $state.raw<Channel | null>(null);
   let newChannelName = $state("");
   let channelDescription = $state("");
@@ -604,9 +605,9 @@
     {#if online && snapshot?.channelId && channelFooter}
       {#key snapshot.connectionId + "/" + snapshot.channelId}
         {#if snapshot.cameras}<ScreenSharing {snapshot} controlsTarget={channelFooter} visible={isInRoom} source="camera" />{/if}
-        {#if workspace.screenSharing}<ScreenSharing {snapshot} controlsTarget={channelFooter} visible={isInRoom} />{/if}
       {/key}
     {/if}
+    {#if workspace.screenSharing && isInRoom}<div bind:this={screenShareTarget} style="display: contents"></div>{/if}
     <section class="chat-pane" aria-label="Channel chat">
       <div class="chat-log" {@attach attachMessageList} role="log" aria-label="Channel messages">
         {#if isInRoom && view.messages.length}
@@ -664,6 +665,13 @@
     {@render chat()}
   {/if}
 </main>
+
+{#if online && snapshot?.channelId && channelFooter && workspace.screenSharing}
+  {#key snapshot.connectionId + "/" + snapshot.channelId}
+    <ScreenSharing {snapshot} controlsTarget={channelFooter} inlineTarget={screenShareTarget} visible={Boolean(screenShareTarget)}
+      onDock={() => { if (activeChannel) selectChannel(activeChannel); }} />
+  {/key}
+{/if}
 
 <Modal bind:open={afkFormOpen} title="AFK message" description="People who can see your voice channel can read this message while you’re AFK." dismissible={pending !== "afk"}>
   {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}

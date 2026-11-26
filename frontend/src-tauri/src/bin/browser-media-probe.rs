@@ -1,10 +1,15 @@
+#[cfg(target_os = "linux")]
 #[path = "../browser_media.rs"]
 mod browser_media;
 
+#[cfg(target_os = "linux")]
 use anyhow::{Context, Result};
+#[cfg(target_os = "linux")]
 use korero_native::{session::{Action, Controller, Presence, Session}, signaling::{Credentials, ServerContact}};
+#[cfg(target_os = "linux")]
 use std::{collections::HashMap, time::Duration};
 
+#[cfg(target_os = "linux")]
 async fn test(app: tauri::AppHandle) -> Result<()> {
     let address = std::env::var("KORERO_TEST_ORIGIN")?;
     let fingerprint = std::env::var("KORERO_TEST_FINGERPRINT")?;
@@ -22,10 +27,12 @@ async fn test(app: tauri::AppHandle) -> Result<()> {
     browser_media::open(app, controller, connection, channel, "screen".into(), true).await
 }
 
+#[cfg(target_os = "linux")]
+#[tauri_runtime_cef::cef_entry_point]
 fn main() {
     let mut context = tauri::generate_context!();
     context.config_mut().app.windows[0].visible = false;
-    tauri::Builder::default().setup(|app| {
+    tauri::Builder::default().runtime(tauri_runtime_cef::Cef::default()).setup(|app| {
         let app = app.handle().clone();
         tauri::async_runtime::spawn(async move {
             if let Err(error) = test(app).await {
@@ -35,4 +42,10 @@ fn main() {
         });
         Ok(())
     }).run(context).unwrap();
+}
+
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("The browser media probe requires Linux.");
+    std::process::exit(1);
 }

@@ -63,11 +63,14 @@ export function forgetPassword(origin: string, serverId: string, channelId = "",
   return records.and(({ password }) => rejectedPassword === undefined || rejectedPassword === password).delete();
 }
 
+export const defaultMemberVolume = 100;
+export const maxMemberVolume = 400;
+
 export async function getMemberVolumes(serverId: string) {
   const { value } = await preferences.local.get(`member-volumes:${serverId}`) ?? {};
   if (!value || typeof value !== "object") return {};
   return Object.fromEntries(Object.entries(value).filter(([, level]) =>
-    typeof level === "number" && Number.isInteger(level) && level >= 0 && level < 100));
+    typeof level === "number" && Number.isInteger(level) && level >= 0 && level <= maxMemberVolume && level !== defaultMemberVolume));
 }
 
 export async function saveMemberVolumes(serverId: string, value: Record<string, number>) {
