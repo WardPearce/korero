@@ -134,6 +134,7 @@ pub enum Action {
         reply: oneshot::Sender<Result<Value>>,
     },
     SaveChannel(Value),
+    DeleteChannel(String),
     MemberAction { kind: &'static str, payload: Value },
     MemberVolume { account_id: String, level: u8 },
     Disconnect,
@@ -465,6 +466,9 @@ impl Active {
                 let reply = self.connection.wire.rpc(operation, payload).await?;
                 self.view.snapshot = reply["state"].clone();
                 self.reconcile_voice().await;
+            }
+            Action::DeleteChannel(id) => {
+                self.connection.wire.rpc("channel.delete", json!({ "channelId": id })).await?;
             }
             Action::MemberAction { kind, payload } => {
                 self.connection.wire.rpc(kind, payload).await?;
