@@ -162,6 +162,48 @@
     {#if error}<p class="form-error dm-error" role="alert">{error}</p>{/if}
 
     <div class="dm-columns">
+      <section class="dm-people" aria-labelledby="dm-people-title">
+        <div class="dm-people-heading">
+          <div>
+            <h3 id="dm-people-title">{normalizedQuery ? "Matching people" : "People"}</h3>
+            <p>{normalizedQuery ? "People matching your search" : "Your conversations and online members"}</p>
+          </div>
+          <span class="dm-count">{visibleContacts.length}</span>
+        </div>
+        {#if loading}
+          <ul class="dm-list" aria-label="Loading people">
+            {#each [0, 1, 2, 3] as row (row)}<li class="dm-skeleton-row" aria-hidden="true"></li>{/each}
+          </ul>
+        {:else}
+          <ul class="dm-list">
+            {#each visibleContacts as contact (contact.accountId)}
+              <li>
+                <button type="button" class="tree-member member-target dm-person"
+                  onclick={() => workspace.showDirectMessages(contact.accountId)}>
+                  <Avatar name={contact.displayName} small />
+                  <span class="member-details dm-person-details">
+                    <span class="dm-person-name truncate">{contact.displayName}</span>
+                    <small>{contact.online ? "Online" : "Offline"} · {contact.accountId.slice(0, 8)}…</small>
+                  </span>
+                  <span class="dm-person-statuses">
+                    {#if workspace.unreadDirectAccounts.has(contact.accountId)}<span class="dm-unread">Unread</span>{/if}
+                    {#if contact.verified}<span class="dm-trust" title="Verified on this device"><ShieldCheck size={13} aria-hidden="true" /> Verified</span>
+                    {:else}<span class="dm-trust dm-trust-pending" title="Safety codes have not been compared"><ShieldAlert size={13} aria-hidden="true" /> Unverified</span>{/if}
+                  </span>
+                </button>
+              </li>
+            {:else}
+              <li class="dm-empty">
+                <Search size={20} aria-hidden="true" />
+                {#if normalizedQuery}<p>No people match “{query.trim()}”.</p><p>Try a name, an account ID, or add someone by ID.</p>
+                {:else}<p>No conversations yet</p><p>Search for someone online or add them using their account ID.</p>{/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <p class="dm-note"><LockKeyhole size={13} aria-hidden="true" /> Safety code comparison is optional and helps confirm a contact’s identity.</p>
+      </section>
+
       <section class="dm-start" aria-labelledby="dm-start-title">
         <div class="dm-section-heading">
           <UserPlus size={16} aria-hidden="true" />
@@ -199,54 +241,6 @@
         </div>
       </section>
 
-      <section class="dm-people" aria-labelledby="dm-people-title">
-        <div class="dm-people-heading">
-          <h3 id="dm-people-title">{normalizedQuery ? "Matching people" : "People"}</h3>
-          <span class="dm-count">{visibleContacts.length}</span>
-        </div>
-        {#if loading}
-          <ul class="dm-list" aria-label="Loading people">
-            {#each [0, 1, 2, 3] as row (row)}
-              <li class="dm-skeleton-row" aria-hidden="true"></li>
-            {/each}
-          </ul>
-        {:else}
-          <ul class="dm-list">
-            {#each visibleContacts as contact (contact.accountId)}
-              <li>
-                <button type="button" class="tree-member member-target dm-person"
-                  onclick={() => workspace.showDirectMessages(contact.accountId)}>
-                  <Avatar name={contact.displayName} small />
-                  <span class="member-details dm-person-details">
-                    <span class="dm-person-name truncate">{contact.displayName}</span>
-                    <small>{contact.online ? "Online" : "Offline"} · {contact.accountId.slice(0, 8)}…</small>
-                  </span>
-                  <span class="dm-person-statuses">
-                    {#if workspace.unreadDirectAccounts.has(contact.accountId)}<span class="dm-unread">Unread</span>{/if}
-                    {#if contact.verified}
-                      <span class="dm-trust" title="Verified on this device"><ShieldCheck size={13} aria-hidden="true" /> Verified</span>
-                    {:else}
-                      <span class="dm-trust dm-trust-pending" title="Compare safety codes before messaging"><ShieldAlert size={13} aria-hidden="true" /> Verify</span>
-                    {/if}
-                  </span>
-                </button>
-              </li>
-            {:else}
-              <li class="dm-empty">
-                <Search size={20} aria-hidden="true" />
-                {#if normalizedQuery}
-                  <p>No people match “{query.trim()}”.</p>
-                  <p>Try a name, an account ID, or add someone by ID.</p>
-                {:else}
-                  <p>No conversations or online members yet.</p>
-                  <p>Copy your ID or add someone by ID to start one.</p>
-                {/if}
-              </li>
-            {/each}
-          </ul>
-        {/if}
-        <p class="dm-note"><LockKeyhole size={13} aria-hidden="true" /> New conversations ask you to compare safety codes before messaging.</p>
-      </section>
     </div>
   </div>
 {/if}
@@ -298,8 +292,8 @@
 
   .dm-columns {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
-    align-items: start;
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+    align-items: stretch;
     gap: var(--ui-gap);
     flex: 1;
     min-height: 0;
@@ -311,7 +305,7 @@
     background: var(--card);
     box-shadow: var(--shadow-raised);
   }
-  .dm-start { display: grid; gap: 16px; padding: 14px; order: 2; }
+  .dm-start { display: grid; align-content: start; gap: 16px; padding: 18px; }
   .dm-section-heading { display: flex; align-items: center; gap: 8px; }
   .dm-section-heading :global(svg) { color: var(--primary); }
   .dm-section-heading h3 { margin: 0; font-size: var(--type-body); font-weight: 600; }
@@ -333,15 +327,16 @@
   }
   .dm-search-field :global(.dm-search-input) { padding-left: 32px; }
 
-  .dm-people { display: flex; flex-direction: column; overflow: hidden; order: 1; }
+  .dm-people { display: flex; flex-direction: column; overflow: hidden; min-height: 320px; }
   .dm-people-heading {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 12px 14px;
+    justify-content: space-between;
+    padding: 16px 18px;
     border-bottom: 1px solid var(--border);
   }
   .dm-people-heading h3 { margin: 0; font-size: var(--type-body); font-weight: 600; }
+  .dm-people-heading p { margin: 3px 0 0; color: var(--muted-foreground); font-size: var(--type-small); }
   .dm-count {
     min-width: 22px;
     padding: 1px 6px;
@@ -352,8 +347,8 @@
     font-size: var(--type-caption);
     text-align: center;
   }
-  .dm-list { display: grid; gap: 2px; padding: 6px; overflow: auto; }
-  .dm-person { gap: 9px; padding: 8px; }
+  .dm-list { display: grid; align-content: start; gap: 3px; padding: 10px; overflow: auto; flex: 1; }
+  .dm-person { gap: 12px; padding: 12px; min-height: 64px; }
   .dm-person:hover, .dm-person:focus-visible { background: var(--muted); }
   .dm-person-details { display: grid; gap: 1px; }
   .dm-person-name { font-weight: 600; }
@@ -400,8 +395,8 @@
 
   @media (max-width: 900px) {
     .dm-columns { grid-template-columns: minmax(0, 1fr); }
-    .dm-start { order: 1; }
-    .dm-people { order: 2; }
+    .dm-start { order: 2; }
+    .dm-people { order: 1; }
   }
   @media (prefers-reduced-motion: reduce) {
     .dm-skeleton-row { animation: none; }

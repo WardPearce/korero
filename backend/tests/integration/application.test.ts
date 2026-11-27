@@ -266,3 +266,22 @@ test("worker crash invalidates media and starts a replacement", async () => {
     expect(await member.rpc("media.capabilities")).toHaveProperty("codecs");
   } finally { await server.cleanup(); }
 });
+
+test("Capacitor origins can be explicitly allowed without opening access to other origins", async () => {
+  const server = await fixture({ environment: { VOICE_SERVER_ORIGINS: '["https://localhost","capacitor://localhost"]' } });
+  try {
+    const preflight = (origin: string) => fetch(server.origin + "/api/v1/server/info", {
+      method: "OPTIONS", tls: server.tls, headers: { origin, "access-control-request-method": "GET" },
+    });
+    for (const origin of ["https://localhost", "capacitor://localhost"]) {
+      const response = await preflight(origin);
+      expect(response.status).toBe(204);
+      expect(response.headers.get("access-control-allow-origin")).toBe(origin);
+    }
+    for (const origin of ["null", "capacitor://other", "https://other.example"]) {
+      const response = await preflight(origin);
+      expect(response.status).toBe(403);
+      expect(response.headers.get("access-control-allow-origin")).toBeNull();
+    }
+  } finally { await server.cleanup(); }
+});

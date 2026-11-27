@@ -4,7 +4,9 @@
   import { Input } from "#lib/components/ui/input/index.js";
   import { Fingerprint } from "@lucide/svelte";
   import { onMount } from "svelte";
-  import { messageFrom, nativeApp } from "#lib/connection/client";
+  import { messageFrom, desktopApp } from "#lib/connection/client";
+  import { downloadFile } from "#lib/download-file";
+  import { mobileApp } from "#lib/connection/platform";
   import { exportIdentity, generateIdentity, getIdentity, importIdentity } from "#lib/identity/identity";
 
   let key = $state<string | null>(null);
@@ -12,7 +14,7 @@
   let replacement = $state(false);
   let busy = $state(false);
   let status = $state("");
-  const available = nativeApp();
+  const available = desktopApp() || mobileApp();
 
   async function run(task: () => Promise<void>) {
     if (busy) return;
@@ -28,12 +30,7 @@
 
   async function exportKey() {
     const blob = await exportIdentity(passphrase);
-    const url = URL.createObjectURL(new Blob([blob], { type: "text/plain" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "vnx-chat.identity";
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    await downloadFile("vnx-chat.identity", new Blob([blob], { type: "text/plain" }));
     passphrase = "";
     status = "Encrypted identity exported.";
   }

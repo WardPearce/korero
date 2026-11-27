@@ -1,3 +1,4 @@
+import { downloadFile } from "../download-file";
 import { apiFor, requestError, type Message } from "../connection/client";
 
 export async function uploadAttachment(origin: string, connectionId: string, channelId: string, text: string, file: File, html?: string) {
@@ -23,12 +24,5 @@ export async function downloadAttachment(origin: string, connectionId: string, m
   for (let offset = 0; offset < binary.length; offset++) {
     bytes[offset] = binary.charCodeAt(offset);
   }
-  const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = message.attachment.name;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  await downloadFile(message.attachment.name, new Blob([bytes], { type: "application/octet-stream" }));
 }

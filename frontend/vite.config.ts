@@ -26,7 +26,7 @@ export default defineConfig({
     strictPort: true,
     // The native SDK and Cargo build artifacts are outside the frontend module graph.
     watch: {
-      ignored: ["**/.native/**", "**/native/target/**", "**/src-tauri/target/**"],
+      ignored: ["**/.native/**", "**/native/target/**"],
     },
   },
 });

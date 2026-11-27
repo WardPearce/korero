@@ -1,13 +1,13 @@
 A self-hosted, voice-first server with direct-IP HTTPS and WebSocket signalling, a WebRTC SFU,
 public-key accounts, persistent device sessions, hierarchical channels, moderation, and chat.
 The [v1 protocol](docs/protocol.md) is open to independent clients. The Bun/Elysia server lives in
-[`backend/`](backend/). The SvelteKit and Tauri desktop client lives in [`frontend/`](frontend/).
+[`backend/`](backend/). The SvelteKit client for Electron, Capacitor, and browsers lives in [`frontend/`](frontend/).
 
-## Develop the desktop client
+## Develop the client
 
-Prepare the native media SDK and launch Tauri on Linux x86_64. See the
-[client build guide](docs/frontend-architecture.md) for prerequisites, certificate setup,
-and the native audio test.
+From `frontend/`, run `bun run electron:dev` on Linux x86_64 or `bun run mobile:sync`
+to prepare the Android and iOS projects. The [client build guide](docs/frontend-architecture.md)
+covers prerequisites and server certificates.
 
 ## Manage a server
 

@@ -96,8 +96,12 @@ export async function loadConfig(options: { file?: string; directory?: string } 
   }
   if (server.trusted_proxies.some((ip) => !isIP(ip) || ip === "::" || ip === "0.0.0.0")) throw new Error("Invalid trusted proxy IP");
   if (tls.mode === "manual" && (!tls.certificate || !tls.private_key)) throw new Error("Manual TLS requires tls.certificate and tls.private_key");
-  if (server.origins.some((origin) => { try { return new URL(origin).origin !== origin || !/^https?:\/\//.test(origin); } catch { return true; } })) {
-    throw new Error("server.origins must contain exact HTTP(S) origins");
+  if (server.origins.some((origin) => {
+    if (origin === "capacitor://localhost") return false;
+    try { return new URL(origin).origin !== origin || !/^https?:\/\//.test(origin); }
+    catch { return true; }
+  })) {
+    throw new Error("server.origins must contain exact HTTP(S) origins or capacitor://localhost");
   }
   if (authentication.refresh_seconds <= Math.max(authentication.access_seconds, authentication.refresh_retry_seconds)) {
     throw new Error("Refresh lifetime must exceed access lifetime and retry window");

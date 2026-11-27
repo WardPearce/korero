@@ -7,14 +7,14 @@
   import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
   import SelectField from "#lib/components/fields/SelectField.svelte";
   import Modal from "#lib/components/Modal.svelte";
-  import { call, messageFrom, nativeApp, type ScreenShare, type Snapshot } from "#lib/connection/client";
-  import { chooseScreen, ScreenMedia, supportsWebRtc, type MediaRequest, type VideoSource } from "#lib/media/screen-media";
+  import { messageFrom, type ScreenShare, type Snapshot } from "#lib/connection/client";
+  import { chooseScreen, ScreenMedia, supportsWebRtc, type VideoSource } from "#lib/media/screen-media";
 
-  let { snapshot, visible, controlsTarget, inlineTarget, onDock, source = "screen", initialSetup = false, relay }: {
+  let { snapshot, visible, controlsTarget, inlineTarget, onDock, source = "screen" }: {
     snapshot: Snapshot; visible: boolean; controlsTarget: HTMLElement; source?: VideoSource;
-    inlineTarget?: HTMLElement; onDock?: () => void; initialSetup?: boolean; relay?: MediaRequest;
+    inlineTarget?: HTMLElement; onDock?: () => void;
   } = $props();
-  let setupOpen = $state(untrack(() => initialSetup));
+  let setupOpen = $state(false);
   let setupForm = $state<HTMLFormElement>();
   let choosing = $state(false);
   let publishing = $state(false);
@@ -54,13 +54,10 @@
   const screenResolutions = [{ value: "0", label: "Source" }, ...cameraResolutions, { value: "1440", label: "1440p" }];
   const frameRates = [5, 15, 30, 60].map((fps) => ({ value: String(fps), label: `${fps} FPS` }));
   const audioBitrates = [64, 96, 128, 192, 256, 320].map((bitrate) => ({ value: String(bitrate), label: String(bitrate) }));
-  const useBrowser = !supportsWebRtc() && nativeApp() && typeof navigator !== "undefined" &&
-    /Linux/.test(navigator.platform) && !/Android/.test(navigator.userAgent);
   const canCapture = $derived(typeof navigator !== "undefined" &&
     typeof navigator.mediaDevices?.[camera ? "getUserMedia" : "getDisplayMedia"] === "function");
   const availableShares = $derived(camera ? snapshot.cameras : snapshot.screens);
-  const browserShare = $derived(useBrowser ? availableShares?.find(({ connectionId }) => connectionId === snapshot.connectionId) : undefined);
-  const sharing = $derived(Boolean(outgoingId || browserShare));
+  const sharing = $derived(Boolean(outgoingId));
   const member = $derived(snapshot.members.find(({ connectionId }) => connectionId === snapshot.connectionId));
   const canReceive = $derived(!member?.deafened && !member?.adminDeafened && !member?.afk);
   const canShare = $derived(canReceive && (camera ? snapshot.canUseCamera ?? snapshot.canShareScreen : snapshot.canShareScreen) !== false && !member?.adminMuted);
@@ -97,7 +94,7 @@
   });
 
   function media(failed: (message: string) => void) {
-    return new ScreenMedia(snapshot.connectionId, snapshot.channelId!, failed, source, relay);
+    return new ScreenMedia(snapshot.connectionId, snapshot.channelId!, failed, source);
   }
 
   function releaseCapture() {
@@ -106,10 +103,6 @@
   }
 
   function openSetup() {
-    if (useBrowser) {
-      void openBrowser(true);
-      return;
-    }
     if (!supportsWebRtc()) {
       error = "This browser does not support WebRTC. Open VNX.chat in a browser with WebRTC support.";
       return;
@@ -118,31 +111,9 @@
     setupOpen = true;
   }
 
-  async function openBrowser(share: boolean) {
-    error = "";
-    try {
-      await call("open_browser_media", { connectionId: snapshot.connectionId, channelId: snapshot.channelId, source, share });
-    } catch (failure) {
-      error = messageFrom(failure);
-    }
-  }
-
   async function toggleSharing() {
-    if (outgoingId) {
-      await stopSharing();
-    } else if (browserShare) {
-      error = "";
-      try {
-        await call("screen_request", {
-          connectionId: snapshot.connectionId, channelId: snapshot.channelId,
-          kind: "media.producer.close", payload: { producerId: browserShare.producerId },
-        });
-      } catch (failure) {
-        error = messageFrom(failure);
-      }
-    } else {
-      openSetup();
-    }
+    if (outgoingId) await stopSharing();
+    else openSetup();
   }
 
   async function selectSource() {
@@ -221,10 +192,6 @@
 
   async function watch(share: ScreenShare) {
     if (!canReceive || stoppingWatch || watchedId === share.producerId) return;
-    if (useBrowser) {
-      await openBrowser(false);
-      return;
-    }
     await stopWatching();
     if (destroyed || incoming) return;
     error = "";
@@ -403,10 +370,10 @@
 {/if}
 
 <Portal to={controlsTarget}>
-  {#if sharing || (visible && (canCapture || useBrowser))}
+  {#if sharing || (visible && canCapture)}
     <Button variant={sharing ? "secondary" : "outline"} aria-pressed={sharing}
       title={sharing ? (camera ? "Turn off camera" : "Stop sharing") :
-        useBrowser ? (camera ? "Open camera in browser" : "Open screenshare in browser") : (camera ? "Turn on camera" : "Share screen")}
+        (camera ? "Turn on camera" : "Share screen")}
       onclick={toggleSharing} disabled={!sharing && (!canShare || stoppingShare)}>
       {#if sharing}<StopIcon size={15} aria-hidden="true" />{:else}<CaptureIcon size={15} aria-hidden="true" />{/if}
       {camera ? "Camera" : "Screenshare"}

@@ -94,7 +94,7 @@
       }
       conversation = candidate;
       mode = pinned ? "verified" : "verify";
-      if (pinned) await loadHistory();
+      await loadHistory();
     } catch (cause) {
       error = messageFrom(cause);
       mode = "error";
@@ -151,7 +151,7 @@
 
   async function send(event: SubmitEvent) {
     event.preventDefault();
-    if (mode !== "verified" || !conversation || !canSend || pending || !draft.trim()) return;
+    if ((mode !== "verified" && mode !== "verify") || !conversation || !canSend || pending || !draft.trim()) return;
     if (new TextEncoder().encode(draft).length > policy.maxBytes) {
       error = `Messages can use up to ${policy.maxBytes} bytes on this server.`;
       return;
@@ -183,9 +183,17 @@
   <LockKeyhole size={18} aria-label="End-to-end encryption" />
 </header>
 
-{#if mode === "verified" && conversation}
+{#if (mode === "verified" || mode === "verify") && conversation}
   <section class="workspace chat-workspace" aria-label="Direct conversation">
     <div class="chat-log" {@attach attachLog} role="log" aria-label="Direct messages">
+      {#if mode === "verify"}
+        <div class="px-3 pt-3 text-sm text-muted-foreground">
+          <p>Messages are end-to-end encrypted. You can compare safety codes to confirm this contact’s identity.</p>
+          <Button variant="outline" onclick={() => { error = ""; mode = "verify"; }}>
+            Compare safety codes
+          </Button>
+        </div>
+      {/if}
       {#if next || historyError}
         <div class="px-3 pt-3">
           {#if historyError}<p class="form-error" role="alert">{historyError}</p>{/if}
@@ -233,7 +241,7 @@
       <Button class="self-start" variant="outline" onclick={open}>Retry</Button>
     {:else}
       <form class="dialog-form max-w-xl" onsubmit={verifyContact}>
-        <h3 class="font-semibold">Verify this conversation</h3>
+        <h3 class="font-semibold">Compare safety codes</h3>
         <p class="text-sm">Ask {peer?.displayName} to open this conversation and share their safety code with you in person or through a trusted channel.</p>
         <p class="rounded-lg border p-3 font-mono select-all">{safetyCode}</p>
         <label>Safety code from your contact <Input required bind:value={confirmation} spellcheck={false} autocomplete="off" /></label>

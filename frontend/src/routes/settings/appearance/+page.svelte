@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { downloadFile } from "#lib/download-file";
   import { Check, Download, Hash, Palette, Pencil, Plus, Send, Upload } from "@lucide/svelte";
   import { onDestroy, tick } from "svelte";
   import { Button } from "#lib/components/ui/button/index.js";
@@ -142,13 +143,15 @@
     }
   }
 
-  function exportTheme() {
+  async function exportTheme() {
     const theme = parseTheme(active);
     if (!theme) return;
-    const link = document.createElement("a");
-    link.href = "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ version: 1, theme }, null, 2));
-    link.download = (theme.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "theme") + ".json";
-    link.click();
+    const name = theme.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "theme";
+    try {
+      await downloadFile(name + ".json", new Blob([JSON.stringify({ version: 1, theme }, null, 2)], { type: "application/json" }));
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : "Could not export the theme.";
+    }
   }
 </script>
 

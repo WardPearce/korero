@@ -186,10 +186,10 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
       auth.revoke(bearer(request).accountId, params.id);
       return {};
     }, { params: t.Object({ id }) })
-    .post("/api/v1/admin/bootstrap", ({ request, body, set }) => {
+    .post("/api/v1/admin/bootstrap", async ({ request, body, set }) => {
       limit(request);
       const identity = auth.proveEnrollment(info.serverId, "bootstrap", body.deviceName, body.identity);
-      const result = auth.bootstrap(body.token, body.displayName.trim(), body.deviceName.trim(), identity);
+      const result = await auth.bootstrap(body.token, body.displayName.trim(), body.deviceName.trim(), identity, body.password);
       set.status = 201;
       return result;
     }, { body: httpBodies.bootstrap })

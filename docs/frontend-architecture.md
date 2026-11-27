@@ -1,48 +1,26 @@
 # VNX.chat client
 
-The client uses SvelteKit, Svelte 5, Tailwind CSS, and Bits UI. The static adapter
-writes the SPA entry point and assets to `frontend/dist` for Tauri 3 alpha. The root
-layout owns the server sidebar and listens for native session updates across
-the workspace and account settings routes. VNX.chat connects to a separately
-deployed Bun/Elysia and mediasoup server using the [v1 protocol](protocol.md).
+The SvelteKit client builds to `frontend/dist`. Electron packages those assets for
+Linux x86_64. Capacitor copies the same build into the Android and iOS projects.
+The client connects to a separately deployed Bun/Elysia and mediasoup server
+using the [v1 protocol](protocol.md).
 
-Eden Treaty type-checks discovery and account requests
-against the Elysia app. A scoped Tauri command sends those HTTP requests through
-native Rust. The native identity command signs server challenges for enrollment
-and sign-in. The Rust session coordinates refresh-token rotation, authenticated
-WebSocket requests, heartbeat, reconnect, and channel state. It sends client
-state and errors to Svelte over Tauri IPC.
+## Electron desktop
 
-A dedicated worker calls the C++ bridge to libmediasoupclient and libwebrtc.
-Rust continues to handle signaling while C++ waits for transport negotiation.
-Each joined room can have a send and a receive transport. The client resumes
-server consumers after creating the corresponding native consumers. It closes
-native audio and server transports on leave. Mute and deafen close the affected
-directions and recreate resources when voice is enabled again.
+Electron serves the local app from a secure custom origin with a sandboxed
+renderer. The preload exposes the client operations and state events used by
+Svelte. A separate Rust process handles the verified HTTPS and WebSocket
+connections, signs identity challenges, and keeps the session credentials in
+memory. The same process uses libmediasoupclient and libwebrtc for voice.
+Electron supplies the camera and the screen or window picker.
 
-The native client uses the platform certificate store for HTTPS and WSS. For a
-self-signed server, export the public certificate with the server's
-`identity export` command and select it in the connect dialog. Obtain and
-verify the certificate through a trusted channel. Refresh credentials stay in
-native memory. The saved identity signs a fresh challenge when the app reconnects
-after the desktop process exits.
+Install Bun 1.4.5, Node.js 22.12 or newer, Rust 1.95 or newer, Clang with its resource
+headers, CMake, Ninja, Git, curl, pkg-config, and the X11 development headers.
+First-time desktop builds prepare the pinned WebRTC SDK in
+`frontend/.native/m140-linux-x86_64`. Set `CXX` to select another Clang or
+`KORERO_MEDIA_SDK` to use a prepared SDK.
 
-## Linux x86_64
-
-Install Bun 1.4.5, Rust 1.95 or newer, Clang with its resource headers, CMake,
-Ninja, Git, curl, and pkg-config. On Debian or Ubuntu the desktop development
-dependencies include `libgtk-4-dev` (GTK 4.14 or newer), `libx11-dev`,
-`libxdo-dev`, `libssl-dev`, and `librsvg2-dev`.
-
-On Fedora, `gtk4-devel` provides the GTK headers, linker files, and
-`gtk4.pc` that Cargo needs.
-
-```sh
-sudo dnf install gtk4-devel
-pkg-config --modversion gtk4
-```
-
-From the repository root, install and start the server.
+From the repository root, start the server in one terminal.
 
 ```sh
 cd backend
@@ -51,79 +29,75 @@ bun run prepare:worker
 bun run start
 ```
 
-From the repository root in a second terminal, prepare and launch the desktop
-client.
+Launch the desktop client in a second terminal.
 
 ```sh
 cd frontend
 bun install --frozen-lockfile
-bun run tauri dev
+bun run electron:dev
 ```
 
-The first Tauri run prepares the media SDK in `frontend/.native/m140-linux-x86_64`.
-You can prepare it separately with `bun run prepare:media`. It verifies a pinned
-WebRTC M140 archive from Shiguredo, builds libmediasoupclient 3.5.0 and
-libsdptransform from pinned revisions, and uses Chromium's matching libc++
-configuration. Cargo finds the prepared SDK in that directory by default.
-Set `CXX` for a different Clang installation or `KORERO_MEDIA_SDK` to select a
-different SDK directory.
+`bun run electron:pack` builds an AppImage and a Debian package in
+`frontend/desktop-dist`. On Fedora the bundled Debian packaging tool needs
+`libxcrypt-compat`. System-wide talk shortcuts use X11. The focused-window
+shortcuts also work in Wayland sessions.
 
-The first desktop build also downloads the pinned Chromium Embedded Framework
-(CEF) distribution to `~/.cache/tauri-cef`. Run `bun run tauri build` to create
-the Debian package and AppImage with Chromium bundled. This CEF release
-uses X11 and requires XWayland in a Wayland session. See the
-[Tauri CEF guide](https://v3.tauri.app/develop/cef/) for sandbox behavior and
-platform-specific prerequisites.
+When connecting to a server with a private certificate, verify the displayed
+certificate SHA-256 fingerprint with the operator before approving it. See
+[server identity](server-identity.md) for details.
 
-The first Linux packaging run builds and caches a Tauri CLI revision that
-includes a fix for the CEF files removed from Chromium. Use
-`bun run tauri build --no-bundle` to build only the executable.
+## Capacitor mobile
 
-Before upgrading an existing desktop installation, export an encrypted identity
-backup from **Settings → Identity**. Import it after upgrading to keep the same
-server accounts. Chromium starts with a new webview profile, so saved servers,
-certificate trust decisions, passwords, and preferences have to be set up again.
-On Linux the profile lives in `~/.local/share/app.korero.voice/cef` unless
-`XDG_DATA_HOME` is set.
+The Android and iOS apps use the system WebView for chat, voice, and camera
+sharing. Voice uses the microphone while the app is in the foreground.
+Audio device selection and processing controls, whisper transmission, and
+system-wide shortcuts are desktop features. Screen capture depends on the
+system WebView.
+
+The mobile WebView requires an HTTPS certificate trusted by the device.
+Configure a trusted certificate for your server or reverse proxy and explicitly
+allow the app origins in the server configuration.
+
+```toml
+[server]
+origins = ["https://localhost", "capacitor://localhost"]
+```
+
+Append these values to any origins already configured. The first is used by
+Android and the second by iOS.
+
+From `frontend/`, run the following after changing the client.
+
+```sh
+bun install --frozen-lockfile
+bun run mobile:sync
+```
+
+- Android uses JDK 21 and Android SDK 36. Run `bun run mobile:android` to open
+  Android Studio, or run `cd android && ./gradlew assembleDebug` to build the
+  APK at `android/app/build/outputs/apk/debug/app-debug.apk`. [Capacitor Android](https://capacitorjs.com/docs/android)
+- iOS uses macOS and Xcode 26 or newer. Run `bun run mobile:ios` to open the
+  Xcode project, then select a team and a device or simulator. [Capacitor iOS](https://capacitorjs.com/docs/ios)
+
+## Move an existing identity
+
+Before switching clients, export an encrypted backup from **Settings → Identity**
+in the previous installation. Import that backup in Electron or Capacitor to use
+the same server accounts. Add saved servers and configure local preferences in
+the new installation.
 
 ## Verify
 
-Use Chromium from Playwright to exercise the server. The native probe uses a
-synthetic input and measures decoded PCM on the Rust client and Chromium peer.
+Run `bun run check` in `frontend/` and run `bun run check` and `bun run test`
+in `backend/`. The existing native audio probe and browser audio checks exercise
+signaling and media with a synthetic input.
 
 ```sh
 cd frontend
-bun run check
-bun run build
-bun run prepare:media
-cargo build --manifest-path native/Cargo.toml --features media --bin voice-probe
+bun run prepare:media --if-needed
+cargo build --locked --manifest-path native/Cargo.toml --features media --bin voice-probe
 cd ../backend
-bun run check
-bun run test
 bunx --bun playwright install chromium
 bun run test:e2e
 bun run test:e2e:native
 ```
-
-The native test runs two rounds with distinct WebSocket connections. In each
-round both peers decode audio, then the native client leaves and its producer
-closes. This build passed the native probe, the existing Chromium UDP test,
-the server's 12 unit and integration tests, and
-`bun run tauri build --debug --no-bundle` without an SDK environment override.
-The desktop client uses the system audio device. The probe validates synthetic
-capture and decoded playout. Physical microphone behavior needs a manual check.
-
-## Android source
-
-Android and iOS continue to use Tauri's system webview runtime. The Kotlin
-Tauri plugin requests microphone permission and starts a microphone
-foreground service while the activity is visible. The service holds
-communication audio focus and the native session owns the socket outside the
-WebView. Leaving voice or disconnecting stops the service.
-
-The Android APK was outside the first build. To prepare an Android build, use the
-same pinned M140 WebRTC source on arm64-v8a, build libmediasoupclient for the NDK
-target, and supply the corresponding Java SDK classes with
-`KORERO_ANDROID_WEBRTC_CLASSES`. The Linux preparation script targets Linux only.
-The Android ABI, microphone, routing, and activity recreation still need device
-verification.

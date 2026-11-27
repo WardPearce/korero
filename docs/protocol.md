@@ -28,7 +28,7 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | GET `/api/v1/server/capabilities` | Optional | — | `protocolVersions, websocketPath, audio, targetAudioBitrate, heartbeatSeconds, maxWebSocketBytes, udp, tcp, textPersistence, iceServers?` |
 | POST `/api/v1/auth/identity/challenge` | Public | `operation, publicKey, deviceName, origin` | Single-use challenge |
 | POST `/api/v1/auth/identity/login` | Signed login challenge and server password where required | `id, signature, password?` | Account and new session |
-| POST `/api/v1/admin/bootstrap` | Setup token and signed bootstrap challenge | `token, displayName, deviceName, identity` | Account and session |
+| POST `/api/v1/admin/bootstrap` | Setup token, signed bootstrap challenge, and server password when configured | `token, displayName, deviceName, identity, password?` | Account and session |
 | POST `/api/v1/auth/register` | Signed registration challenge, registration policy, and server password when configured for registration without an invitation | `displayName, deviceName, identity, invitation?, password?` | Account and session |
 | POST `/api/v1/auth/refresh` | Refresh token in body | `refreshToken` | Rotated session credentials |
 | POST `/api/v1/auth/logout` | Access token | — | `{}` |

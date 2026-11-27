@@ -33,7 +33,7 @@ fn main() {
             eprintln!("Native WebRTC SDK file is missing: {}", path.display());
             if target == "linux" && arch == "x86_64" {
                 eprintln!(
-                    "Run `bun run prepare:media` from frontend or start with `bun run tauri dev`."
+                    "Run `bun run prepare:media` from frontend."
                 );
             } else {
                 eprintln!("Prepare the matching target SDK and select it with KORERO_MEDIA_SDK.");
@@ -54,9 +54,6 @@ fn main() {
                 build.compiler("clang++");
             }
         }
-    }
-    if target == "android" {
-        build.define("WEBRTC_ANDROID", None);
     }
     build
         .file("cpp/voice.cpp")
@@ -95,10 +92,5 @@ fn main() {
     println!("cargo:rustc-link-lib=m");
     if target == "linux" {
         println!("cargo:rustc-link-lib=X11");
-    } else if target == "android" {
-        println!("cargo:rustc-link-lib=android");
-        println!("cargo:rustc-link-lib=log");
-        println!("cargo:rustc-link-lib=OpenSLES");
-        println!("cargo:rustc-link-lib=aaudio");
     }
 }

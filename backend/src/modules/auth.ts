@@ -144,9 +144,12 @@ export class Auth {
     }, { behavior: "immediate" });
   }
 
-  bootstrap(token: string, name: string, device: string, identity: IdentityChallenge) {
+  async bootstrap(token: string, name: string, device: string, identity: IdentityChallenge, password?: string) {
+    if (hasOwner(this.db)) fail("NOT_FOUND");
+    const hash = await this.verifyPassword(password);
     const { result, created } = this.db.transaction((tx) => {
       if (hasOwner(tx)) fail("NOT_FOUND");
+      if (this.passwordHash() !== hash) fail("CONFLICT");
       const row = tx.select().from(setup).where(eq(setup.id, 1)).get();
       if (!row || row.expiresAt <= Date.now() || !equalDigest(row.digest, this.credentials.digest("setup", token))) fail("AUTH_FAILED");
       tx.delete(setup).where(eq(setup.id, row.id)).run();

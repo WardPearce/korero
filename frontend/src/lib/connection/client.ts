@@ -1,8 +1,9 @@
 import { treaty } from "@elysia/eden";
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import type { App } from "../../../../backend/src/app";
 import { browserSession } from "./browser-session";
+import { call, desktopApp, watchDesktop } from "./platform";
+
+export { call, desktopApp } from "./platform";
 
 export interface Account {
   id: string;
@@ -154,31 +155,20 @@ export const offline: VoiceState = {
   error: null,
 };
 
-export function nativeApp() {
-  return isTauri();
-}
-
-export function call<T = void>(command: string, args?: Record<string, unknown>) {
-  if (!nativeApp()) {
-    return Promise.reject(new Error("Open VNX.chat in the desktop app to connect to a server."));
-  }
-  return invoke<T>(command, args);
-}
-
 export function directRequest<T>(connectionId: string, kind: DirectOperation, payload: unknown = {}) {
-  return nativeApp()
+  return desktopApp()
     ? call<T>("direct_request", { connectionId, kind, payload })
     : browserSession.directRequest<T>(connectionId, kind, payload);
 }
 
 export function watchVoice(onState: (state: VoiceState) => void) {
-  return listen<VoiceState>("korero:state", ({ payload }) => onState(payload));
+  return watchDesktop<VoiceState>("korero:state", onState);
 }
 
 export function apiFor(origin: string) {
   const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
-    if (!nativeApp()) return browserSession.fetch(request);
+    if (!desktopApp()) return browserSession.fetch(request);
     const url = new URL(request.url);
     const body = request.body ? (await request.json() as unknown) : null;
     const result = await call<RelayResponse>("api_fetch", {

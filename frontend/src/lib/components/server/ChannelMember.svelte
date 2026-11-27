@@ -7,13 +7,15 @@
   import Modal from "#lib/components/Modal.svelte";
   import * as ContextMenu from "#lib/components/ui/context-menu/index.js";
   import { Root as Slider } from "#lib/components/ui/slider/index.js";
-  import { nativeApp, type Channel, type Member, type MemberRequest } from "#lib/connection/client";
+  import { apiFor, messageFrom, requestError, type Channel, type Member, type MemberRequest } from "#lib/connection/client";
   import { maxMemberVolume } from "#lib/preferences";
   import { getWorkspace } from "#lib/workspace";
 
   let { channel, member }: { channel: Channel; member: Member } = $props();
   const workspace = getWorkspace();
-  const voiceAvailable = nativeApp();
+  import { voiceApp } from "#lib/connection/platform";
+
+  const voiceAvailable = voiceApp();
   const snapshot = $derived(workspace.view.snapshot);
   const ownAccount = $derived(member.accountId === snapshot?.account.id);
   const canOpenDirectMessage = $derived(!ownAccount && Boolean(snapshot?.directMessages && workspace.serverId));
@@ -29,6 +31,10 @@
   const canAdjustVolume = $derived(voiceAvailable && !ownAccount && snapshot?.lowerRoles !== undefined);
   let dialog = $state<"kick" | "ban">("kick");
   let dialogOpen = $state(false);
+  let nameDialogOpen = $state(false);
+  let nameDraft = $state("");
+  let nameError = $state("");
+  let savingName = $state(false);
   const volumeLabelId = $props.id();
   let volumePreview = $state<number>();
   let volume = $derived(volumePreview ?? workspace.memberVolume(member.accountId));
@@ -43,6 +49,22 @@
 
   function act(request: MemberRequest) {
     void workspace.memberAction(request);
+  }
+
+  async function saveName(event: SubmitEvent) {
+    event.preventDefault();
+    if (savingName || !snapshot) return;
+    savingName = true;
+    nameError = "";
+    try {
+      const response = await apiFor(workspace.serverOrigin).account.patch({ displayName: nameDraft.trim() });
+      if (response.error) throw requestError(response.error);
+      nameDialogOpen = false;
+    } catch (error) {
+      nameError = messageFrom(error);
+    } finally {
+      savingName = false;
+    }
   }
 
   function previewVolume(level: number | undefined) {
@@ -83,6 +105,9 @@
       {/if}
       {#if canOpenDirectMessage}
         <ContextMenu.Item onSelect={openDirectMessage}><MessageCircle /> Direct message</ContextMenu.Item>
+      {/if}
+      {#if ownAccount}
+        <ContextMenu.Item onSelect={() => { nameDraft = member.displayName; nameError = ""; nameDialogOpen = true; }}>Change display name…</ContextMenu.Item>
       {/if}
       {#if canAdjustVolume}
         <ContextMenu.Item closeOnSelect={false} aria-labelledby={volumeLabelId} class="min-w-44 flex-col items-stretch gap-0"
@@ -158,11 +183,23 @@
         {#if member.adminMuted || member.muted}
           <MicOff size={13} class="member-state" aria-label={member.adminMuted ? "Server muted" : "Muted"} />
         {/if}
-        {#if speaking}<Volume2 size={13} class="speaking-icon" aria-label="Speaking" />{/if}
       </button>
     {/snippet}
   </ContextActions>
 </li>
+
+{#if nameDialogOpen}
+  <Modal bind:open={nameDialogOpen} title="Change display name" description="Choose the name other members see on this server.">
+    <form class="dialog-form" onsubmit={saveName}>
+      <label>Display name <input class="input" required maxlength="80" bind:value={nameDraft} /></label>
+      {#if nameError}<p class="form-error" role="alert">{nameError}</p>{/if}
+      <div class="dialog-actions">
+        <Button variant="outline" type="button" onclick={() => { nameDialogOpen = false; }}>Cancel</Button>
+        <Button type="submit" disabled={savingName}>{savingName ? "Saving…" : "Save name"}</Button>
+      </div>
+    </form>
+  </Modal>
+{/if}
 
 {#if dialogOpen}
   <Modal bind:open={dialogOpen}

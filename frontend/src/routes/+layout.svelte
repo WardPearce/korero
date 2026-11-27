@@ -21,10 +21,10 @@
   import ConnectionInfo from "#lib/components/server/ConnectionInfo.svelte";
   import ServerAdministration from "#lib/components/server/ServerAdministration.svelte";
   import {
-    apiFor, call, messageFrom, nativeApp, offline, requestError, shortHost, watchVoice,
+    apiFor, call, messageFrom, desktopApp, offline, requestError, shortHost, watchVoice,
     type MemberRequest, type ServerInfo, type VoiceState,
   } from "#lib/connection/client";
-  import { authenticateIdentity, identityError, loadIdentity } from "#lib/identity/identity";
+  import { authenticateIdentity, getIdentity, identityError } from "#lib/identity/identity";
   import { browserServerOrigin, browserSession } from "#lib/connection/browser-session";
   import { applyAppearance, readAppearance } from "#lib/theme";
   import { readChatDisplay, saveChatDisplay, setChatDisplay, type ChatDisplay } from "#lib/chat/chat-display";
@@ -108,7 +108,7 @@
   let bannerImageUrl = $derived(view.snapshot?.bannerImageUrl === undefined ? serverInfo?.bannerImageUrl ?? null : view.snapshot.bannerImageUrl);
   let claimOwnership = $derived(Boolean(discovery?.info.setupRequired && setupToken.trim()));
   let needsPassword = $derived(Boolean(discovery?.info.passwordRequired && !savedServerPassword &&
-    !(discovery.info.invitationPasswordBypass && serverCode.trim())));
+    (claimOwnership || !discovery.info.invitationPasswordBypass || !serverCode.trim())));
   let status = $derived(
     view.phase === "online" ? "Connected" : view.phase === "connecting" ? "Connecting" :
       view.phase === "reconnecting" ? "Reconnecting" : view.phase === "error" ? "Connection lost" : "Offline",
@@ -164,7 +164,7 @@
         if (typeof rail?.value === "number") savedRailWidth = Math.max(180, Math.min(340, rail.value));
         if (typeof channel?.value === "number") savedChannelWidth = Math.max(222, Math.min(500, channel.value));
       }).catch((error) => { actionError = messageFrom(error); });
-    void Promise.all([loadIdentity(), getUsername()]).then(([identity, name]) => {
+    void Promise.all([getIdentity(), getUsername()]).then(([identity, name]) => {
       hasIdentity = Boolean(identity);
       username = name;
       identityReady = hasIdentity && Boolean(username);
@@ -173,7 +173,10 @@
       identityLoadError = messageFrom(error);
       identitySetupOpen = true;
     });
-    if (!nativeApp()) return browserSession.watch(applyView);
+    if (!desktopApp()) {
+      const stop = browserSession.watch(applyView);
+      return () => { stop(); audio.dispose(); };
+    }
     let mounted = true;
     let receivedEvent = false;
     let unlisten: (() => void) | undefined;
@@ -301,7 +304,6 @@
       savedServerPassword = undefined;
       void forgetPassword(target.origin, target.info.serverId, "", rejectedPassword).catch(() => {});
     }
-    serverCode = "";
     accessPrompt = true;
     connectOpen = true;
   }
@@ -311,6 +313,7 @@
     const login = await authenticateIdentity(target.origin, target.info.serverId, deviceName, { operation: "login", password });
     if (login.status === 200) await finishConnection(target, password);
     else if (login.status === 401 && target.info.passwordRequired) {
+      serverCode = "";
       promptServerPassword(target, password);
       throw identityError(login);
     }
@@ -348,7 +351,7 @@
         throw new Error("Enter the full invitation link, including the code after #.");
       }
       serverCode = invitation ?? "";
-      if (!nativeApp()) {
+      if (!desktopApp()) {
         const origin = browserServerOrigin(address);
         await browserSession.select(origin);
         await discoverServerInfo(origin);
@@ -403,15 +406,15 @@
 
   async function enroll(target: Target) {
     const code = serverCode.trim();
-    const password = target.info.passwordRequired && (!code || !target.info.invitationPasswordBypass)
-      ? serverPassword || savedServerPassword : undefined;
     const bootstrap = claimOwnership;
+    const password = target.info.passwordRequired && (bootstrap || !code || !target.info.invitationPasswordBypass)
+      ? serverPassword || savedServerPassword : undefined;
     if (!bootstrap && target.info.registration === "disabled") {
       throw new Error("This server has closed registration for new identities.");
     }
     const result = await authenticateIdentity(target.origin, target.info.serverId, deviceName,
       bootstrap
-        ? { operation: "bootstrap", displayName: username, token: setupToken.trim() }
+        ? { operation: "bootstrap", displayName: username, token: setupToken.trim(), password }
         : { operation: "register", displayName: username, invitation: code || undefined, password });
     if (bootstrap && result.status === 404) {
       const response = await apiFor(target.origin).server.info.get();
@@ -423,14 +426,19 @@
         return;
       }
     }
-    if (result.status === 409) {
+    if (!bootstrap && result.status === 409) {
       if (code && target.info.passwordRequired && !serverPassword && !savedServerPassword) {
+        serverCode = "";
         promptServerPassword(target);
         connectError = "This identity already has an account. Enter the server password to sign in.";
         return;
       }
       const login = await loginIdentity(target);
       if (login.status === 200) return;
+    }
+    if (bootstrap && result.status === 401 && target.info.passwordRequired) {
+      promptServerPassword(target, password);
+      throw new Error("Check the server setup token and server password, then try again.");
     }
     if (!bootstrap && result.status === 401) {
       if (code && !needsPassword) throw new Error("This invitation is invalid, expired, or out of uses.");
@@ -446,7 +454,7 @@
       discovery = target;
       setupToken = "";
     }
-    await finishConnection(target, bootstrap ? undefined : password);
+    await finishConnection(target, password);
   }
 
   async function finishConnection(target: Target, password?: string) {
@@ -454,11 +462,9 @@
     serverOrigin = target.origin;
     try {
       await audio.load();
-      if (nativeApp()) {
-        memberVolumes = await getMemberVolumes(target.info.serverId).catch(() => ({}));
-        await call("start_session", { memberVolumes });
-      }
-      else await browserSession.start();
+      memberVolumes = await getMemberVolumes(target.info.serverId).catch(() => ({}));
+      if (desktopApp()) await call("start_session", { memberVolumes });
+      else await browserSession.start(memberVolumes);
     } catch (error) {
       actionError = messageFrom(error);
     }
@@ -500,12 +506,13 @@
 
   function run(action: string, command: string, args?: Record<string, unknown>) {
     return runAction(action, () => {
-      if (nativeApp()) return call(command, args);
+      if (desktopApp()) return call(command, args);
       if (command === "disconnect") return browserSession.disconnect();
       if (command === "save_channel") return browserSession.saveChannel(args?.payload as Record<string, unknown>);
       if (command === "delete_channel") return browserSession.deleteChannel(args?.channelId as string);
       if (command === "join_channel") return browserSession.joinChannel(args?.channelId as string, (args?.password as string | null) ?? undefined);
       if (command === "leave_channel") return browserSession.leaveChannel();
+      if (command === "set_presence") return browserSession.setPresence(args);
       if (command === "send_message") return browserSession.sendMessage(args?.channelId as string, args?.text as string, args?.html as string | undefined);
       throw new Error("Open VNX.chat in the desktop app to use voice.");
     });
@@ -519,7 +526,7 @@
   }
 
   function memberAction(request: MemberRequest) {
-    return runAction(request.kind, () => nativeApp() ? call("member_action", request) : browserSession.memberAction(request));
+    return runAction(request.kind, () => desktopApp() ? call("member_action", request) : browserSession.memberAction(request));
   }
 
   function setMemberVolume(accountId: string, level: number) {
@@ -530,7 +537,8 @@
       if (!isCurrentServer() || view.phase !== "online" || pending === "disconnect") return false;
       actionError = "";
       try {
-        await call("set_member_volume", { accountId, level });
+        if (desktopApp()) await call("set_member_volume", { accountId, level });
+        else browserSession.setMemberVolume(accountId, level);
         if (!isCurrentServer()) return false;
         const next = { ...memberVolumes };
         if (level === defaultMemberVolume) delete next[accountId];
@@ -641,8 +649,7 @@
             <ContextActions actions={serverActions({ origin: serverOrigin, name: serverTitle })} disabled={connectBusy || Boolean(pending)}>
               {#snippet trigger(props)}
                 <button {...props} type="button" class="rail-server" onclick={() => openWorkspace("channels")}>
-                  <span class="shrinkable"><strong class="truncate">{serverTitle}</strong><small class="truncate">{shortHost(serverOrigin)}</small></span>
-                  {#if serverInfo?.passwordRequired}{@render serverLock()}{/if}
+                  <span class="shrinkable"><strong class="truncate">{serverTitle}</strong></span>
                   <span class="connection-dot" data-online={online}></span>
                 </button>
               {/snippet}
@@ -660,7 +667,6 @@
             <span class="shrinkable"><strong class="truncate">{entry.name}</strong>
               {#if connectBusy && bookmarkOrigin === entry.origin && !connectOpen}<small role="status">Connecting…</small>{/if}
             </span>
-            {#if entry.passwordRequired}{@render serverLock()}{/if}
           </button>
             {/snippet}
           </ContextActions>
@@ -721,7 +727,7 @@
         </label>
         <p class="field-hint">Enter the token to claim ownership, or leave it blank to connect as a member.</p>
       {/if}
-      {#if needsPassword && !claimOwnership}
+      {#if needsPassword}
         <label>Server password<Input type="password" autocomplete="current-password" required maxlength={128} bind:value={serverPassword} /></label>
       {/if}
       {#if invitationRequired && !claimOwnership}

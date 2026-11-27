@@ -1,3 +1,4 @@
+import { ed25519 } from "@noble/curves/ed25519.js";
 import type { DeviceIdentity } from "../preferences";
 
 const encoder = new TextEncoder();
@@ -24,23 +25,19 @@ export function identitySeed(privateKey: string) {
 }
 
 export async function browserIdentity(): Promise<DeviceIdentity> {
-  const { privateKey, publicKey } = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
-  const { d, x } = await crypto.subtle.exportKey("jwk", privateKey);
-  if (!d || !x) throw new Error("Could not create an identity.");
-  // Use the version 2 PKCS#8 envelope emitted by the desktop client.
-  const pkcs8 = Uint8Array.of(...pkcs8Header, ...decodeBase64Url(d), 0x81, 0x21, 0, ...new Uint8Array(await crypto.subtle.exportKey("raw", publicKey)));
-  return { privateKey: encodeBase64Url(pkcs8), publicKey: x };
+  const seed = crypto.getRandomValues(new Uint8Array(32));
+  const publicKey = ed25519.getPublicKey(seed);
+  // Use the same PKCS#8 envelope as the native client.
+  const pkcs8 = Uint8Array.of(...pkcs8Header, ...seed, 0x81, 0x21, 0, ...publicKey);
+  return { privateKey: encodeBase64Url(pkcs8), publicKey: encodeBase64Url(publicKey) };
 }
 
-async function unpack(pkcs8: Uint8Array) {
+function unpack(pkcs8: Uint8Array) {
   checkEnvelope(pkcs8);
-  const v1 = pkcs8.slice(0, 48);
-  v1[1] = 46;
-  v1[4] = 0;
-  const key = await crypto.subtle.importKey("pkcs8", v1, "Ed25519", true, ["sign"]);
-  const { x } = await crypto.subtle.exportKey("jwk", key);
-  if (!x || x !== encodeBase64Url(pkcs8.slice(51))) throw new Error("Invalid VNX.chat identity key.");
-  return { key, publicKey: x };
+  const seed = pkcs8.slice(16, 48);
+  const publicKey = encodeBase64Url(ed25519.getPublicKey(seed));
+  if (publicKey !== encodeBase64Url(pkcs8.slice(51))) throw new Error("Invalid VNX.chat identity key.");
+  return { seed, publicKey };
 }
 
 async function wrappingKey(passphrase: string, salt: Uint8Array<ArrayBuffer>) {
@@ -59,7 +56,7 @@ export async function importBrowserIdentity(blob: string, passphrase: string): P
   const key = await wrappingKey(passphrase, bytes.slice(offset, offset + 16));
   const pkcs8 = await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.slice(offset + 16, offset + 28), additionalData: header },
     key, bytes.slice(offset + 28)).catch(() => { throw new Error("Incorrect passphrase or damaged identity export."); });
-  const { publicKey } = await unpack(new Uint8Array(pkcs8));
+  const { publicKey } = unpack(new Uint8Array(pkcs8));
   return { privateKey: encodeBase64Url(pkcs8), publicKey };
 }
 
@@ -72,6 +69,6 @@ export async function exportBrowserIdentity(privateKey: string, passphrase: stri
 }
 
 export async function signIdentity(identity: DeviceIdentity, transcript: unknown[]) {
-  const { key } = await unpack(decodeBase64Url(identity.privateKey));
-  return encodeBase64Url(await crypto.subtle.sign("Ed25519", key, encoder.encode(JSON.stringify(transcript))));
+  const { seed } = unpack(decodeBase64Url(identity.privateKey));
+  return encodeBase64Url(ed25519.sign(encoder.encode(JSON.stringify(transcript)), seed));
 }

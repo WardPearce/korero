@@ -1,11 +1,14 @@
-import { offline, requestError, messageFrom, type DirectMessage, type DirectOperation, type MemberRequest, type Message, type RelayResponse, type ScreenShare, type Snapshot, type VoiceState } from "./client";
+import { offline, requestError, messageFrom, type DirectMessage, type DirectOperation, type Member, type MemberRequest, type Message, type RelayResponse, type ScreenShare, type Snapshot, type VoiceState } from "./client";
+import { WebVoice } from "../media/web-voice";
+import { mobileApp, voiceApp } from "./platform";
 
 type Credentials = { accessToken: string; refreshToken: string; accessExpiresAt: number };
 type Reply = { type: string; id: number; success: boolean; payload: unknown; error?: unknown };
 
 export function browserServerOrigin(address: string) {
   const value = address.trim();
-  const url = URL.parse(value.includes("://") ? value : `https://${value}`);
+  let url: URL | undefined;
+  try { url = new URL(value.includes("://") ? value : `https://${value}`); } catch {}
   if (!url || url.protocol !== "https:" || !url.host || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
     throw new Error("Enter a server IP or host, with an optional port.");
   }
@@ -19,6 +22,9 @@ class BrowserSession {
   private socket?: WebSocket;
   private heartbeat?: ReturnType<typeof setInterval>;
   private nextId = 0;
+  private voice?: WebVoice;
+  private audio?: AudioContext;
+  private volumes: Record<string, number> = {};
   private pending = new Map<number, (reply: Reply | null) => void>();
   private update: (view: VoiceState) => void = () => {};
   private snapshot: Snapshot | null = null;
@@ -29,7 +35,17 @@ class BrowserSession {
 
   watch(update: (view: VoiceState) => void) {
     this.update = update;
-    return () => { this.update = () => {}; };
+    const visibility = () => {
+      if (!this.snapshot || !voiceApp()) return;
+      if (!document.hidden) void this.audio?.resume().catch(() => {});
+      this.updateVoice(this.snapshot);
+      this.show();
+    };
+    if (mobileApp()) document.addEventListener("visibilitychange", visibility);
+    return () => {
+      this.update = () => {};
+      if (mobileApp()) document.removeEventListener("visibilitychange", visibility);
+    };
   }
 
   async select(origin: string) {
@@ -98,7 +114,8 @@ class BrowserSession {
     return { ticket: result.ticket as string, token };
   }
 
-  async start() {
+  async start(volumes: Record<string, number> = {}) {
+    this.volumes = { ...volumes };
     this.update({ ...offline, phase: "connecting" });
     try {
       const { ticket, token } = await this.ticket();
@@ -167,6 +184,7 @@ class BrowserSession {
   private showSnapshot(snapshot: Snapshot) {
     const previous = this.snapshot?.channelId;
     this.snapshot = snapshot;
+    if (mobileApp() && voiceApp()) this.updateVoice(snapshot);
     if (previous !== snapshot.channelId) {
       this.messages = [];
       const request = ++this.historyRequest;
@@ -187,14 +205,44 @@ class BrowserSession {
     this.show();
   }
 
+  private updateVoice(snapshot: Snapshot) {
+    const { connectionId } = snapshot;
+    const channelId = document.hidden ? null : snapshot.channelId;
+    if ((this.voice?.channelId ?? null) !== channelId) {
+      this.voice?.close();
+      this.voice = undefined;
+      if (channelId) {
+        const socket = this.socket;
+        const audio = this.audio ??= new AudioContext();
+        this.voice = new WebVoice(channelId, connectionId, audio, (kind, payload) => {
+          if (socket !== this.socket || this.snapshot?.channelId !== channelId) {
+            return Promise.reject(new Error("The active channel changed."));
+          }
+          return this.rpc(kind, payload);
+        }, () => this.show(), this.volumes);
+      }
+    }
+    this.voice?.update(snapshot);
+  }
+
   private show() {
-    this.update({ ...offline, phase: "online", snapshot: this.snapshot, messages: this.messages, directMessages: this.directMessages });
+    this.update({ ...offline, phase: "online", snapshot: this.snapshot, messages: this.messages, directMessages: this.directMessages,
+      voice: this.voice?.voice ?? "idle", voiceError: this.voice?.error ?? null });
   }
 
   private event({ type, payload }: Reply) {
     const snapshot = this.snapshot;
     if (!snapshot) return;
-    if (["state.invalidated", "presence.changed", "presence.offline", "channel.member", "channel.userChanged", "channel.changed"].includes(type)) {
+    if (type.startsWith("media.")) this.voice?.event(type, payload as Parameters<WebVoice["event"]>[1]);
+    if (type === "channel.voiceActivity") {
+      const { channelId, connectionId, speaking } = payload as { channelId: string; connectionId: string; speaking: boolean };
+      const update = (member: Member) => member.connectionId === connectionId ? { ...member, speaking } : member;
+      let channelMembers = snapshot.channelMembers;
+      if (channelMembers?.[channelId]) channelMembers = { ...channelMembers, [channelId]: channelMembers[channelId].map(update) };
+      this.snapshot = { ...snapshot, channelMembers,
+        members: snapshot.channelId === channelId ? snapshot.members.map(update) : snapshot.members };
+      this.show();
+    } else if (["state.invalidated", "presence.changed", "presence.offline", "channel.member", "channel.userChanged", "channel.changed"].includes(type)) {
       const socket = this.socket;
       void this.rpc<Snapshot>("state.get").then((state) => {
         if (socket === this.socket) this.showSnapshot(state);
@@ -230,11 +278,27 @@ class BrowserSession {
   }
 
   async joinChannel(channelId: string, password?: string) {
+    if (mobileApp() && voiceApp()) void (this.audio ??= new AudioContext()).resume().catch(() => {});
     this.showSnapshot(await this.rpc<Snapshot>("channel.join", { channelId, password }));
   }
 
   async leaveChannel() {
     this.showSnapshot(await this.rpc<Snapshot>("channel.leave"));
+  }
+
+  async setPresence(payload: Record<string, unknown> | undefined) {
+    // The protocol distinguishes an omitted field from a boolean value.
+    const fields = Object.fromEntries(Object.entries(payload ?? {}).filter(([, value]) => value != null));
+    const member = await this.rpc<Member>("presence.set", fields);
+    const snapshot = this.snapshot;
+    if (!snapshot || member.connectionId !== snapshot.connectionId) return;
+    this.showSnapshot({ ...snapshot, members: snapshot.members.map((entry) => entry.connectionId === member.connectionId
+      ? { ...entry, ...member } : entry) });
+  }
+
+  setMemberVolume(accountId: string, level: number) {
+    this.volumes[accountId] = level;
+    this.voice?.setVolume(accountId, level);
   }
 
   async sendMessage(channelId: string, text: string, html?: string) {
@@ -269,6 +333,10 @@ class BrowserSession {
   private closeSocket() {
     const socket = this.socket;
     this.socket = undefined;
+    this.voice?.close();
+    this.voice = undefined;
+    void this.audio?.close().catch(() => {});
+    this.audio = undefined;
     this.snapshot = null;
     this.messages = [];
     this.directMessages = [];

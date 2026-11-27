@@ -56,7 +56,8 @@ invitations in open and invitation-only registration. Copy each invitation when
 you create it and share it privately as `server-address#invite-code`. Paste the full
 link into the app's server address field to join.
 The first Owner uses a separate, 15-minute, locally displayed setup token and an atomic
-bootstrap request. The bootstrap route returns `NOT_FOUND` once an Owner exists.
+bootstrap request. If the server has a shared password, claiming ownership also requires
+that password. The bootstrap route returns `NOT_FOUND` once an Owner exists.
 Regular identities can enroll before the owner claims the server if registration
 permits it. A valid setup token can promote an existing identity to first Owner.
 

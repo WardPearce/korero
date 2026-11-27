@@ -158,7 +158,17 @@ test("the host password is enforced at startup and stays read-only in the admin 
   const server = await fixture({ environment: { VOICE_SERVER_PASSWORD: password } });
   try {
     const key = testIdentity();
-    const owner = await server.owner(key);
+    const bootstrapPath = "/api/v1/admin/bootstrap";
+    const bootstrap = async () => ({
+      displayName: "Owner", deviceName: "Test", token: server.setupToken, identity: await server.proof("bootstrap", key),
+    });
+    expect((await server.fail(bootstrapPath, await bootstrap())).status).toBe(401);
+    expect((await server.fail(bootstrapPath, { ...await bootstrap(), password: "incorrect" })).status).toBe(401);
+    const claimed = await server.call<Device>(bootstrapPath, { ...await bootstrap(), password });
+    expect(claimed.response.status).toBe(201);
+    const owner = claimed.payload;
+    expect(owner.account.role).toBe("Owner");
+    expect((await server.fail(bootstrapPath, await bootstrap())).status).toBe(404);
     const passwordPath = "/api/v1/admin/password";
     expect((await server.call(passwordPath, undefined, owner.accessToken)).payload)
       .toEqual({ passwordRequired: true, passwordLocked: true });

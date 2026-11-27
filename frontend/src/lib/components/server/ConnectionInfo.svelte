@@ -53,6 +53,8 @@
   <p class="form-error" role="alert">{error}</p>
 {:else if info}
   <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-2 text-sm">
+    <dt class="text-muted-foreground">Server address</dt>
+    <dd class="wrap-break-word">{origin}</dd>
     <dt class="text-muted-foreground">Member</dt>
     <dd class="wrap-break-word">{info.displayName}</dd>
     <dt class="text-muted-foreground">Channel</dt>

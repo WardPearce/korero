@@ -1,6 +1,6 @@
 import type { ConsumerOptions, RtpCapabilities, Transport, TransportOptions } from "mediasoup-client/types";
 import { browserSession } from "../connection/browser-session";
-import { call, nativeApp, type ScreenShare } from "../connection/client";
+import { call, desktopApp, type ScreenShare } from "../connection/client";
 
 type ScreenCapabilities = RtpCapabilities & { iceServers: RTCIceServer[] };
 export type VideoSource = "screen" | "camera";
@@ -31,13 +31,11 @@ export class ScreenMedia {
     private readonly channelId: string,
     private readonly failed: (message: string) => void,
     private readonly source: VideoSource = "screen",
-    private readonly relay?: MediaRequest,
   ) {}
 
   private request<T>(kind: string, payload: Record<string, unknown>) {
-    if (this.relay) return this.relay<T>(kind, payload);
     const { connectionId, channelId } = this;
-    return nativeApp()
+    return desktopApp()
       ? call<T>("screen_request", { connectionId, channelId, kind, payload })
       : browserSession.screenRequest<T>(connectionId, channelId, kind, payload);
   }

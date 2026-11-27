@@ -1,6 +1,6 @@
 import { createContext } from "svelte";
-import { listen } from "@tauri-apps/api/event";
-import { call, messageFrom, nativeApp } from "../connection/client";
+import { watchDesktop } from "../connection/platform";
+import { call, messageFrom, desktopApp } from "../connection/client";
 import { defaultAudio, preferences, type AudioPreferences } from "../preferences";
 import { globalTalkShortcut, isTypingTalkShortcut, matchesTalkShortcut, releasesTalkShortcut } from "./talk-shortcut";
 
@@ -10,7 +10,7 @@ interface MicrophoneResult { gatePeak: number; recording: string }
 interface MicrophoneSample { gatePeak: number; recording: Blob }
 
 export class AudioSettings {
-  readonly available = nativeApp();
+  readonly available = desktopApp();
   profile = $state.raw<AudioPreferences>(defaultAudio);
   devices = $state.raw<AudioDevices | null>(null);
   error = $state("");
@@ -47,7 +47,7 @@ export class AudioSettings {
     const shortcut = requested ? globalTalkShortcut(profile.talkShortcut) : null;
     try {
       if (requested && !this.#unlisten) {
-        this.#unlisten = await listen<{ shortcut: string; pressed: boolean }>("korero:talk-shortcut", ({ payload }) => {
+        this.#unlisten = await watchDesktop<{ shortcut: string; pressed: boolean }>("korero:talk-shortcut", (payload) => {
           if (payload.shortcut !== this.#globalKey) return;
           if (payload.pressed) this.press();
           else this.release();

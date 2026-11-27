@@ -22,7 +22,8 @@
   import WhisperControls from "#lib/components/media/WhisperControls.svelte";
   import { playUiSound } from "#lib/ui-sounds";
   import { forgetPassword, getSavedPassword, savePassword } from "#lib/preferences";
-  import { nativeApp, type Channel } from "#lib/connection/client";
+  import { desktopApp, type Channel } from "#lib/connection/client";
+  import { voiceApp } from "#lib/connection/platform";
   import ChatComposer from "#lib/components/chat/ChatComposer.svelte";
   import ChatMessage from "#lib/components/chat/ChatMessage.svelte";
   import DirectMessages from "#lib/components/chat/DirectMessages.svelte";
@@ -33,7 +34,7 @@
 
   const workspace = getWorkspace();
   const audio = getAudioSettings();
-  const voiceAvailable = nativeApp();
+  const voiceAvailable = voiceApp();
   const { run } = workspace;
   const view = $derived(workspace.view);
   const serverTitle = $derived(workspace.serverTitle);
@@ -520,7 +521,7 @@
         <DropdownMenu.Item onSelect={showAfkForm}>Set AFK message</DropdownMenu.Item>
       </DropdownMenu.Content>
     </DropdownMenu.Root>
-    {#if voiceAvailable && snapshot?.whispers}
+    {#if desktopApp() && snapshot?.whispers}
       <WhisperControls />
     {/if}
     {#if activeChannel}
@@ -531,10 +532,6 @@
       <IconButton label="Server settings" disabled={Boolean(pending)} onclick={workspace.showServerSettings}><Settings2 size={18} aria-hidden="true" /></IconButton>
     {/if}
   </div>
-  <div class="channel-search">
-    <Search class="pointer-events-none absolute start-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} aria-hidden="true" />
-    <Input class="ps-8" aria-label="Find a channel" placeholder="Find a channel" bind:value={search} disabled={!snapshot?.channels.length} />
-  </div>
   {#if snapshot?.directMessages && workspace.serverId}
     <div class="channel-search">
       <Button variant={workspace.roomView === "directMessages" ? "secondary" : "outline"} class="w-full justify-start"
@@ -544,9 +541,12 @@
       </Button>
     </div>
   {/if}
+  <div class="channel-search">
+    <Search class="pointer-events-none absolute start-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} aria-hidden="true" />
+    <Input class="ps-8" aria-label="Find a channel" placeholder="Find a channel" bind:value={search} disabled={!snapshot?.channels.length} />
+  </div>
   <div class="channel-scroll">
     <span id="joined-channel-description" class="sr-only">Joined</span>
-    <div class="section-label"><span><ListTree size={15} /> Channels</span>{#if snapshot}<small>{snapshot.channels.length}</small>{/if}</div>
     {#if snapshot?.channels.length}
       <ul class="channel-list">
         {#if search.trim()}
@@ -604,10 +604,10 @@
     {/if}
     {#if online && snapshot?.channelId && channelFooter}
       {#key snapshot.connectionId + "/" + snapshot.channelId}
-        {#if snapshot.cameras}<ScreenSharing {snapshot} controlsTarget={channelFooter} visible={isInRoom} source="camera" />{/if}
+        <ScreenSharing {snapshot} controlsTarget={channelFooter} visible={Boolean(activeChannel)} source="camera" />
+        <ScreenSharing {snapshot} controlsTarget={channelFooter} visible={Boolean(activeChannel)} source="screen" />
       {/key}
     {/if}
-    {#if workspace.screenSharing && isInRoom}<div bind:this={screenShareTarget} style="display: contents"></div>{/if}
     <section class="chat-pane" aria-label="Channel chat">
       <div class="chat-log" {@attach attachMessageList} role="log" aria-label="Channel messages">
         {#if isInRoom && view.messages.length}
@@ -666,12 +666,6 @@
   {/if}
 </main>
 
-{#if online && snapshot?.channelId && channelFooter && workspace.screenSharing}
-  {#key snapshot.connectionId + "/" + snapshot.channelId}
-    <ScreenSharing {snapshot} controlsTarget={channelFooter} inlineTarget={screenShareTarget} visible={Boolean(screenShareTarget)}
-      onDock={() => { if (activeChannel) selectChannel(activeChannel); }} />
-  {/key}
-{/if}
 
 <Modal bind:open={afkFormOpen} title="AFK message" description="People who can see your voice channel can read this message while you’re AFK." dismissible={pending !== "afk"}>
   {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}

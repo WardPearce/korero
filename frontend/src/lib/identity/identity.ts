@@ -1,4 +1,4 @@
-import { call, nativeApp, requestError, type RelayResponse } from "../connection/client";
+import { call, desktopApp, requestError, type RelayResponse } from "../connection/client";
 import { browserIdentity, exportBrowserIdentity, importBrowserIdentity, signIdentity } from "./browser-identity";
 import { browserSession } from "../connection/browser-session";
 import { preferences, type DeviceIdentity } from "../preferences";
@@ -22,29 +22,14 @@ async function saveIdentity(identity: DeviceIdentity, replace = false) {
   });
 }
 
-export async function loadIdentity() {
-  const existing = await getIdentity();
-  if (existing) return existing;
-  if (!nativeApp()) return undefined;
-  let legacy: DeviceIdentity | null;
-  try {
-    legacy = await call<DeviceIdentity | null>("legacy_identity");
-  } catch (error) {
-    // A fresh install may not have a system credential store available.
-    if ((await preferences.local.get("identity"))?.value) throw error;
-    return undefined;
-  }
-  return legacy ? saveIdentity(legacy) : undefined;
-}
-
 export async function generateIdentity() {
-  return saveIdentity(await (nativeApp() ? call<DeviceIdentity>("generate_identity") : browserIdentity()));
+  return saveIdentity(await (desktopApp() ? call<DeviceIdentity>("generate_identity") : browserIdentity()));
 }
 
 export async function importIdentity(file: File, passphrase: string, replace = false) {
   if (file.size > 1024) throw new Error("Invalid VNX.chat identity export.");
   const blob = await file.text();
-  const identity = await (nativeApp() ? call<DeviceIdentity>("import_identity", { blob, passphrase }) : importBrowserIdentity(blob, passphrase));
+  const identity = await (desktopApp() ? call<DeviceIdentity>("import_identity", { blob, passphrase }) : importBrowserIdentity(blob, passphrase));
   return saveIdentity(identity, replace);
 }
 
@@ -56,17 +41,17 @@ async function requireIdentity() {
 
 export async function exportIdentity(passphrase: string) {
   const { privateKey } = await requireIdentity();
-  return nativeApp() ? call<string>("export_identity", { privateKey, passphrase }) : exportBrowserIdentity(privateKey, passphrase);
+  return desktopApp() ? call<string>("export_identity", { privateKey, passphrase }) : exportBrowserIdentity(privateKey, passphrase);
 }
 
 type IdentityAction =
   | { operation: "login"; password?: string }
   | { operation: "register"; displayName: string; invitation?: string; password?: string }
-  | { operation: "bootstrap"; displayName: string; token: string };
+  | { operation: "bootstrap"; displayName: string; token: string; password?: string };
 
 export async function authenticateIdentity(origin: string, serverId: string, deviceName: string, action: IdentityAction) {
   const identity = await requireIdentity();
-  if (nativeApp()) {
+  if (desktopApp()) {
     return call<RelayResponse>("authenticate_identity", { origin, serverId, deviceName, privateKey: identity.privateKey, action });
   }
   const { operation, ...fields } = action;

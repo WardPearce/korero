@@ -52,10 +52,9 @@ package-lock.json
 /frontend/dist/
 /frontend/.svelte-kit/
 /frontend/.env
-/frontend/src-tauri/target/
 /frontend/.native/
 
 /frontend/native/target/
-/frontend/src-tauri/gen/schemas/
 
 /backend/server.toml
+/frontend/desktop-dist/

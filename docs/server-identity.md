@@ -51,7 +51,7 @@ voice-server --data-dir ./data identity rotate --yes
 Rotating the key requires every pinned client to verify and approve the new key before
 reconnecting. Restore the full data directory to preserve both the logical ID and its key.
 
-## Rust and Tauri
+## Desktop and mobile clients
 
 Use native Rust for endpoint parsing, TLS, HTTP and WebSockets. Use a shared per-server
 `rustls::ClientConfig` for both connections. For private pins, a scoped
@@ -62,13 +62,18 @@ credential-bearing HTTP requests. Use independently scoped connection pools.
 
 Pass the config into `reqwest` through its preconfigured rustls API and into
 `tokio-tungstenite` through its Rustls connector. Keep the dependency versions
-compatible across both transports. Store refresh credentials with the platform
-credential manager and send only the application state the webview needs.
-The Tauri client uses the OS trust store by default. The connect dialog also accepts an
-operator-provided PEM certificate for that server. Both native HTTP and WSS verify the
-certificate chain and hostname. The current client keeps session credentials in Rust
-memory for the lifetime of the process. The webview never handles the access or refresh
-token. Native WebRTC and its signaling live outside the webview.
+compatible across both transports.
+
+The Electron client keeps access and refresh credentials in the Rust process
+for the lifetime of the session. It uses the operating system trust store by
+default. For a private server, it displays the SHA-256 digest of the leaf
+certificate for explicit approval and verifies the approved certificate and
+hostname on HTTPS and WSS. This approval is specific to the leaf certificate.
+A replacement certificate requires a new approval.
+
+Capacitor uses the device's HTTPS trust configuration. A private server needs
+a certificate trusted by the device, or a trusted HTTPS reverse proxy, before
+the mobile client can connect.
 
 - [rustls verifier contract](https://docs.rs/rustls/latest/rustls/client/danger/trait.ServerCertVerifier.html)
 - [reqwest ClientBuilder](https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html)

@@ -22,7 +22,7 @@
       class="w-64 max-w-[calc(100vw-1.5rem)] max-h-[min(24rem,var(--bits-popover-content-available-height))] overflow-auto"
       {@attach () => { void untrack(() => audio.refreshDevices()); }}>
       <AudioDeviceFields {direction} />
-      {#if !audio.available}<p class="field-hint">Available in the VNX.chat app.</p>{/if}
+      {#if !audio.available}<p class="field-hint">Available in the VNX.chat desktop app.</p>{/if}
       {#if audio.error || audio.deviceError}<p role="status" class="form-error">{audio.error || audio.deviceError}</p>{/if}
       <a class="audio-settings-link" href={resolve("/settings/audio")}><Settings2 size={15} aria-hidden="true" /> Audio settings</a>
     </Popover.Content>

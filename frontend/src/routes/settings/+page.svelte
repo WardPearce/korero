@@ -40,7 +40,7 @@
   <header class="workspace-header">
     <div class="heading-icon"><UserRound size={19} aria-hidden="true" /></div>
     <div class="flex-content">
-      <h1>Account settings</h1>
+          <h1>Account settings</h1>
     </div>
   </header>
   <div class="workspace">

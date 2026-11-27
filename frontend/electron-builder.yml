@@ -1,0 +1,18 @@
+appId: app.korero.voice
+productName: VNX.chat
+npmRebuild: false
+directories:
+  output: desktop-dist
+files:
+  - dist/**/*
+  - electron/**/*
+  - "!node_modules"
+extraResources:
+  - from: native/target/release/desktop-client
+    to: desktop-client
+linux:
+  icon: static/vnx-icon.png
+  target:
+    - AppImage
+    - deb
+  category: Network

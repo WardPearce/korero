@@ -31,7 +31,7 @@ export const httpBodies = {
   identityProof: object({ ...identityProof, password: optional(password) }),
   register: object({ displayName, deviceName, invitation: optional(token), password: optional(password), identity: enrollmentProof }),
   refresh: object({ refreshToken: token }),
-  bootstrap: object({ token, displayName, deviceName, identity: enrollmentProof }),
+  bootstrap: object({ token, displayName, deviceName, password: optional(password), identity: enrollmentProof }),
   account: object({ displayName }),
   serverPassword: object({ password: nullable(password) }),
   invitationUpdate: object({ expiresAt: optional(nullable(invitationExpiry)), usesLeft: optional(nullable(int(0, 10000))) }),

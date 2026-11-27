@@ -4,6 +4,7 @@ host = "::"
 port = 8443
 registration = "open"
 max_users = 128
+# For the Capacitor app, explicitly allow https://localhost and capacitor://localhost.
 origins = []
 public_addresses = []
 trusted_proxies = []

@@ -12,7 +12,7 @@ Primary users are members of a self-hosted VNX.chat server who want to start and
 
 ## Product Purpose
 
-VNX.chat is a self-hosted, voice-first server with public-key accounts, hierarchical channels, moderation, and chat. The SvelteKit client also ships as a Tauri desktop app. For direct messaging, success means a member can share their own user ID, add someone by that ID, find server members, and reach a verified private conversation without hunting through unrelated UI.
+VNX.chat is a self-hosted, voice-first server with public-key accounts, hierarchical channels, moderation, and chat. The SvelteKit client also ships as an Electron desktop app and a Capacitor mobile app. For direct messaging, success means a member can share their own user ID, add someone by that ID, find server members, and reach a verified private conversation without hunting through unrelated UI.
 
 ## Positioning
 
@@ -20,11 +20,11 @@ The product combines direct-IP HTTPS and WebSocket signalling, a WebRTC SFU, pub
 
 ## Operating Context
 
-Members open direct messages from the channel sidebar or a member's menu. Both accounts use the same server. The client runs in a browser over HTTPS or localhost and as a Tauri desktop app. Server operators announce a direct IP and TLS public-key fingerprint; clients verify the fingerprint before sending credentials.
+Members open direct messages from the channel sidebar or a member's menu. Both accounts use the same server. The client runs in a browser over HTTPS or localhost and as an Electron desktop app and a Capacitor mobile app. Server operators share a server address and TLS certificate details. Electron supports explicit certificate approval, and Capacitor uses device HTTPS trust.
 
 ## Capabilities and Constraints
 
-- Frontend: SvelteKit 5, Tauri 2, Tailwind CSS 4, bits-ui, Lucide icons, TypeScript.
+- Frontend: SvelteKit, Svelte 5, Electron, Capacitor, Tailwind CSS 4, bits-ui, Lucide icons, TypeScript.
 - Backend: Bun and Elysia, with an open v1 protocol and Drizzle persistence.
 - User-confirmed redesign priorities: add a person by user ID, find people on the server, and share the current user's ID.
 - User-confirmed success: DM home shows the current user's ID with one-click copy, an add-by-ID field, and a member picker, so sharing and adding both happen in seconds.
