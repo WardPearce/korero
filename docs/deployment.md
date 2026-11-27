@@ -111,7 +111,8 @@ docker compose logs voice-server
 
 The image reads `server.toml` from `/data` by default. To keep the whole configuration in
 Compose instead, put the TOML document in `VOICE_CONFIG`; a leading `[section]` or `#`
-comment distinguishes inline TOML from a file path:
+comment distinguishes inline TOML from a file path. Keep it to one continuous block, with
+no blank lines:
 
 ```yaml
 services:
@@ -129,6 +130,11 @@ services:
       VOICE_CONFIG: |
         [server]
         name = "Voice Server"
+        registration = "invitation"
+        # Shared password for sign-in and registration; "" disables it.
+        # Invitations still work without it. Set VOICE_SERVER_PASSWORD
+        # instead to keep the secret out of this file.
+        password = ""
         public_addresses = ["voice.example.com"]
         [media]
         announced_address = "203.0.113.10"

@@ -185,7 +185,7 @@ enable_udp = true
 enable_tcp = true
 
 [messaging]
-persistence = false
+persistence = true
 `;
 
 export async function configToml(config: Config): Promise<string> {

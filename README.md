@@ -73,9 +73,48 @@ VOICE_MEDIA_ANNOUNCED_ADDRESS=192.168.1.100 docker compose up -d --build
 ```
 
 To keep the full `server.toml` in Compose, set `VOICE_CONFIG` to the TOML document itself
-(it starts with a `[section]` or `#` comment) instead of mounting a file.
+(it starts with a `[section]` or `#` comment) instead of mounting a file. Keep it to one
+continuous block, with no blank lines.
 
-See [Deployment](docs/deployment.md) for LAN, IPv6, VPN, NAT and backup instructions.
+```yaml
+services:
+  voice-server:
+    image: wardpearce/korero-server:latest
+    restart: unless-stopped
+    ports:
+      - "8443:8443/tcp"
+      - "8444:8444/udp"
+      - "8444:8444/tcp"
+    volumes:
+      - voice-data:/data
+    environment:
+      VOICE_DATA_DIR: /data
+      VOICE_CONFIG: |
+        [server]
+        name = "My Kōrero server"
+        registration = "invitation"
+        # Shared password for sign-in and registration; "" disables it.
+        # Invitations still work without it. Set VOICE_SERVER_PASSWORD
+        # instead to keep the secret out of this file.
+        password = ""
+        # The public IP or hostname clients use for HTTPS/WSS.
+        public_addresses = ["203.0.113.10"]
+        [media]
+        # The public IP or hostname clients can reach the media port on.
+        announced_address = "203.0.113.10"
+        # Voice quality in bits per second (32000-128000).
+        target_audio_bitrate = 64000
+        [messaging]
+        # Keep message history for one week.
+        retention_hours = 168
+volumes:
+  voice-data:
+```
+
+Every setting is optional, so drop any line to keep its default. `server.password` is a
+shared password for sign-in and registration, and `server.registration` controls who may
+create an account. See [Deployment](docs/deployment.md) for LAN, IPv6, VPN, NAT and backup
+instructions.
 
 # Manage a server
 

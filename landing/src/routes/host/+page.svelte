@@ -79,8 +79,9 @@
 		<h2 id="docker">Deploy with Docker</h2>
 		<p>
 			The image supports AMD64 and ARM64. Every setting is optional. Put the TOML directly in
-			<code>VOICE_CONFIG</code> so the whole configuration stays in your compose file; this one only
-			sets the server name and the public addresses clients use for signalling and media. See
+			<code>VOICE_CONFIG</code> so the whole configuration stays in your compose file; this one sets
+			the server name, who may register, a shared password and the public addresses clients use for
+			signalling and media. Leave a setting out to use its default. See
 			<a href="#configure">Configure</a> for the rest.
 		</p>
 		<CodeBlock
@@ -102,18 +103,27 @@
         [server]
         name = "My Kōrero server"
         registration = "invitation"
+        # Shared password for sign-in and registration; "" disables it.
+        # Invitations still work without it. Set VOICE_SERVER_PASSWORD
+        # instead to keep the secret out of this file.
+        password = ""
         # The public IP or hostname clients use for HTTPS/WSS.
         public_addresses = ["203.0.113.10"]
-
         [media]
         # The public IP or hostname clients can reach the media port on.
         announced_address = "203.0.113.10"
+        # Voice quality in bits per second (32000-128000).
+        target_audio_bitrate = 64000
+        [messaging]
+        # Keep message history for one week.
+        retention_hours = 168
 volumes:
   voice-data:`}
 		/>
 		<p>
-			Inline TOML is recognised when it begins with a section header or comment. Edit the compose
-			file and run <code>docker compose up -d</code> to apply changes.
+			Inline TOML is recognised when it begins with a section header or comment. Keep it to one
+			continuous block, with no blank lines. Edit the compose file and run
+			<code>docker compose up -d</code> to apply changes.
 		</p>
 		<p>Start the server and read the log for the endpoint, fingerprint and setup token.</p>
 		<CodeBlock
@@ -267,22 +277,40 @@ docker compose run --rm voice-server config validate`}
 						or <code>disabled</code>.
 					</td>
 				</tr>
-				<tr><td><code>server.password</code></td><td>A shared password for new sign-ins.</td></tr>
+				<tr>
+					<td><code>server.password</code></td>
+					<td>
+						A shared password for sign-in and registration. Empty by default; invitations work
+						without it.
+					</td>
+				</tr>
 				<tr>
 					<td><code>server.public_addresses</code></td>
 					<td>The public IP or hostname clients use for signalling; also added to TLS SANs.</td>
+				</tr>
+				<tr>
+					<td><code>server.max_users</code></td>
+					<td>How many people can be online at once. 128 by default.</td>
 				</tr>
 				<tr>
 					<td><code>media.announced_address</code></td>
 					<td>The public IP or hostname in media candidates.</td>
 				</tr>
 				<tr>
-					<td><code>messaging.persistence</code></td>
-					<td>Keep message history for one week. On by default.</td>
+					<td><code>media.target_audio_bitrate</code></td>
+					<td>Voice quality, from 32 to 128 kbit/s. 64 kbit/s by default.</td>
 				</tr>
 				<tr>
-					<td><code>media.target_audio_bitrate</code></td>
-					<td>Voice quality, from 32 to 128 kbit/s.</td>
+					<td><code>messaging.persistence</code></td>
+					<td>Keep message history on the server. On by default.</td>
+				</tr>
+				<tr>
+					<td><code>messaging.retention_hours</code></td>
+					<td>How long history is kept, up to one year. One week by default.</td>
+				</tr>
+				<tr>
+					<td><code>authentication.refresh_seconds</code></td>
+					<td>How long a device stays signed in. 90 days by default.</td>
 				</tr>
 			</tbody>
 		</table>
