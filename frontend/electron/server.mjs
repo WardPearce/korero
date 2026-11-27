@@ -16,14 +16,22 @@ export function requireSuccess({ status, body }) {
   throw remoteError(body?.error, `Request failed with HTTP ${status}`);
 }
 
+function hasExplicitPort(source) {
+  const authority = source.slice(source.indexOf("//") + 2).split(/[/?#]/, 1)[0] ?? "";
+  return authority.startsWith("[") ? authority.includes("]:") : authority.includes(":");
+}
+
 export function serverOrigin(address) {
   if (typeof address !== "string") throw new Error("Enter a valid server address.");
   const value = address.trim();
-  const origin = URL.parse(value.includes("://") ? value : `https://${value}`);
+  const source = value.includes("://") ? value : `https://${value}`;
+  const origin = URL.parse(source);
   if (!origin || origin.protocol !== "https:" || !origin.hostname || origin.username || origin.password ||
       origin.pathname !== "/" || origin.search || origin.hash) {
-    throw new Error("Enter a server IP or host, with an optional port.");
+    throw new Error("Enter a server IP or host, with an optional port (default 8443).");
   }
+  // Servers listen on 8443 unless the address names another port.
+  if (!origin.port && !hasExplicitPort(source)) origin.port = "8443";
   return origin.origin;
 }
 

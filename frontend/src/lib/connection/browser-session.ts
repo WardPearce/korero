@@ -6,13 +6,21 @@ import { mobileApp, voiceApp } from "./platform";
 type Credentials = { accessToken: string; refreshToken: string; accessExpiresAt: number };
 type Reply = { type: string; id: number; success: boolean; payload: unknown; error?: unknown };
 
+function hasExplicitPort(source: string) {
+  const authority = source.slice(source.indexOf("//") + 2).split(/[/?#]/, 1)[0] ?? "";
+  return authority.startsWith("[") ? authority.includes("]:") : authority.includes(":");
+}
+
 export function browserServerOrigin(address: string) {
   const value = address.trim();
+  const source = value.includes("://") ? value : `https://${value}`;
   let url: URL | undefined;
-  try { url = new URL(value.includes("://") ? value : `https://${value}`); } catch {}
+  try { url = new URL(source); } catch {}
   if (!url || url.protocol !== "https:" || !url.host || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
-    throw new Error("Enter a server IP or host, with an optional port.");
+    throw new Error("Enter a server IP or host, with an optional port (default 8443).");
   }
+  // Servers listen on 8443 unless the address names another port.
+  if (!url.port && !hasExplicitPort(source)) url.port = "8443";
   return url.origin;
 }
 

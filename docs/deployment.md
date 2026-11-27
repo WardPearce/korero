@@ -49,7 +49,7 @@ an authenticated caller. The client implements ICE server use.
 
 ## Configuration and TLS
 
-HTTPS is always used for the voice server. Clients connect with a server IP/host (and optional port), e.g. `example.com:8443`.
+HTTPS is always used for the voice server. Clients connect with a server IP/host; the port defaults to 8443 when omitted, e.g. `example.com` or `example.com:8443`.
 
 Start with [server.example.toml](../backend/server.example.toml). Precedence is the explicit
 CLI path or data directory, then `VOICE_CONFIG` or `VOICE_DATA_DIR`, then

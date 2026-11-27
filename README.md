@@ -60,7 +60,7 @@ chmod +x voice-server-linux-amd64
 ```
 
 The server creates its data directory, Lobby, TLS identity and a first-owner setup token.
-Share the signalling address (for example `192.168.1.100:8443`) and the TLS public-key
+Share the signalling address (the port defaults to 8443, e.g. `192.168.1.100`) and the TLS public-key
 fingerprint over a trusted channel. Forward TCP 8443 and UDP/TCP 8444 where needed.
 See [Compatibility](docs/compatibility.md) for verified host requirements.
 
