@@ -76,15 +76,21 @@
     </IconButton>
     <QuickAudio direction="output" />
   </div>
-  <DropdownMenu.Root>
-    <DropdownMenu.Trigger disabled={!canSetAfk} class={buttonVariants({ variant: "outline" })}>
-      {ownMember?.afk ? "AFK (away)" : "AFK"} <ChevronDown aria-hidden="true" />
-    </DropdownMenu.Trigger>
-    <DropdownMenu.Content align="start">
-      <DropdownMenu.Item onSelect={toggleAfk}>{ownMember?.afk ? "Return from AFK" : "Mark as AFK"}</DropdownMenu.Item>
-      <DropdownMenu.Item onSelect={showAfkForm}>Set AFK message</DropdownMenu.Item>
-    </DropdownMenu.Content>
-  </DropdownMenu.Root>
+  <div class="voice-afk" role="group" aria-label="AFK">
+    <Button variant="outline" type="button" class="afk-main" disabled={!canSetAfk}
+      aria-pressed={Boolean(ownMember?.afk)} title={ownMember?.afk ? "Return from AFK" : "Mark as AFK"}
+      onclick={toggleAfk}>
+      {ownMember?.afk ? "AFK (away)" : "AFK"}
+    </Button>
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger disabled={!canSetAfk} aria-label="AFK options" class="afk-menu {buttonVariants({ variant: "outline", size: "icon" })}">
+        <ChevronDown aria-hidden="true" />
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Content align="start">
+        <DropdownMenu.Item onSelect={showAfkForm}>Set AFK message</DropdownMenu.Item>
+      </DropdownMenu.Content>
+    </DropdownMenu.Root>
+  </div>
   {#if desktopApp() && snapshot?.whispers}
     <WhisperControls />
   {/if}
@@ -99,3 +105,9 @@
     </Button>
   </form>
 </Modal>
+
+<style>
+  .voice-afk { display: inline-flex; flex: none; }
+  .voice-afk :global(.afk-main) { border-start-end-radius: 0; border-end-end-radius: 0; }
+  .voice-afk :global(.afk-menu) { margin-inline-start: -1px; border-start-start-radius: 0; border-end-start-radius: 0; }
+</style>

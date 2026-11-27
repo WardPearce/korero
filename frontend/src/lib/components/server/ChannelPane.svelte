@@ -58,13 +58,30 @@
   let memberSelection = $state.raw<MemberSelection | null>(null);
   let draggedMembers = $state.raw<MemberSelection | null>(null);
   let draggedChannel = $state.raw<{ id: string; origin: string } | null>(null);
-  let dropTarget = $state.raw<{ id: string; placement: ChannelPlacement } | null>(null);
+  type DropTarget = { id: string; placement: ChannelPlacement };
+  let dropTarget = $state.raw<DropTarget | null>(null);
+  let expandTimer: { id: string; timeout: ReturnType<typeof setTimeout> } | null = null;
+  /** A locally applied channel arrangement shown until the server's snapshot catches up. */
+  type Preview = { origin: string; order: { id: string; parentId: string | null }[]; key: string };
+  let preview = $state.raw<Preview | null>(null);
 
   let snapshot = $derived(view.snapshot);
-  let channelsById = $derived(new Map(snapshot?.channels.map((channel) => [channel.id, channel])));
+  let channels = $derived.by(() => {
+    const live = snapshot?.channels ?? [];
+    if (!preview || preview.origin !== workspace.serverOrigin) return live;
+    const remaining = new Map(live.map((channel) => [channel.id, channel]));
+    const placed = preview.order.flatMap(({ id, parentId }) => {
+      const channel = remaining.get(id);
+      if (!channel) return [];
+      remaining.delete(id);
+      return [channel.parentId === parentId ? channel : { ...channel, parentId }];
+    });
+    return [...placed, ...remaining.values()];
+  });
+  let channelsById = $derived(new Map(channels.map((channel) => [channel.id, channel])));
   let channelsByParent = $derived.by(() => {
     const groups = new Map<string | null, Channel[]>();
-    for (const channel of snapshot?.channels ?? []) {
+    for (const channel of channels) {
       const siblings = groups.get(channel.parentId);
       if (siblings) siblings.push(channel);
       else groups.set(channel.parentId, [channel]);
@@ -73,7 +90,7 @@
   });
   let me = $derived(snapshot?.account);
   let online = $derived(view.phase === "online");
-  const movableMembers = $derived(new Map((snapshot?.channels ?? []).flatMap((channel) =>
+  const movableMembers = $derived(new Map(channels.flatMap((channel) =>
     channel.canMove ? membersIn(channel.id)
       .filter((member) => member.accountId !== me?.id && member.role && snapshot?.lowerRoles?.includes(member.role))
       .map((member) => [member.connectionId, channel.id] as const) : [])));
@@ -82,10 +99,10 @@
       ? [...memberSelection.members].filter(([id, channelId]) => movableMembers.get(id) === channelId)
       : [],
   ));
-  let activeChannel = $derived(snapshot?.channels.find((channel) => channel.id === snapshot?.channelId));
-  let currentChannel = $derived(snapshot?.channels.find((channel) => channel.id === workspace.selectedChannelId) ?? activeChannel ?? snapshot?.channels[0]);
+  let activeChannel = $derived(channels.find((channel) => channel.id === snapshot?.channelId));
+  let currentChannel = $derived(channels.find((channel) => channel.id === workspace.selectedChannelId) ?? activeChannel ?? channels[0]);
   let filteredChannels = $derived(
-    search.trim() ? (snapshot?.channels ?? []).filter((channel) => channel.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())) : [],
+    search.trim() ? channels.filter((channel) => channel.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())) : [],
   );
   let canCreate = $derived(online && Boolean(snapshot?.serverPermissions.includes("createChannels")));
   let canReorder = $derived(online && !search.trim() && !pending &&
@@ -139,15 +156,45 @@
     return true;
   }
 
+  /** Identifies a channel tree by each parent's ordered children, independent of how the flat list is ordered. */
+  function arrangementKey(list: readonly { id: string; parentId: string | null }[]) {
+    const groups = new Map<string, string[]>();
+    for (const { id, parentId } of list) {
+      const siblings = groups.get(parentId ?? "");
+      if (siblings) siblings.push(id);
+      else groups.set(parentId ?? "", [id]);
+    }
+    return [...groups].map(([parent, ids]) => `${parent}>${ids.join(",")}`).sort().join(";");
+  }
+
+  $effect(() => {
+    if (preview && snapshot && arrangementKey(snapshot.channels) === preview.key) preview = null;
+  });
+
+  function previewPlacement(origin: string, source: Channel, target: Channel, placement: ChannelPlacement): Preview {
+    const order = channels.filter(({ id }) => id !== source.id).map(({ id, parentId }) => ({ id, parentId }));
+    const parentId = placement === "inside" ? target.id : target.parentId;
+    const targetIndex = order.findIndex(({ id }) => id === target.id);
+    const index = placement === "inside" ? order.length : targetIndex + (placement === "after" ? 1 : 0);
+    order.splice(index, 0, { id: source.id, parentId });
+    return { origin, order, key: arrangementKey(order) };
+  }
+
   async function placeChannel(source: Channel, target: Channel, placement: ChannelPlacement) {
     if (!canReorder || !canPlaceChannel(source, target, placement)) return;
     const origin = workspace.serverOrigin;
     const parentId = placement === "inside" ? target.id : target.parentId;
-    if (await workspace.reorderChannel(source.id, target.id, placement, parentId === source.parentId ? undefined : parentId) &&
-      parentId && workspace.serverOrigin === origin) {
+    const shown = previewPlacement(origin, source, target, placement);
+    preview = shown;
+    if (parentId && collapsed.includes(parentId)) {
       collapsed = collapsed.filter((id) => id !== parentId);
       persistCollapsed();
     }
+    const saved = await workspace.reorderChannel(source.id, target.id, placement, parentId === source.parentId ? undefined : parentId);
+    if (preview !== shown) return;
+    // The snapshot normally confirms the move first; never leave a stale arrangement on screen.
+    if (!saved) preview = null;
+    else setTimeout(() => { if (preview === shown) preview = null; }, 3000);
   }
 
   function membersIn(channelId: string) {
@@ -177,10 +224,10 @@
     event.dataTransfer.setData(memberDragType, member.connectionId);
   }
 
-  function memberDropIds(channel: Channel) {
-    if (!draggedMembers || draggedMembers.connectionId !== snapshot?.connectionId || !online || pending || !channel.canMove) return [];
+  function memberDropIds(channel: Channel, dragged = draggedMembers) {
+    if (!dragged || dragged.connectionId !== snapshot?.connectionId || !online || pending || !channel.canMove) return [];
     const ids: string[] = [];
-    for (const [id, sourceId] of draggedMembers.members) {
+    for (const [id, sourceId] of dragged.members) {
       if (movableMembers.get(id) !== sourceId) return [];
       if (sourceId !== channel.id) ids.push(id);
     }
@@ -204,58 +251,103 @@
     draggedChannel = { id: channel.id, origin: workspace.serverOrigin };
   }
 
-  function dragPlacement(event: DragEvent & { currentTarget: HTMLDivElement }, source: Channel, target: Channel): ChannelPlacement | null {
+  /** Resolves where a drop lands; dropping below an expanded parent goes before its first child, where the line is drawn. */
+  function resolveDrop(source: Channel, target: Channel, placement: ChannelPlacement): DropTarget | null {
+    const first = placement === "after" && !collapsed.includes(target.id) ? channelsByParent.get(target.id)?.[0] : undefined;
+    if (first) return first.id !== source.id && canPlaceChannel(source, first, "before") ? { id: first.id, placement: "before" } : null;
+    return canPlaceChannel(source, target, placement) ? { id: target.id, placement } : null;
+  }
+
+  function dragPlacement(event: DragEvent & { currentTarget: HTMLDivElement }, source: Channel, target: Channel): DropTarget | null {
     const bounds = event.currentTarget.getBoundingClientRect();
-    const offset = (event.clientY - bounds.top) / bounds.height;
-    let placement: ChannelPlacement = offset < 0.5 ? "before" : "after";
-    if (source.canReparent !== undefined && offset >= 0.25 && offset <= 0.75) placement = "inside";
-    return canPlaceChannel(source, target, placement) ? placement : null;
+    const y = event.clientY - bounds.top;
+    const half: ChannelPlacement = y < bounds.height / 2 ? "before" : "after";
+    if (source.canReparent === undefined) return resolveDrop(source, target, half);
+    // Only a thin band at each edge reorders; the rest of the row nests, and each falls back to the other when not allowed.
+    const edge = Math.min(10, bounds.height / 4);
+    const zone: ChannelPlacement = y < edge ? "before" : y > bounds.height - edge ? "after" : "inside";
+    const order: ChannelPlacement[] = zone === "inside" ? ["inside", half] : [zone, "inside"];
+    for (const placement of order) {
+      const resolved = resolveDrop(source, target, placement);
+      if (resolved) return resolved;
+    }
+    return null;
   }
 
   function dragSource() {
     if (canReorder && draggedChannel?.origin === workspace.serverOrigin) return channelsById.get(draggedChannel.id);
   }
 
+  function clearExpandTimer() {
+    if (expandTimer) clearTimeout(expandTimer.timeout);
+    expandTimer = null;
+  }
+
+  /** Opens a collapsed channel after hovering a nesting drop over it, so deeper levels can be reached. */
+  function scheduleExpand(target: DropTarget | null) {
+    const id = target?.placement === "inside" && collapsed.includes(target.id) ? target.id : null;
+    if (expandTimer?.id === id) return;
+    clearExpandTimer();
+    if (!id) return;
+    expandTimer = {
+      id,
+      timeout: setTimeout(() => {
+        expandTimer = null;
+        if (!draggedChannel && !draggedMembers) return;
+        collapsed = collapsed.filter((item) => item !== id);
+        persistCollapsed();
+      }, 600),
+    };
+  }
+
+  function setDropTarget(target: DropTarget | null) {
+    if (dropTarget?.id !== target?.id || dropTarget?.placement !== target?.placement) dropTarget = target;
+    scheduleExpand(target);
+  }
+
   function dragOver(event: DragEvent & { currentTarget: HTMLDivElement }, channel: Channel) {
-    let placement: ChannelPlacement | null | undefined;
+    let target: DropTarget | null | undefined;
     if (event.dataTransfer?.types.includes(memberDragType)) {
-      placement = memberDropIds(channel).length ? "inside" : null;
+      target = memberDropIds(channel).length ? { id: channel.id, placement: "inside" } : null;
     } else {
       const source = dragSource();
-      placement = source && dragPlacement(event, source, channel);
+      target = source && dragPlacement(event, source, channel);
     }
-    if (!placement) {
-      dropTarget = null;
-      return;
-    }
+    setDropTarget(target ?? null);
+  }
+
+  /** Keeps the last drop target while the pointer crosses the gaps between rows, so the indicator does not flicker. */
+  function listDragOver(event: DragEvent) {
+    if (!dropTarget || (!draggedChannel && !draggedMembers)) return;
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-    if (dropTarget?.id !== channel.id || dropTarget.placement !== placement) dropTarget = { id: channel.id, placement };
+  }
+
+  function listDragLeave(event: DragEvent & { currentTarget: HTMLDivElement }) {
+    if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) setDropTarget(null);
   }
 
   function endDrag() {
+    clearExpandTimer();
     draggedMembers = null;
     draggedChannel = null;
     dropTarget = null;
   }
 
-  function dropChannel(event: DragEvent & { currentTarget: HTMLDivElement }, channel: Channel) {
-    if (event.dataTransfer?.types.includes(memberDragType)) {
-      const ids = memberDropIds(channel);
-      endDrag();
-      if (ids.length) {
-        event.preventDefault();
-        void moveMembers(channel.id, ids);
-      }
-      return;
-    }
+  function drop(event: DragEvent) {
+    const target = dropTarget;
+    const channel = target && channelsById.get(target.id);
+    const members = draggedMembers;
     const source = dragSource();
-    if (!source) return;
-    const placement = dragPlacement(event, source, channel);
     endDrag();
-    if (!placement) return;
+    if (!target || !channel) return;
     event.preventDefault();
-    void placeChannel(source, channel, placement);
+    if (members) {
+      const ids = memberDropIds(channel, members);
+      if (ids.length) void moveMembers(channel.id, ids);
+    } else if (source) {
+      void placeChannel(source, channel, target.placement);
+    }
   }
 </script>
 
@@ -271,10 +363,6 @@
     <div class="channel-row" role="group" data-selected={isSelected} data-drop={dropTarget?.id === channel.id ? dropTarget.placement : undefined}
       data-dragging={draggedChannel?.id === channel.id ? "" : undefined}
       ondragover={(event) => dragOver(event, channel)}
-      ondragleave={(event) => {
-        if (dropTarget?.id === channel.id && !(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) dropTarget = null;
-      }}
-      ondrop={(event) => dropChannel(event, channel)}
       style:--depth={Math.min(depth, 6)}>
       {#if image}
         {#key image}
@@ -372,7 +460,7 @@
       </Button>
     {/if}
   </div>
-  <div class="channel-scroll">
+  <div class="channel-scroll" role="presentation" ondragover={listDragOver} ondragleave={listDragLeave} ondrop={drop}>
     {#if snapshot?.channels.length}
       <ul class="channel-list">
         {#if search.trim()}

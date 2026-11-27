@@ -207,11 +207,19 @@
             </span>
           {/if}
         </span>
-        {#if member.adminDeafened || member.deafened}
-          <HeadphoneOff size={13} class="member-state" aria-label={member.adminDeafened ? "Server deafened" : "Deafened"} />
-        {/if}
-        {#if member.adminMuted || member.muted}
-          <MicOff size={13} class="member-state" aria-label={member.adminMuted ? "Server muted" : "Muted"} />
+        {#if member.adminDeafened || member.deafened || member.adminMuted || member.muted}
+          <span class="member-states">
+            {#if member.adminDeafened || member.deafened}
+              <HeadphoneOff size={16} strokeWidth={2.25} class="member-state"
+                role="img" aria-label={member.adminDeafened ? "Server deafened" : "Deafened"}
+                title={member.adminDeafened ? "Server deafened" : "Deafened"} />
+            {/if}
+            {#if member.adminMuted || member.muted}
+              <MicOff size={16} strokeWidth={2.25} class="member-state"
+                role="img" aria-label={member.adminMuted ? "Server muted" : "Muted"}
+                title={member.adminMuted ? "Server muted" : "Muted"} />
+            {/if}
+          </span>
         {/if}
       </button>
     {/snippet}
