@@ -34,6 +34,7 @@
   import { identityModeKey, readLocalIdentity, rememberIdentityMode, type LocalProfile } from "#lib/identity/local-identity";
   import { createProfilePictureCache } from "#lib/identity/profile-picture";
   import { browserServerOrigin, browserSessions } from "#lib/connection/browser-session";
+  import { certificateApproval, inspectServer, trustServer, type CertificateContact } from "#lib/connection/server-trust";
   import { applyAppearance, readAppearance } from "#lib/theme";
   import { readChatDisplay, saveChatDisplay, setChatDisplay, type ChatDisplay } from "#lib/chat/chat-display";
   import { setWorkspace, type ChannelPlacement, type MobilePane, type RoomView } from "#lib/workspace";
@@ -103,7 +104,6 @@
   let connectError = $state("");
   let bookmarkOrigin = $state("");
   let discoverAddress = $state(import.meta.env.VITE_DEFAULT_SERVER || "");
-  interface CertificateContact { origin: string; fingerprint: string; publiclyTrusted: boolean }
   let trustPrompt = $state<(CertificateContact & { previous?: string }) | null>(null);
   let discovery = $state.raw<Target | null>(null);
   let accessPrompt = $state(false);
@@ -530,15 +530,16 @@
     if (connections.has(origin)) return;
     setConnection(origin, { view: { ...offline, phase: "connecting" } });
     try {
-      if (desktopApp()) {
-        const contact = await call<CertificateContact>("inspect_server", { address: origin });
+      if (certificateApproval()) {
+        const contact = await inspectServer(origin);
         const previous = (await preferences.trust.get(contact.origin))?.fingerprint;
         if (contact.origin !== origin || !(previous === contact.fingerprint || (!previous && contact.publiclyTrusted))) {
           throw new Error("Check this server's certificate to connect.");
         }
         if (!connections.has(origin)) return;
-        await call("prepare_server", { origin, fingerprint: previous ?? null });
-      } else await browserSessions.select(origin);
+        await trustServer(origin, previous ?? null);
+      }
+      if (!desktopApp()) await browserSessions.select(origin);
       const info = await getServerInfo(origin);
       setConnection(origin, { info }, false);
       if (!info.identityAuthentication || !info.identityEnrollment || info.setupRequired) {
@@ -615,7 +616,8 @@
   }
 
   async function loadServer(contact: CertificateContact, fingerprint: string | null, rememberTrust = false) {
-    const origin = await call<string>("prepare_server", { origin: contact.origin, fingerprint });
+    const origin = await trustServer(contact.origin, fingerprint);
+    if (!desktopApp()) await browserSessions.select(origin);
     if (rememberTrust) await preferences.trust.put({ origin, fingerprint: contact.fingerprint });
     await discoverServerInfo(origin);
   }
@@ -699,14 +701,14 @@
         throw new Error("Enter the full invitation link, including the code after #.");
       }
       serverCode = invitation ?? "";
-      if (!desktopApp()) {
+      if (!certificateApproval()) {
         const origin = browserServerOrigin(address);
         if (focusLive(origin)) return;
         await browserSessions.select(origin);
         await discoverServerInfo(origin);
         return;
       }
-      const contact = await call<CertificateContact>("inspect_server", { address });
+      const contact = await inspectServer(address);
       if (focusLive(contact.origin)) return;
       const previous = (await preferences.trust.get(contact.origin))?.fingerprint;
       if (previous === contact.fingerprint) await loadServer(contact, previous);
@@ -1063,7 +1065,7 @@
   {#if poke}{poke.senderName} poked you. {poke.message}{/if}
 </div>
 {#if poke}
-  <div class="fixed inset-x-3 top-[max(0.75rem,env(safe-area-inset-top))] z-50 mx-auto flex max-w-md items-start gap-1 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg">
+  <div class="fixed inset-x-3 top-[max(0.75rem,var(--safe-area-inset-top))] z-50 mx-auto flex max-w-md items-start gap-1 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg">
     <button type="button" class="flex min-w-0 flex-1 items-start gap-3 rounded-md p-2 text-left hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
       onclick={replyToPoke}>
       <BellRing size={20} class="mt-0.5 shrink-0 text-(--info)" aria-hidden="true" />

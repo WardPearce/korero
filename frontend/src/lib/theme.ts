@@ -1,4 +1,5 @@
 import { browser } from "$app/environment";
+import { applySystemBars } from "./system-bars";
 import logo from "../../static/korero-logo.svg?raw";
 
 export const colorFields = [
@@ -274,6 +275,8 @@ export function applyAppearance(appearance: Appearance, theme: Theme = themeFor(
   root.toggleAttribute("data-glass", appearance.glassmorphism);
   root.toggleAttribute("data-image", Boolean(theme.image));
   for (const [key, value] of Object.entries(properties(theme))) root.style.setProperty(key, value);
+
+  applySystemBars(theme.scheme);
 
   const favicon = document.querySelector<HTMLLinkElement>("#app-favicon");
   if (favicon) {

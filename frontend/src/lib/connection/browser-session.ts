@@ -2,6 +2,7 @@ import { offline, requestError, messageFrom, isSameDirectMessage, type DirectMes
 import { MobileCallAudio } from "../media/mobile-call-audio";
 import { WebVoice } from "../media/web-voice";
 import { mobileApp, voiceApp } from "./platform";
+import { openServerSocket, serverFetch, type ServerSocket } from "./transport";
 
 type Credentials = { accessToken: string; refreshToken: string; accessExpiresAt: number };
 type Reply = { type: string; id: number; success: boolean; payload: unknown; error?: unknown };
@@ -32,7 +33,7 @@ const callAudio = new MobileCallAudio();
 class BrowserSession {
   private credentials?: Credentials;
   private refresh?: Promise<void>;
-  private socket?: WebSocket;
+  private socket?: ServerSocket;
   private heartbeat?: ReturnType<typeof setInterval>;
   private nextId = 0;
   private readonly callAudio = callAudio;
@@ -73,8 +74,8 @@ class BrowserSession {
   }
 
   private post(path: string, body?: unknown, accessToken?: string) {
-    return fetch(this.origin + path, {
-      method: "POST", redirect: "error", signal: AbortSignal.timeout(8000),
+    return serverFetch(this.origin + path, {
+      method: "POST", timeout: 8000,
       headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}),
         ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -106,7 +107,7 @@ class BrowserSession {
       headers.set("authorization", `Bearer ${token}`);
     }
     const attachment = path === "/api/v1/chat/attachments" || path.startsWith("/api/v1/chat/attachments/");
-    return fetch(request, { headers, signal: AbortSignal.timeout(attachment ? 120000 : 8000), redirect: "error" });
+    return serverFetch(request, { headers, timeout: attachment ? 120000 : 8000 });
   }
 
   private async ticket() {
@@ -123,7 +124,7 @@ class BrowserSession {
     try {
       const { ticket, token } = await this.ticket();
       let connectionToken = token;
-      const socket = new WebSocket(this.origin.replace(/^https:/, "wss:") + "/api/v1/ws");
+      const socket = openServerSocket(this.origin.replace(/^https:/, "wss:") + "/api/v1/ws");
       this.socket = socket;
       let authorized = false;
       socket.onclose = () => {
@@ -169,7 +170,7 @@ class BrowserSession {
   }
 
   /** Fetches direct messages queued while offline, then acknowledges them. */
-  private async receiveQueued(socket: WebSocket) {
+  private async receiveQueued(socket: ServerSocket) {
     try {
       for (let page = 0; page < directMessageLimit / 100; page++) {
         const queued = await this.rpc<DirectMessage[]>("direct.pending");
@@ -478,7 +479,7 @@ class BrowserSessions {
     if (session) return session.fetch(request);
     const path = new URL(request.url).pathname;
     if (path === "/api/v1/server/info" || path === "/api/v1/server/capabilities") {
-      return fetch(request, { signal: AbortSignal.timeout(8000), redirect: "error" });
+      return serverFetch(request, { timeout: 8000 });
     }
     throw new Error("The selected server changed.");
   }

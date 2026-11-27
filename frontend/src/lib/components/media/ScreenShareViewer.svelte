@@ -341,7 +341,7 @@
     position: fixed;
     z-index: 40;
     right: 12px;
-    bottom: max(12px, env(safe-area-inset-bottom));
+    bottom: max(12px, var(--safe-area-inset-bottom));
     width: min(36rem, calc(100% - 24px));
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);

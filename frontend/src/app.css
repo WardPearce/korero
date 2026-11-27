@@ -5,6 +5,11 @@
 
 :root {
   color-scheme: dark;
+  /* Populated by the Capacitor SystemBars plugin on Android; zero otherwise. */
+  --safe-area-inset-top: 0px;
+  --safe-area-inset-right: 0px;
+  --safe-area-inset-bottom: 0px;
+  --safe-area-inset-left: 0px;
   --background: #0c1218;
   --foreground: #f2f6fa;
   --card: #18232d;
@@ -160,7 +165,7 @@ body {
 }
 
 .server-rail, .settings-nav { background: var(--muted); }
-.rail-top { flex: 1; overflow: auto; padding: 16px 12px; }
+.rail-top { flex: 1; overflow: auto; padding: 16px 12px; padding-top: calc(16px + var(--safe-area-inset-top)); }
 .brand {
   width: 7rem;
   margin: 0 0 20px;
@@ -270,6 +275,7 @@ body {
   gap: 12px;
   min-height: 70px;
   padding: var(--ui-gap);
+  padding-top: calc(var(--ui-gap) + var(--safe-area-inset-top));
   border-bottom: 1px solid var(--border);
 }
 .channel-top h1, .workspace-header :is(h1, h2) { font-size: calc(clamp(1rem, 2vw, 1.25rem) * var(--text-scale)); line-height: 1.2; }
@@ -706,7 +712,7 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
   .settings-shell[data-connected] > .settings-voice { grid-column: 1; grid-row: 1; }
   .settings-shell[data-connected] > .settings-nav { grid-column: 1; grid-row: 2; }
   .settings-shell[data-connected] > .room-pane { grid-column: 1; grid-row: 3; }
-  .settings-nav { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 4px; border: 0; border-bottom: 1px solid var(--border); }
+  .settings-nav { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 4px; padding-top: calc(4px + var(--safe-area-inset-top)); border: 0; border-bottom: 1px solid var(--border); }
   .settings-nav .settings-back { display: none; }
   .settings-nav a { flex-direction: column; justify-content: center; gap: 2px; padding: 4px 2px; font-size: var(--type-caption); text-align: center; overflow-wrap: anywhere; }
   .mobile-nav {
@@ -714,11 +720,19 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
     grid-row: 3;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 4px;
-    padding: 4px 4px max(4px, env(safe-area-inset-bottom));
+    padding: 4px 4px max(4px, var(--safe-area-inset-bottom));
     border-top: 1px solid var(--border);
     background: var(--muted);
   }
   .mobile-nav :is(a, button) { flex-direction: column; min-width: 0; justify-content: center; gap: 2px; padding: 4px; font-size: var(--type-caption); }
+}
+
+/* Desktop panes span the full height, so their bottom edges clear the navigation bar. */
+@media (min-width: 761px) {
+  .rail-bottom { padding-bottom: calc(10px + var(--safe-area-inset-bottom)); }
+  .channel-footer { padding-bottom: calc(8px + var(--safe-area-inset-bottom)); }
+  .composer { padding-bottom: calc(var(--ui-gap) + var(--safe-area-inset-bottom)); }
+  .workspace:not(.chat-workspace) { padding-bottom: calc(var(--ui-gap) + var(--safe-area-inset-bottom)); }
 }
 
 [data-glass] {
