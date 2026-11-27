@@ -27,6 +27,7 @@
 	import X from '@lucide/svelte/icons/x';
 	import MicOff from '@lucide/svelte/icons/mic-off';
 	import Monitor from '@lucide/svelte/icons/monitor';
+	import { openDownloadDialog } from '#lib/download-dialog.js';
 
 	const features = [
 		{
@@ -123,14 +124,18 @@
 				Talk on a server you own.
 			</h1>
 			<p class="mt-6 max-w-[34rem] text-lg text-muted-foreground">
-				Kōrero is a voice and chat server you run yourself. Your friends, community or team join
-				with a key, speak in channels, share screens and message each other privately. Nothing
-				passes through anyone else's cloud.
+				Kōrero is an open source voice and chat server you run yourself. Your friends, community or
+				team join with a key, speak in channels, share screens and message each other privately.
+				Nothing passes through anyone else's cloud.
 			</p>
 			<div class="mt-9 flex flex-wrap gap-3">
 				<a
 					href="#get"
 					class="rounded-lg bg-primary px-5 py-2.5 font-medium text-primary-foreground hover:brightness-110"
+					onclick={(event) => {
+						event.preventDefault();
+						openDownloadDialog();
+					}}
 				>
 					Download the app
 				</a>
@@ -517,6 +522,8 @@ docker logs korero`}
 					<li>
 						<a
 							href="https://github.com/WardPearce/korero"
+							target="_blank"
+							rel="noopener noreferrer"
 							class="block rounded-xl border border-border bg-card px-5 py-4 font-medium hover:border-input"
 						>
 							{p}

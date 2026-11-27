@@ -1,0 +1,166 @@
+<script lang="ts">
+	import { tick } from 'svelte';
+	import Apple from '@lucide/svelte/icons/apple';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import Monitor from '@lucide/svelte/icons/monitor';
+	import Smartphone from '@lucide/svelte/icons/smartphone';
+	import Terminal from '@lucide/svelte/icons/terminal';
+	import X from '@lucide/svelte/icons/x';
+	import { closeDownloadDialog, downloadDialogOpen } from '#lib/download-dialog.js';
+
+	const releaseUrl = 'https://github.com/WardPearce/korero/releases/latest';
+
+	const options = [
+		{ name: 'Linux', icon: Terminal },
+		{ name: 'Windows', icon: Monitor },
+		{ name: 'macOS', icon: Apple },
+		{ name: 'Android', icon: Smartphone }
+	];
+
+	let panel = $state<HTMLDivElement>();
+	let closeButton = $state<HTMLButtonElement>();
+
+	$effect(() => {
+		if (!$downloadDialogOpen) return;
+
+		const trigger = document.activeElement as HTMLElement | null;
+		const previousOverflow = document.body.style.overflow;
+		document.body.style.overflow = 'hidden';
+		void tick().then(() => closeButton?.focus());
+
+		return () => {
+			document.body.style.overflow = previousOverflow;
+			trigger?.focus();
+		};
+	});
+
+	function handleKeydown(event: KeyboardEvent) {
+		if (!$downloadDialogOpen) return;
+
+		if (event.key === 'Escape') {
+			event.preventDefault();
+			closeDownloadDialog();
+			return;
+		}
+
+		if (event.key !== 'Tab' || !panel) return;
+
+		const focusable = panel.querySelectorAll<HTMLElement>('a[href], button:not([disabled])');
+		if (focusable.length === 0) return;
+
+		const first = focusable[0];
+		const last = focusable[focusable.length - 1];
+
+		if (event.shiftKey && document.activeElement === first) {
+			event.preventDefault();
+			last.focus();
+		} else if (!event.shiftKey && document.activeElement === last) {
+			event.preventDefault();
+			first.focus();
+		}
+	}
+
+	function handleBackdropClick(event: MouseEvent) {
+		if (event.target === event.currentTarget) closeDownloadDialog();
+	}
+</script>
+
+<svelte:window onkeydown={handleKeydown} />
+
+{#if $downloadDialogOpen}
+	<div
+		class="backdrop fixed inset-0 z-50 flex items-end justify-center bg-background/80 p-4 backdrop-blur-sm sm:items-center"
+		role="presentation"
+		onclick={handleBackdropClick}
+	>
+		<div
+			bind:this={panel}
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="download-title"
+			aria-describedby="download-description"
+			class="panel w-full max-w-2xl overflow-hidden rounded-2xl border border-border bg-card shadow-[0_30px_80px_rgb(0_0_0/60%)]"
+		>
+			<div class="flex items-start justify-between gap-4 border-b border-border px-7 py-6">
+				<div>
+					<h2 id="download-title" class="text-xl">Get Kōrero</h2>
+					<p id="download-description" class="mt-1 text-sm text-muted-foreground">
+						Choose your platform. Every build is on the latest GitHub release.
+					</p>
+				</div>
+				<button
+					bind:this={closeButton}
+					type="button"
+					aria-label="Close download options"
+					class="grid size-9 shrink-0 place-items-center rounded-lg border border-border text-muted-foreground hover:border-input hover:text-foreground"
+					onclick={closeDownloadDialog}
+				>
+					<X size={18} />
+				</button>
+			</div>
+
+			<ul class="grid gap-3 p-5 sm:grid-cols-2">
+				{#each options as option (option.name)}
+					<li>
+						<a
+							href={releaseUrl}
+							target="_blank"
+							rel="noopener noreferrer"
+							class="group flex h-full items-center gap-4 rounded-xl border border-border bg-background px-5 py-5 hover:border-input hover:bg-muted"
+						>
+							<span
+								class="grid size-10 shrink-0 place-items-center rounded-lg border border-border text-primary"
+							>
+								<option.icon size={20} />
+							</span>
+							<span class="min-w-0 font-medium">{option.name}</span>
+							<ChevronRight
+								size={18}
+								class="ml-auto shrink-0 text-muted-foreground group-hover:text-foreground"
+							/>
+						</a>
+					</li>
+				{/each}
+			</ul>
+
+			<div
+				class="flex flex-wrap items-center justify-end gap-3 border-t border-border px-7 py-5 text-sm text-muted-foreground"
+			>
+				<a
+					href={releaseUrl}
+					target="_blank"
+					rel="noopener noreferrer"
+					class="font-medium text-foreground underline underline-offset-4 hover:text-primary"
+				>
+					All downloads
+				</a>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<style>
+	.backdrop {
+		animation: backdrop-in 140ms ease-out;
+	}
+	.panel {
+		animation: panel-in 160ms ease-out;
+	}
+	@keyframes backdrop-in {
+		from {
+			opacity: 0;
+		}
+	}
+	@keyframes panel-in {
+		from {
+			opacity: 0;
+			transform: translateY(8px) scale(0.98);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.backdrop,
+		.panel {
+			animation: none;
+		}
+	}
+</style>

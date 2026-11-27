@@ -1,5 +1,6 @@
 <script lang="ts">
 	import './layout.css';
+	import DownloadDialog from '#lib/components/DownloadDialog.svelte';
 	import type { LayoutProps } from './$types';
 
 	let { children }: LayoutProps = $props();
@@ -16,3 +17,5 @@
 </svelte:head>
 
 {@render children()}
+
+<DownloadDialog />

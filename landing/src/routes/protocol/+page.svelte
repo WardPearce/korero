@@ -88,13 +88,28 @@
 			{/each}
 		</div>
 		<div class="mt-8 flex flex-wrap gap-3">
-			<a href="{repo}/protocol-v1.schema.json" class="hero-button primary">
+			<a
+				href="{repo}/protocol-v1.schema.json"
+				target="_blank"
+				rel="noopener noreferrer"
+				class="hero-button primary"
+			>
 				<FileJson size={16} /> JSON Schema
 			</a>
-			<a href="{repo}/authentication.md" class="hero-button">
+			<a
+				href="{repo}/authentication.md"
+				target="_blank"
+				rel="noopener noreferrer"
+				class="hero-button"
+			>
 				<ShieldCheck size={16} /> Authentication
 			</a>
-			<a href="{repo}/server-identity.md" class="hero-button">
+			<a
+				href="{repo}/server-identity.md"
+				target="_blank"
+				rel="noopener noreferrer"
+				class="hero-button"
+			>
 				<Fingerprint size={16} /> Server identity
 			</a>
 		</div>
@@ -120,7 +135,7 @@
 					</li>
 				{/each}
 			</ol>
-			<a href="{repo}/protocol.md" class="toc-source">
+			<a href="{repo}/protocol.md" target="_blank" rel="noopener noreferrer" class="toc-source">
 				Read the source doc <ArrowRight size={14} />
 			</a>
 		</div>
@@ -133,7 +148,9 @@
 			message IDs and use a positive integer request ID in each WebSocket envelope. Clients should
 			preserve unknown fields in extensible media data and ignore unknown events. Request schemas
 			are available as
-			<a href="{repo}/protocol-v1.schema.json">JSON Schema</a>. References such as
+			<a href="{repo}/protocol-v1.schema.json" target="_blank" rel="noopener noreferrer">
+				JSON Schema
+			</a>. References such as
 			<code>#/$defs/websocketRequest</code> select individual schemas.
 		</p>
 
@@ -214,7 +231,10 @@
 								/<wbr />api/<wbr />v1/<wbr />auth/<wbr />identity/<wbr />login
 							</code>
 						</td>
-						<td>Signed login challenge and configured server password for accounts created without an invitation</td>
+						<td>
+							Signed login challenge and configured server password for accounts created without an
+							invitation
+						</td>
 						<td><code>id, signature, password?</code></td>
 						<td>Account and new session</td>
 					</tr>
@@ -759,8 +779,8 @@
 						<td><code>channel.create</code></td>
 						<td>
 							<code>
-								name, description?, parentId?, position?, capacity?, password?, backgroundImageUrl?, icon?,
-								audioBitrate?, temporary?
+								name, description?, parentId?, position?, capacity?, password?, backgroundImageUrl?,
+								icon?, audioBitrate?, temporary?
 							</code>
 						</td>
 						<td><code>&#123;channelId, state&#125;</code></td>
@@ -1358,7 +1378,7 @@
 		<div class="doc-footer">
 			<p>Protocol v1 · Part of the Kōrero source documentation.</p>
 			<div class="doc-footer-links">
-				<a href="{repo}/protocol.md">Edit this page</a>
+				<a href="{repo}/protocol.md" target="_blank" rel="noopener noreferrer">Edit this page</a>
 				<a href="/host">Deploy a server <ArrowRight size={15} /></a>
 			</div>
 		</div>
