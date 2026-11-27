@@ -12,6 +12,9 @@ jobs:
     defaults:
       run:
         working-directory: frontend
+    env:
+      # The pinned WebRTC libc++ headers require Clang 19 or newer.
+      CXX: clang++-20
     steps:
       - uses: actions/checkout@v5
 
@@ -25,8 +28,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            build-essential clang cmake git libgtk-3-dev libayatana-appindicator3-dev \
+            build-essential cmake git libgtk-3-dev libayatana-appindicator3-dev \
             libfuse2 libssl-dev librsvg2-dev ninja-build patchelf pkg-config rpm
+
+      - name: Install Clang 20
+        run: |
+          curl --fail --silent --show-error --location https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 20
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile

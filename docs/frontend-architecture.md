@@ -24,8 +24,8 @@ connections, signs identity challenges, and keeps the session credentials in
 memory. The same process uses libmediasoupclient and libwebrtc for voice.
 Electron supplies the camera and the screen or window picker.
 
-Install Bun 1.4.5, Node.js 22.12 or newer, Rust 1.95 or newer, Clang with its resource
-headers, CMake, Ninja, Git, curl, pkg-config, and the X11 development headers.
+Install Bun 1.4.5, Node.js 22.12 or newer, Rust 1.95 or newer, Clang 19 or newer with its
+resource headers, CMake, Ninja, Git, curl, pkg-config, and the X11 development headers.
 First-time desktop builds prepare the pinned WebRTC SDK in
 `frontend/.native/m140-linux-x86_64`. Set `CXX` to select another Clang or
 `KORERO_MEDIA_SDK` to use a prepared SDK.
