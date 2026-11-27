@@ -2,20 +2,38 @@
 	import { tick } from 'svelte';
 	import Apple from '@lucide/svelte/icons/apple';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import Download from '@lucide/svelte/icons/download';
 	import Monitor from '@lucide/svelte/icons/monitor';
 	import Smartphone from '@lucide/svelte/icons/smartphone';
 	import Terminal from '@lucide/svelte/icons/terminal';
 	import X from '@lucide/svelte/icons/x';
 	import { closeDownloadDialog, downloadDialogOpen } from '#lib/download-dialog.js';
+	import type { LatestRelease, PlatformId } from '#lib/releases.js';
 
-	const releaseUrl = 'https://github.com/WardPearce/korero/releases/latest';
+	let { release }: { release: LatestRelease | null } = $props();
 
-	const options = [
-		{ name: 'Linux', icon: Terminal },
-		{ name: 'Windows', icon: Monitor },
-		{ name: 'macOS', icon: Apple },
-		{ name: 'Android', icon: Smartphone }
+	const releaseUrl = $derived(
+		release?.url ?? 'https://github.com/WardPearce/korero/releases/latest'
+	);
+
+	const platformOptions: { id: PlatformId; name: string; icon: typeof Terminal }[] = [
+		{ id: 'linux', name: 'Linux', icon: Terminal },
+		{ id: 'windows', name: 'Windows', icon: Monitor },
+		{ id: 'macos', name: 'macOS', icon: Apple },
+		{ id: 'android', name: 'Android', icon: Smartphone }
 	];
+
+	const options = $derived(
+		platformOptions.map((platform) => ({
+			...platform,
+			download: release?.platforms.find((entry) => entry.id === platform.id)
+		}))
+	);
+
+	function formatSize(bytes: number) {
+		if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+		return `${Math.round(bytes / (1024 * 1024))} MB`;
+	}
 
 	let panel = $state<HTMLDivElement>();
 	let closeButton = $state<HTMLButtonElement>();
@@ -85,7 +103,11 @@
 				<div>
 					<h2 id="download-title" class="text-xl">Get Kōrero</h2>
 					<p id="download-description" class="mt-1 text-sm text-muted-foreground">
-						Choose your platform. Every build is on the latest GitHub release.
+						{#if release}
+							Latest release {release.version}. Choose your platform for a direct download.
+						{:else}
+							Choose your platform. Every build is on the latest GitHub release.
+						{/if}
 					</p>
 				</div>
 				<button
@@ -100,25 +122,59 @@
 			</div>
 
 			<ul class="grid gap-3 p-5 sm:grid-cols-2">
-				{#each options as option (option.name)}
-					<li>
+				{#each options as option (option.id)}
+					<li
+						class="flex h-full flex-col rounded-xl border border-border bg-background hover:border-input hover:bg-muted"
+					>
 						<a
-							href={releaseUrl}
+							href={option.download?.primary.url ?? releaseUrl}
 							target="_blank"
-							rel="noopener noreferrer"
-							class="group flex h-full items-center gap-4 rounded-xl border border-border bg-background px-5 py-5 hover:border-input hover:bg-muted"
+							rel="external noopener noreferrer"
+							class="group flex items-center gap-4 px-5 py-5"
 						>
 							<span
 								class="grid size-10 shrink-0 place-items-center rounded-lg border border-border text-primary"
 							>
 								<option.icon size={20} />
 							</span>
-							<span class="min-w-0 font-medium">{option.name}</span>
-							<ChevronRight
-								size={18}
-								class="ml-auto shrink-0 text-muted-foreground group-hover:text-foreground"
-							/>
+							<span class="min-w-0">
+								<span class="block font-medium">{option.name}</span>
+								{#if option.download}
+									<span class="block text-xs text-muted-foreground">
+										{option.download.primary.label} · {formatSize(option.download.primary.size)}
+									</span>
+								{:else}
+									<span class="block text-xs text-muted-foreground">View releases</span>
+								{/if}
+							</span>
+							{#if option.download}
+								<Download
+									size={18}
+									class="ml-auto shrink-0 text-muted-foreground group-hover:text-foreground"
+								/>
+							{:else}
+								<ChevronRight
+									size={18}
+									class="ml-auto shrink-0 text-muted-foreground group-hover:text-foreground"
+								/>
+							{/if}
 						</a>
+						{#if option.download?.alternatives.length}
+							<div
+								class="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-5 py-3 text-xs text-muted-foreground"
+							>
+								{#each option.download.alternatives as alternative (alternative.label)}
+									<a
+										href={alternative.url}
+										target="_blank"
+										rel="external noopener noreferrer"
+										class="hover:text-foreground hover:underline hover:underline-offset-4"
+									>
+										{alternative.label}
+									</a>
+								{/each}
+							</div>
+						{/if}
 					</li>
 				{/each}
 			</ul>
@@ -129,7 +185,7 @@
 				<a
 					href={releaseUrl}
 					target="_blank"
-					rel="noopener noreferrer"
+					rel="external noopener noreferrer"
 					class="font-medium text-foreground underline underline-offset-4 hover:text-primary"
 				>
 					All downloads

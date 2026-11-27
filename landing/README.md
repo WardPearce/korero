@@ -54,3 +54,10 @@ npm run build
 You can preview the production build with `npm run preview`.
 
 > To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+
+## Download links
+
+The download dialog resolves platform installers from the latest public release in
+[`WardPearce/korero`](https://github.com/WardPearce/korero/releases) at request time. The
+server caches the GitHub API response for 10 minutes to stay within the unauthenticated
+rate limit. Set `GITHUB_TOKEN` to raise the limit for busier deployments.
