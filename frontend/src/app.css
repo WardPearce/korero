@@ -376,9 +376,9 @@ body {
   border-radius: var(--radius-sm);
   align-items: center;
   width: 100%;
-  gap: 6px;
-  padding: 4px 6px;
-  font-size: var(--type-small);
+  gap: 8px;
+  padding: 5px 6px;
+  font-size: var(--type-body);
   text-align: left;
 }
 .member-target:not([aria-haspopup]) { cursor: default; }
@@ -387,7 +387,8 @@ body {
   background: var(--control-selected);
   box-shadow: inset 3px 0 var(--primary);
 }
-.member-details { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; margin-right: auto; }
+.member-details { display: flex; flex-direction: column; gap: 1px; min-width: 0; margin-right: auto; }
+.member-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; }
 .member-badge {
   display: inline-block;
   max-width: 100%;
@@ -404,9 +405,17 @@ body {
   text-overflow: ellipsis;
 }
 .member-role { border-color: color-mix(in srgb, var(--primary) 35%, var(--border)); }
-.afk-message { color: var(--muted-foreground); font-size: var(--type-caption); }
-.afk-label { font-size: var(--type-caption); font-weight: 700; }
-.afk-message { overflow-wrap: anywhere; }
+.member-list .member-badge { font-size: var(--type-small); }
+.member-afk { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.afk-label { flex: none; font-size: var(--type-caption); font-weight: 700; }
+.afk-message {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: var(--type-caption);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .channel-footer {
   display: flex;
   flex-wrap: wrap;

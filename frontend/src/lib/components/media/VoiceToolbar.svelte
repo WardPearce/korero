@@ -48,8 +48,9 @@
   async function saveAfkMessage(event: SubmitEvent) {
     event.preventDefault();
     if (!canSetAfk || afkFormOrigin !== origin) return;
+    const wasAfk = Boolean(ownMember?.afk);
     if (await workspace.runVoice("afk", "set_presence", { afk: true, afkMessage: afkMessage.trim() })) {
-      if (!ownMember?.afk) playUiSound("afk");
+      if (!wasAfk) playUiSound("afk");
       afkFormOpen = false;
     }
   }
@@ -60,7 +61,7 @@
     <IconButton label={ownMember?.muted ? "Unmute microphone" : "Mute microphone"}
       disabled={!canVoice || Boolean(pending) || ownMember?.adminMuted || ownMember?.afk}
       active={Boolean(ownMember?.muted || ownMember?.adminMuted)}
-      onclick={async () => { if (await workspace.runVoice("mute", "set_presence", { muted: !ownMember?.muted, deafened: null })) playUiSound(ownMember?.muted ? "unmute" : "mute"); }}>
+      onclick={async () => { const muting = !ownMember?.muted; if (await workspace.runVoice("mute", "set_presence", { muted: muting, deafened: null })) playUiSound(muting ? "mute" : "unmute"); }}>
       {#if ownMember?.muted || ownMember?.adminMuted}<MicOff size={18} aria-hidden="true" />{:else}<Mic size={18} aria-hidden="true" />{/if}
     </IconButton>
     <QuickAudio direction="input" />
@@ -70,7 +71,7 @@
     <IconButton label={ownMember?.adminDeafened ? "Server deafened" : ownMember?.deafened ? "Undeafen" : "Deafen"}
       disabled={!canVoice || Boolean(pending) || ownMember?.afk || ownMember?.adminDeafened}
       active={Boolean(ownMember?.deafened || ownMember?.adminDeafened)}
-      onclick={async () => { if (await workspace.runVoice("deafen", "set_presence", { muted: null, deafened: !ownMember?.deafened })) playUiSound(ownMember?.deafened ? "undeafen" : "deafen"); }}>
+      onclick={async () => { const deafening = !ownMember?.deafened; if (await workspace.runVoice("deafen", "set_presence", { muted: null, deafened: deafening })) playUiSound(deafening ? "deafen" : "undeafen"); }}>
       {#if ownMember?.deafened || ownMember?.adminDeafened}<HeadphoneOff size={18} aria-hidden="true" />{:else}<Headphones size={18} aria-hidden="true" />{/if}
     </IconButton>
     <QuickAudio direction="output" />
@@ -80,7 +81,7 @@
       {ownMember?.afk ? "AFK (away)" : "AFK"} <ChevronDown aria-hidden="true" />
     </DropdownMenu.Trigger>
     <DropdownMenu.Content align="start">
-      <DropdownMenu.Item onSelect={ownMember?.afk ? toggleAfk : showAfkForm}>{ownMember?.afk ? "Return from AFK" : "Mark as AFK"}</DropdownMenu.Item>
+      <DropdownMenu.Item onSelect={toggleAfk}>{ownMember?.afk ? "Return from AFK" : "Mark as AFK"}</DropdownMenu.Item>
       <DropdownMenu.Item onSelect={showAfkForm}>Set AFK message</DropdownMenu.Item>
     </DropdownMenu.Content>
   </DropdownMenu.Root>

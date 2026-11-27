@@ -185,22 +185,26 @@
           else event.preventDefault();
         }}
         ondragend={onDragEnd}>
-        <Avatar name={member.displayName} accountId={member.accountId} small {speaking} afk={member.afk} />
+        <Avatar name={member.displayName} accountId={member.accountId} {speaking} afk={member.afk} />
         <span class="member-details">
-          <span class="inline-flex min-w-0 items-center gap-1.5">
-            <span class="truncate" title={member.displayName}>{member.displayName}</span>
-            {#if sharingScreen}
-              <span class="shrink-0 text-(--destructive)" title="Sharing their screen">
-                <MonitorUp size={14} aria-hidden="true" />
-                <span class="sr-only">Sharing their screen</span>
-              </span>
-            {/if}
+          <span class="member-line">
+            <span class="inline-flex min-w-0 items-center gap-1.5">
+              <span class="truncate" title={member.displayName}>{member.displayName}</span>
+              {#if sharingScreen}
+                <span class="shrink-0 text-(--destructive)" title="Sharing their screen">
+                  <MonitorUp size={14} aria-hidden="true" />
+                  <span class="sr-only">Sharing their screen</span>
+                </span>
+              {/if}
+            </span>
+            {#if displayedRole}<span class="member-badge member-role" title={displayedRole}>{displayedRole}</span>{/if}
+            {#if member.badge}<span class="member-badge" title={member.badge}>{member.badge}</span>{/if}
           </span>
-          {#if displayedRole}<span class="member-badge member-role" title={displayedRole}>{displayedRole}</span>{/if}
-          {#if member.badge}<span class="member-badge" title={member.badge}>{member.badge}</span>{/if}
           {#if member.afk}
-            <span class="afk-label">AFK</span>
-            {#if member.afkMessage}<span class="afk-message">{member.afkMessage}</span>{/if}
+            <span class="member-afk">
+              <span class="afk-label">AFK</span>
+              {#if member.afkMessage}<span class="afk-message" title={member.afkMessage}>{member.afkMessage}</span>{/if}
+            </span>
           {/if}
         </span>
         {#if member.adminDeafened || member.deafened}
