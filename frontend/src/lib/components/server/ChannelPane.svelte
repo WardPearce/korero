@@ -527,7 +527,7 @@
   .server-settings-button:disabled { opacity: .5; cursor: default; }
   .channel-top:has(.server-banner:not([hidden])) .server-settings-button {
     position: absolute;
-    top: 10px;
+    top: calc(10px + var(--header-inset-top));
     inset-inline-end: 10px;
     z-index: 1;
     border-color: rgb(255 255 255 / 35%);
