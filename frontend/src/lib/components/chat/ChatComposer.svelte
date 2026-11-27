@@ -4,11 +4,9 @@
   import { Placeholder } from "@tiptap/extensions";
   import StarterKit from "@tiptap/starter-kit";
   import { onDestroy, tick } from "svelte";
-  import type { Picker } from "emoji-picker-element";
-  import emojiData from "emoji-picker-element-data/en/github/data.json?url";
   import { buttonVariants, Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
-  import * as Popover from "#lib/components/ui/popover/index.js";
+  import EmojiPicker from "#lib/components/EmojiPicker.svelte";
   import IconButton from "#lib/components/IconButton.svelte";
   import { uploadAttachment } from "#lib/chat/chat-attachments";
   import { maxChatHtmlLength, maxChatTextLength, sanitizeChatHtml } from "#lib/chat/rich-chat";
@@ -137,25 +135,6 @@
     field?.setSelectionRange(start + emoji.length, start + emoji.length);
   }
 
-  function mountPicker(container: HTMLDivElement) {
-    let mounted = true;
-    let picker: Picker | undefined;
-    void import("emoji-picker-element").then(({ Picker }) => {
-      if (!mounted) return;
-      picker = new Picker({ dataSource: emojiData });
-      picker.addEventListener("emoji-click", ({ detail }) => {
-        if (detail.unicode) void insertEmoji(detail.unicode);
-      });
-      container.replaceChildren(picker);
-    }).catch(() => {
-      if (mounted) container.textContent = "Could not load the emoji picker.";
-    });
-    return () => {
-      mounted = false;
-      picker?.remove();
-    };
-  }
-
   async function send(event: SubmitEvent) {
     event.preventDefault();
     const text = message.trim();
@@ -215,15 +194,10 @@
     }} />
     <IconButton label="Attach file" disabled={!enabled || busy} onclick={() => fileInput?.click()}><Paperclip size={17} /></IconButton>
   {/if}
-  <Popover.Root bind:open={pickerOpen}>
-    <Popover.Trigger type="button" aria-label="Choose emoji" title="Choose emoji" disabled={!enabled || busy}
-      class={buttonVariants({ variant: "outline", size: "icon", class: "icon-button" })}>
-      <Smile size={17} />
-    </Popover.Trigger>
-    <Popover.Content side="top" align="end" class="w-auto p-0" aria-label="Emoji picker">
-      {#if pickerOpen}<div class="picker" {@attach mountPicker}></div>{/if}
-    </Popover.Content>
-  </Popover.Root>
+  <EmojiPicker bind:open={pickerOpen} disabled={!enabled || busy} onpick={(emoji) => void insertEmoji(emoji)}
+    triggerClass={buttonVariants({ variant: "outline", size: "icon", class: "icon-button" })}>
+    <Smile size={17} />
+  </EmojiPicker>
   <Button type="submit" class="send-button" variant="default" aria-label={sendLabel} title={sendLabel}
     disabled={!enabled || (!message.trim() && !file) || busy || draftTooLong}>
     <Send size={17} />
@@ -287,16 +261,4 @@
   .draft-limit { color: var(--destructive); font-size: var(--type-caption); }
   .attachment-draft { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
   .attachment-draft :global(svg) { flex: none; }
-  .picker :global(emoji-picker) {
-    width: min(315px, calc(100vw - 24px));
-    height: min(360px, 54dvh);
-    --background: var(--popover);
-    --border-color: var(--border);
-    --button-hover-background: var(--control-hover);
-    --indicator-color: var(--primary);
-    --input-border-color: var(--input);
-    --input-font-color: var(--popover-foreground);
-    --category-font-color: var(--muted-foreground);
-    --outline-color: var(--ring);
-  }
 </style>

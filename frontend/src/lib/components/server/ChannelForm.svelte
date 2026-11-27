@@ -1,10 +1,12 @@
 <script lang="ts">
   import { BitsConfig } from "bits-ui";
+  import { Smile, X } from "@lucide/svelte";
   import { untrack } from "svelte";
+  import EmojiPicker from "#lib/components/EmojiPicker.svelte";
   import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
   import SelectField from "#lib/components/fields/SelectField.svelte";
   import VoiceBitrateField from "#lib/components/fields/VoiceBitrateField.svelte";
-  import { Button } from "#lib/components/ui/button/index.js";
+  import { Button, buttonVariants } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
   import { Textarea } from "#lib/components/ui/textarea/index.js";
   import type { Channel } from "#lib/connection/client";
@@ -30,6 +32,7 @@
   let removeChannelPassword = $state(false);
   let backgroundImageUrl = $state(untrack(() => editing?.backgroundImageUrl ?? ""));
   let channelIcon = $state(untrack(() => editing?.icon ?? ""));
+  let iconPickerOpen = $state(false);
   let channelAudioBitrate = $state<number | null>(untrack(() => editing?.audioBitrate ?? null));
 
   let snapshot = $derived(view.snapshot);
@@ -115,8 +118,28 @@
     </BitsConfig>
   {/if}
   {#if workspace.channelIcons}
-    <label>Channel emoji <Input maxlength={16} placeholder="Optional, for example 🎮" autocomplete="off" spellcheck="false" bind:value={channelIcon} /></label>
-    {#if editing}<p class="field-hint">Clear the emoji to remove the channel icon.</p>{/if}
+    <div class="grid min-w-0 gap-1">
+      <span class="text-sm font-medium">Channel emoji</span>
+      <div class="flex items-center gap-2">
+        {#if channelForm}
+          <BitsConfig defaultPortalTo={channelForm}>
+            <EmojiPicker bind:open={iconPickerOpen} side="bottom" align="start"
+              label={channelIcon ? `Channel emoji: ${channelIcon}. Change emoji` : "Choose channel emoji"}
+              triggerClass={buttonVariants({ variant: "outline", class: "justify-start gap-2" })}
+              onpick={(emoji) => { channelIcon = emoji; iconPickerOpen = false; }}>
+              {#if channelIcon}
+                <span class="text-lg leading-none">{channelIcon}</span><span>Change</span>
+              {:else}
+                <Smile size={17} /><span>Choose emoji</span>
+              {/if}
+            </EmojiPicker>
+          </BitsConfig>
+        {/if}
+        {#if channelIcon}
+          <Button type="button" variant="ghost" onclick={() => (channelIcon = "")}><X size={17} />Remove</Button>
+        {/if}
+      </div>
+    </div>
   {/if}
   {#if workspace.channelBackgrounds}
     <label>Background image URL <Input type="url" pattern="https://.+" maxlength={512} placeholder="https://example.com/channel.jpg"

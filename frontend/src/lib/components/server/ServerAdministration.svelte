@@ -84,6 +84,8 @@
     invitationLimit !== (editedInvitation.usesLeft ?? undefined) || expiryChanged
   ));
   let bannerUrl = $state("");
+  let savedBannerUrl = $state("");
+  let bannerChanged = $derived(bannerSupported && bannerUrl.trim() !== savedBannerUrl);
   let roleEditing = $state(false);
   let editedRole = $state("");
   let editingBadge = $state("");
@@ -157,7 +159,7 @@
     error = "";
     notice = "";
     if (next === "overview") {
-      bannerUrl = bannerImageUrl ?? "";
+      bannerUrl = savedBannerUrl = bannerImageUrl ?? "";
       if (extended) await loadPreferences();
     }
     if (next === "roles" || next === "users") await loadMembers(pages);
@@ -257,20 +259,30 @@
     });
   }
 
-  function savePreferences(event: SubmitEvent) {
+  function saveSettings(event: SubmitEvent) {
     event.preventDefault();
     const current = serverPreferences;
-    if (!current || !preferencesChanged) return;
+    const savePreferences = Boolean(current && preferencesChanged);
+    const saveBanner = bannerChanged;
+    if (!savePreferences && !saveBanner) return;
     void run(async () => {
-      const response = await apiFor(origin).admin.preferences.patch({
-        motd: motd.trim() === current.motd ? undefined : motd.trim(),
-        defaultRole: defaultRole === current.defaultRole ? undefined : defaultRole,
-        defaultAudioBitrate: voiceBitrate === current.defaultAudioBitrate ? undefined : voiceBitrate,
-        maxAttachmentMiB: attachmentMiB === current.maxAttachmentMiB ? undefined : attachmentMiB,
-      });
-      if (response.error) throw requestError(response.error);
-      if (!response.data || !("motd" in response.data)) throw requestError({ value: response.data });
-      applyPreferences(response.data);
+      if (current && savePreferences) {
+        const response = await apiFor(origin).admin.preferences.patch({
+          motd: motd.trim() === current.motd ? undefined : motd.trim(),
+          defaultRole: defaultRole === current.defaultRole ? undefined : defaultRole,
+          defaultAudioBitrate: voiceBitrate === current.defaultAudioBitrate ? undefined : voiceBitrate,
+          maxAttachmentMiB: attachmentMiB === current.maxAttachmentMiB ? undefined : attachmentMiB,
+        });
+        if (response.error) throw requestError(response.error);
+        if (!response.data || !("motd" in response.data)) throw requestError({ value: response.data });
+        applyPreferences(response.data);
+      }
+      if (saveBanner) {
+        const response = await apiFor(origin).admin.banner.patch({ bannerImageUrl: bannerUrl.trim() || null });
+        if (response.error) throw requestError(response.error);
+        if (!response.data || !("bannerImageUrl" in response.data)) throw requestError({ value: response.data });
+        bannerUrl = savedBannerUrl = response.data.bannerImageUrl ?? "";
+      }
       notice = "Server settings saved.";
     });
   }
@@ -304,17 +316,6 @@
       }
       roleEditing = false;
       notice = editedRole ? `Updated permissions for ${role.name}.` : `Created ${role.name}.`;
-    });
-  }
-
-  function saveBanner(event: SubmitEvent) {
-    event.preventDefault();
-    void run(async () => {
-      const response = await apiFor(origin).admin.banner.patch({ bannerImageUrl: bannerUrl.trim() || null });
-      if (response.error) throw requestError(response.error);
-      if (!response.data || !("bannerImageUrl" in response.data)) throw requestError({ value: response.data });
-      bannerUrl = response.data.bannerImageUrl ?? "";
-      notice = bannerUrl ? "Server banner saved." : "Server banner removed.";
     });
   }
 
@@ -424,9 +425,12 @@
     {#if busy}<p class="field-hint" role="status">Working…</p>{/if}
 
     {#if tab === "overview" && permissions.includes("manageSettings") && (extended || bannerSupported)}
-      {#if extended}
-        {#if serverPreferences}
-          <form class="dialog-form" onsubmit={savePreferences}>
+      {#if extended && !serverPreferences && !busy}
+        <Button variant="outline" onclick={loadPreferences}>Load server settings</Button>
+      {/if}
+      {#if (extended && serverPreferences) || bannerSupported}
+        <form class="dialog-form" onsubmit={saveSettings}>
+          {#if extended && serverPreferences}
             <label>Message of the day
               <Textarea rows={4} maxlength={1000} disabled={busy} bind:value={motd} placeholder="Leave blank to hide the message" />
             </label>
@@ -450,20 +454,15 @@
             <SelectField label="Default role for new members" options={defaultRoleOptions} bind:value={defaultRole}
               disabled={busy || !serverPreferences.canSetDefaultRole || defaultRoleOptions.length < 2} />
             <p class="field-hint">New accounts get this role when they register.</p>
-            <div class="dialog-actions">
-              <Button variant="default" type="submit" disabled={busy || !preferencesChanged}>Save settings</Button>
-            </div>
-          </form>
-        {:else if !busy}
-          <Button variant="outline" onclick={loadPreferences}>Load server settings</Button>
-        {/if}
-      {/if}
-      {#if bannerSupported}
-        <form class="dialog-form" onsubmit={saveBanner}>
-          <label>Banner image URL<Input type="url" pattern="https://.+" maxlength={512} placeholder="https://example.com/banner.jpg"
-            disabled={busy} bind:value={bannerUrl} /></label>
-          <p class="field-hint">Clear the URL to remove the banner.</p>
-          <div class="dialog-actions"><Button variant="default" type="submit" disabled={busy}>Save banner</Button></div>
+          {/if}
+          {#if bannerSupported}
+            <label>Banner image URL<Input type="url" pattern="https://.+" maxlength={512} placeholder="https://example.com/banner.jpg"
+              disabled={busy} bind:value={bannerUrl} /></label>
+            <p class="field-hint">Clear the URL to remove the banner.</p>
+          {/if}
+          <div class="dialog-actions">
+            <Button variant="default" type="submit" disabled={busy || (!preferencesChanged && !bannerChanged)}>Save settings</Button>
+          </div>
         </form>
       {/if}
     {:else if tab === "audit" && extended && permissions.includes("viewAdmin")}
