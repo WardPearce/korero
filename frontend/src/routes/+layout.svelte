@@ -1000,7 +1000,7 @@
     if (entry.origin === serverOrigin && online && view.snapshot) {
       const { connectionId } = view.snapshot;
       actions.push({ label: "Connection info", onSelect: () => showConnectionInfo(connectionId) });
-      if (canAdminister) actions.push({ label: "Server administration", onSelect: showServerSettings });
+      if (canAdminister) actions.push({ label: "Server settings", onSelect: showServerSettings });
     }
     if (!savedServers.some(({ origin }) => origin === entry.origin)) return actions;
     actions.push({ label: "Remove server", onSelect: () => {
