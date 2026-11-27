@@ -23,6 +23,35 @@
   let search = $state("");
   let channelSearchOpen = $state(false);
   let collapsed = $state<string[]>([]);
+  let collapsedServer = "";
+  const collapsedStorageKey = "korero:collapsed-channels";
+
+  function readCollapsed(serverId: string): string[] {
+    if (!serverId) return [];
+    try {
+      const saved = JSON.parse(localStorage.getItem(`${collapsedStorageKey}:${serverId}`) ?? "null") as unknown;
+      return Array.isArray(saved) ? saved.filter((id): id is string => typeof id === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function persistCollapsed() {
+    const serverId = workspace.serverId;
+    if (!serverId) return;
+    try {
+      localStorage.setItem(`${collapsedStorageKey}:${serverId}`, JSON.stringify(collapsed));
+    } catch {
+      // An unavailable preference store keeps the tree working for this session.
+    }
+  }
+
+  $effect(() => {
+    const serverId = workspace.serverId;
+    if (!serverId || serverId === collapsedServer) return;
+    collapsedServer = serverId;
+    collapsed = readCollapsed(serverId);
+  });
 
   type MemberSelection = { connectionId: string; members: ReadonlyMap<string, string> };
   const memberDragType = "application/x-korero-members";
@@ -72,6 +101,7 @@
 
   function toggleGroup(id: string) {
     collapsed = collapsed.includes(id) ? collapsed.filter((item) => item !== id) : [...collapsed, id];
+    persistCollapsed();
   }
 
   function channelActions(channel: Channel) {
@@ -116,6 +146,7 @@
     if (await workspace.reorderChannel(source.id, target.id, placement, parentId === source.parentId ? undefined : parentId) &&
       parentId && workspace.serverOrigin === origin) {
       collapsed = collapsed.filter((id) => id !== parentId);
+      persistCollapsed();
     }
   }
 
