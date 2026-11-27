@@ -11,6 +11,7 @@
   import { ArrowRight, AudioLines, BellRing, Bookmark, Cable, ListTree, LockKeyhole, Plus, Server, Settings2, X } from "@lucide/svelte";
   import { onMount } from "svelte";
   import { AudioSettings, setAudioSettings } from "#lib/media/audio.svelte";
+  import { DesktopVoice, type DesktopMediaEvent } from "#lib/media/desktop-voice";
   import PaneDivider from "#lib/components/PaneDivider.svelte";
   import { defaultMemberVolume, forgetPassword, getMemberVolumes, getSavedPassword, preferences, saveMemberVolumes, savePassword, type SavedServer } from "#lib/preferences";
   import Avatar from "#lib/components/Avatar.svelte";
@@ -25,10 +26,10 @@
   import ScreenSharing from "#lib/components/media/ScreenSharing.svelte";
   import ServerAdministration from "#lib/components/server/ServerAdministration.svelte";
   import {
-    apiFor, call, directRequest, messageFrom, desktopApp, offline, requestError, shortHost, startSession, watchVoice,
-    type Member, type MemberRequest, type Poke, type ServerInfo, type VoiceState,
+    apiFor, call, directRequest, messageFrom, desktopApp, offline, requestError, shortHost, startSession, watchDesktopSession,
+    type DesktopSessionState, type DirectMessageChange, type Member, type MemberRequest, type Poke, type ServerInfo, type VoiceState,
   } from "#lib/connection/client";
-  import { mobileApp } from "#lib/connection/platform";
+  import { mobileApp, watchDesktop } from "#lib/connection/platform";
   import { authenticateIdentity, getIdentity, identityError, setIdentity } from "#lib/identity/identity";
   import { HostedAccount } from "#lib/identity/hosted-account";
   import { identityModeKey, readLocalIdentity, rememberIdentityMode, type LocalProfile } from "#lib/identity/local-identity";
@@ -39,7 +40,8 @@
   import { setWorkspace, type ChannelPlacement, type MobilePane, type RoomView } from "#lib/workspace";
 
   let { children } = $props();
-  const audio = setAudioSettings(new AudioSettings());
+  const desktopVoice = new DesktopVoice(updateDesktopVoice);
+  const audio = setAudioSettings(new AudioSettings(desktopVoice));
   let chatDisplay = $state.raw(readChatDisplay());
   setChatDisplay({
     get value() { return chatDisplay; },
@@ -82,6 +84,10 @@
   let serverOrigin = $state("");
   const focused = $derived(connections.get(serverOrigin));
   const view = $derived(focused?.view ?? offline);
+  // Prefer a voice session on the focused server, otherwise keep showing the one we are joined to.
+  const voiceConnection = $derived(focused?.view.phase === "online" && focused.view.snapshot?.channelId
+    ? focused
+    : [...connections.values()].find((entry) => entry.view.phase === "online" && entry.view.snapshot?.channelId));
   const serverInfo = $derived(focused?.info ?? null);
   const memberVolumes = $derived(focused?.memberVolumes ?? {});
   let resolveRestored = () => {};
@@ -121,6 +127,7 @@
   let screenShareViewerTarget = $state<HTMLElement>();
   let screenShareControlsTarget = $state<HTMLElement>();
   let directAccountId = $state<string | null>(null);
+  const directChangeListeners = new Set<(origin: string, connectionId: string, change: DirectMessageChange) => void>();
   let connectionInfo = $state.raw<{ origin: string; viewerId: string; connectionId: string } | null>(null);
   const unreadDirectCounts = $derived(focused?.unread ?? new Map<string, number>());
   const unreadDirectCount = $derived([...unreadDirectCounts.values()].reduce((total, count) => total + count, 0));
@@ -169,6 +176,9 @@
     },
     signOut,
     get view() { return view; },
+    get activeVoice() {
+      return voiceConnection ? { origin: voiceConnection.origin, view: voiceConnection.view } : undefined;
+    },
     get serverOrigin() { return serverOrigin; },
     get serverId() { return serverInfo?.serverId ?? ""; },
     get serverTitle() { return serverTitle; },
@@ -176,6 +186,7 @@
     get canAdminister() { return canAdminister; },
     get serverSettings() { return roomView === "serverSettings" && canAdminister ? serverSettings : undefined; },
     get channelBackgrounds() { return Boolean(serverInfo?.channelBackgrounds); },
+    get channelIcons() { return Boolean(serverInfo?.channelIcons); },
     get profilePictures() { return serverInfo?.profilePictures === true; },
     avatarId(accountId) { return accountId === me?.id ? me.avatarId : avatarIds.get(accountId); },
     profilePicture: profilePictureCache.get,
@@ -204,12 +215,21 @@
     get directAccountId() { return directAccountId; },
     get unreadDirectCounts() { return unreadDirectCounts; },
     get unreadDirectCount() { return unreadDirectCount; },
+    watchDirectChanges(connectionId, listener) {
+      const origin = serverOrigin;
+      const receive = (sourceOrigin: string, sourceConnection: string, change: DirectMessageChange) => {
+        if (sourceOrigin === origin && sourceConnection === connectionId) listener(change);
+      };
+      directChangeListeners.add(receive);
+      return () => directChangeListeners.delete(receive);
+    },
     showDirectMessages,
     showPoke,
     showConnectionInfo,
     showConnect,
     showServerSettings,
     run,
+    runVoice(action, command, args) { return runFor(voiceConnection?.origin ?? serverOrigin, action, command, args); },
     runAction,
     memberAction,
     memberVolume(accountId) { return memberVolumes[accountId] ?? defaultMemberVolume; },
@@ -234,20 +254,28 @@
     }
     let mounted = true;
     let unlisten: (() => void) | undefined;
-    watchVoice((state) => {
-      if (mounted) applyView(state.origin, state);
+    let stopMedia: (() => void) | undefined;
+    void watchDesktop<DesktopMediaEvent>("korero:media", (event) => desktopVoice.event(event)).then((stop) => {
+      if (mounted) stopMedia = stop;
+      else stop();
+    }).catch((error) => { if (mounted) actionError = messageFrom(error); });
+    watchDesktopSession((state) => {
+      if (mounted) applyView(state.origin, { ...offline, ...state });
     }).then(async (stop) => {
       if (!mounted) return stop();
       unlisten = stop;
-      const sessions = await call<(VoiceState & { origin: string })[]>("voice_state");
+      await audio.load();
+      const sessions = await call<(DesktopSessionState & { origin: string })[]>("voice_state");
       if (!mounted) return;
       for (const state of sessions) {
         if (connections.has(state.origin)) continue;
-        setConnection(state.origin, { view: state });
+        setConnection(state.origin, {});
+        applyView(state.origin, { ...offline, ...state }, false);
         serverOrigin ||= state.origin;
         void getServerInfo(state.origin).then(async (info) => {
           setConnection(state.origin, { info }, false);
           const memberVolumes = await getMemberVolumes(info.serverId).catch(() => ({}));
+          if (connections.has(state.origin)) desktopVoice.setVolumes(state.origin, memberVolumes);
           setConnection(state.origin, { memberVolumes }, false);
         }).catch(() => {});
       }
@@ -257,6 +285,7 @@
     return () => {
       mounted = false;
       unlisten?.();
+      stopMedia?.();
       audio.dispose();
       setIdentity();
     };
@@ -355,6 +384,7 @@
 
   function removeConnection(origin: string) {
     if (!connections.has(origin)) return;
+    desktopVoice.leave(origin);
     const next = new Map(connections);
     next.delete(origin);
     connections = next;
@@ -375,6 +405,7 @@
     const previous = entry.view;
     const channel = state.snapshot?.channelId;
     if (origin === serverOrigin && channel && channel !== previous.snapshot?.channelId) selectedChannelId = channel;
+    if (notify) announceShareChanges(previous.snapshot, state.snapshot);
     if (notify && state.lastPoke && state.lastPoke.id !== previous.lastPoke?.id) {
       poke = { ...state.lastPoke, origin };
       playUiSound("poke");
@@ -396,13 +427,43 @@
         unread = next;
       }
     }
-    setConnection(origin, { view: state, unread }, false);
+    const roomChanged = previous.snapshot?.channelId !== channel || previous.snapshot?.connectionId !== state.snapshot?.connectionId;
+    const view = desktopApp() ? { ...state, ...desktopVoice.update(origin, state, entry.memberVolumes, roomChanged) } : state;
+    setConnection(origin, { view, unread }, false);
+    if (state.directChange && state.snapshot) {
+      for (const receive of directChangeListeners) receive(origin, state.snapshot.connectionId, state.directChange);
+    }
+    updateTalkContext();
+  }
+
+  /**
+   * Cues screen share and camera activity. Shares that were already live on joining
+   * stay silent, as does anything announced while switching channels.
+   */
+  function announceShareChanges(before: VoiceState["snapshot"], after: VoiceState["snapshot"]) {
+    if (!before || !after || before.channelId !== after.channelId || before.connectionId !== after.connectionId) return;
+    const producers = (snapshot: VoiceState["snapshot"], source: "screens" | "cameras") =>
+      new Set((snapshot?.[source] ?? []).map(({ producerId }) => producerId));
+    const was = { screens: producers(before, "screens"), cameras: producers(before, "cameras") };
+    const now = { screens: producers(after, "screens"), cameras: producers(after, "cameras") };
+    const appeared = (source: "screens" | "cameras") => [...now[source]].some((id) => !was[source].has(id));
+    const disappeared = (source: "screens" | "cameras") => [...was[source]].some((id) => !now[source].has(id));
+    if (appeared("screens")) playUiSound("screenShareStart");
+    else if (appeared("cameras")) playUiSound("cameraStart");
+    if (disappeared("screens")) playUiSound("screenShareStop");
+    else if (disappeared("cameras")) playUiSound("cameraStop");
+  }
+
+  function updateDesktopVoice(origin: string) {
+    const view = connections.get(origin)?.view;
+    if (!view) return;
+    setConnection(origin, { view: { ...view, ...desktopVoice.status(origin) } }, false);
     updateTalkContext();
   }
 
   // Push-to-talk follows the server with the active voice channel, which may be in the background.
   function updateTalkContext() {
-    const state = [...connections.values()].map((entry) => entry.view).find((entry) => entry.snapshot?.channelId);
+    const state = [...connections.values()].map((entry) => entry.view).find((entry) => entry.voice === "active" && entry.snapshot?.channelId);
     const channel = state?.snapshot?.channelId;
     const connection = state?.snapshot?.connectionId;
     const member = state?.snapshot?.members.find(({ connectionId }) => connectionId === connection);
@@ -458,9 +519,9 @@
         throw new Error("Open this server to finish connecting.");
       }
       const password = info.passwordRequired ? await getSavedPassword(origin, info.serverId).catch(() => undefined) : undefined;
-      if (info.passwordRequired && !password) throw new Error("Enter the server password to connect.");
       if (!connections.has(origin)) return;
       const login = await authenticateIdentity(origin, info.serverId, deviceName, { operation: "login", password });
+      if (login.status === 401 && info.passwordRequired && !password) throw new Error("Enter the server password to connect.");
       if (login.status !== 200) throw identityError(login);
       if (!connections.has(origin)) return;
       await beginSession(origin, info);
@@ -542,13 +603,12 @@
     if (target.info.passwordRequired) {
       savedServerPassword = await getSavedPassword(origin, target.info.serverId).catch(() => undefined);
     }
-    if (target.info.setupRequired || needsPassword) {
+    if (target.info.setupRequired) {
       accessPrompt = true;
       connectOpen = true;
       return;
     }
-    if (serverCode) await enroll(target);
-    else await signIn(target);
+    await signIn(target);
   }
 
   async function getServerInfo(origin: string): Promise<ServerInfo> {
@@ -573,7 +633,9 @@
     if (login.status === 200) await finishConnection(target, password);
     else if (login.status === 401 && target.info.passwordRequired) {
       serverCode = "";
+      invitationRequired = false;
       promptServerPassword(target, password);
+      if (!password) throw new Error("Enter the server password to connect.");
       throw identityError(login);
     }
     return login;
@@ -586,9 +648,10 @@
     if (target.info.registration === "disabled") {
       throw new Error("This server has closed registration for new identities.");
     }
-    if (target.info.registration !== "open" && !serverCode.trim()) {
+    const needsInvitation = target.info.registration !== "open" && !serverCode.trim();
+    if (needsInvitation || (needsPassword && !serverPassword)) {
+      invitationRequired ||= needsInvitation;
       accessPrompt = true;
-      invitationRequired = true;
       connectOpen = true;
       return;
     }
@@ -665,7 +728,7 @@
     connectBusy = true;
     connectError = "";
     try {
-      if (claimOwnership || serverCode.trim()) await enroll(discovery);
+      if (claimOwnership) await enroll(discovery);
       else await signIn(discovery);
     } catch (error) {
       connectError = messageFrom(error);
@@ -692,17 +755,11 @@
         const updated = { ...target, info: response.data };
         setupToken = "";
         discovery = updated;
-        if (!needsPassword) await signIn(updated);
+        await signIn(updated);
         return;
       }
     }
     if (!bootstrap && result.status === 409) {
-      if (code && target.info.passwordRequired && !serverPassword && !savedServerPassword) {
-        serverCode = "";
-        promptServerPassword(target);
-        connectError = "This identity already has an account. Enter the server password to sign in.";
-        return;
-      }
       const login = await loginIdentity(target);
       if (login.status === 200) return;
     }
@@ -773,7 +830,11 @@
 
   /** Runs a session command on the focused server. */
   function run(action: string, command: string, args?: Record<string, unknown>) {
-    const origin = serverOrigin;
+    return runFor(serverOrigin, action, command, args);
+  }
+
+  /** Runs a session command on a specific server connection. */
+  function runFor(origin: string, action: string, command: string, args?: Record<string, unknown>) {
     return runAction(action, () => {
       if (!origin) throw new Error("Connect to a server first.");
       if (desktopApp()) return call(command, { ...args, origin });
@@ -811,12 +872,12 @@
       if (!isCurrentServer() || view.phase !== "online" || pending === "disconnect") return false;
       actionError = "";
       try {
-        if (desktopApp()) await call("set_member_volume", { origin, accountId, level });
-        else browserSessions.session(origin).setMemberVolume(accountId, level);
+        if (!desktopApp()) browserSessions.session(origin).setMemberVolume(accountId, level);
         if (!isCurrentServer()) return false;
         const next = { ...memberVolumes };
         if (level === defaultMemberVolume) delete next[accountId];
         else next[accountId] = level;
+        desktopVoice.setVolumes(origin, next);
         setConnection(origin, { memberVolumes: next }, false);
         if (serverId) await saveMemberVolumes(serverId, next);
         return true;

@@ -1,5 +1,5 @@
 import { createContext, type Snippet } from "svelte";
-import type { Member, MemberRequest, VoiceState } from "./connection/client";
+import type { DirectMessageChange, Member, MemberRequest, VoiceState } from "./connection/client";
 import type { DeviceLink } from "./identity/device-link";
 
 export type MobilePane = "servers" | "channels" | "room";
@@ -12,6 +12,8 @@ interface Workspace {
   createDeviceLink(): Promise<DeviceLink>;
   signOut(): Promise<boolean>;
   readonly view: VoiceState;
+  /** The joined voice connection, which may belong to a server other than the focused one. */
+  readonly activeVoice: { origin: string; view: VoiceState } | undefined;
   readonly serverOrigin: string;
   readonly serverId: string;
   readonly serverTitle: string;
@@ -19,6 +21,7 @@ interface Workspace {
   readonly canAdminister: boolean;
   readonly serverSettings: Snippet | undefined;
   readonly channelBackgrounds: boolean;
+  readonly channelIcons: boolean;
   readonly profilePictures: boolean;
   avatarId(accountId: string): string | null | undefined;
   profilePicture(origin: string, accountId: string, avatarId?: string | null): Promise<string | undefined>;
@@ -41,12 +44,15 @@ interface Workspace {
   readonly directAccountId: string | null;
   readonly unreadDirectCounts: ReadonlyMap<string, number>;
   readonly unreadDirectCount: number;
+  watchDirectChanges(connectionId: string, listener: (change: DirectMessageChange) => void): () => void;
   showDirectMessages(accountId?: string): void;
   showPoke(member: Pick<Member, "accountId" | "displayName">): void;
   showConnectionInfo(connectionId: string): void;
   showConnect(address?: string): void;
   showServerSettings(): void;
   run(action: string, command: string, args?: Record<string, unknown>): Promise<boolean>;
+  /** Runs a voice command on the joined voice server, falling back to the focused server. */
+  runVoice(action: string, command: string, args?: Record<string, unknown>): Promise<boolean>;
   runAction(action: string, work: () => Promise<unknown>): Promise<boolean>;
   memberAction(request: MemberRequest): Promise<boolean>;
   memberVolume(accountId: string): number;

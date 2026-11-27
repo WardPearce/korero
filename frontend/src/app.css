@@ -74,6 +74,8 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
   --color-destructive: var(--destructive);
   --color-border: var(--border);
   --color-input: var(--input);
@@ -315,7 +317,7 @@ body {
   grid-template-columns: 26px minmax(0, 1fr);
   min-height: max(40px, var(--control-height));
   min-width: 0;
-  margin: 4px 0 4px calc(var(--depth) * 10px);
+  margin: 6px 0 6px calc(var(--depth) * 10px);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
 }
@@ -363,6 +365,7 @@ body {
   padding-inline-start: 26px;
 }
 .channel-target:focus-visible { outline-offset: -2px; }
+.channel-icon { flex: none; min-width: 1.1em; font-size: 1.1em; line-height: 1; text-align: center; }
 .channel-target[draggable="true"] { cursor: grab; }
 .access-lock { flex: none; color: var(--muted-foreground); }
 .channel-access { margin-left: auto; }
@@ -380,6 +383,11 @@ body {
   text-align: left;
 }
 .member-target:not([aria-haspopup]) { cursor: default; }
+.member-target[draggable="true"] { cursor: grab; user-select: none; }
+.member-target[aria-pressed="true"] {
+  background: var(--control-selected);
+  box-shadow: inset 3px 0 var(--primary);
+}
 .member-details { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; margin-right: auto; }
 .member-badge {
   display: inline-block;
@@ -574,6 +582,17 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
   padding: 12px 8px;
   border-inline-end: 1px solid var(--border);
 }
+/* Keep voice controls reachable while a server is connected and settings are open. */
+.settings-shell[data-connected] { grid-template-rows: auto minmax(0, 1fr); }
+.settings-shell[data-connected] > .settings-voice {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  border-bottom: 1px solid var(--border);
+  background: var(--muted);
+}
+.settings-shell[data-connected] > .settings-nav { grid-column: 1; grid-row: 2; }
+.settings-shell[data-connected] > .room-pane { grid-column: 2; grid-row: 2; }
+.settings-voice .voice-toolbar { border-bottom: 0; }
 .settings-nav a, .mobile-nav a, .mobile-nav button {
   display: flex;
   align-items: center;
@@ -647,6 +666,10 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
   [data-slot="button"].rail-connect { max-width: 16rem; }
   .settings-shell { grid-template: auto minmax(0, 1fr) / minmax(0, 1fr); }
   .settings-shell .room-pane { grid-row: 2; }
+  .settings-shell[data-connected] { grid-template: auto auto minmax(0, 1fr) / minmax(0, 1fr); }
+  .settings-shell[data-connected] > .settings-voice { grid-column: 1; grid-row: 1; }
+  .settings-shell[data-connected] > .settings-nav { grid-column: 1; grid-row: 2; }
+  .settings-shell[data-connected] > .room-pane { grid-column: 1; grid-row: 3; }
   .settings-nav { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 4px; border: 0; border-bottom: 1px solid var(--border); }
   .settings-nav .settings-back { display: none; }
   .settings-nav a { flex-direction: column; justify-content: center; gap: 2px; padding: 4px 2px; font-size: var(--type-caption); text-align: center; overflow-wrap: anywhere; }

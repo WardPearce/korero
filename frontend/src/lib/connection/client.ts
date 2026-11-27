@@ -22,11 +22,15 @@ export interface Channel {
   temporary: boolean;
   passwordRequired: boolean;
   backgroundImageUrl?: string | null;
+  icon?: string | null;
   canEdit?: boolean;
   canDelete?: boolean;
+  /** The account may delete other members' messages in this channel. */
+  canDeleteMessages?: boolean;
   canReparent?: boolean;
   canSetPassword?: boolean;
   canMute?: boolean;
+  canMove?: boolean;
   canWhisperTo?: boolean;
   audioBitrate?: number | null;
   canSetAudioBitrate?: boolean;
@@ -83,9 +87,10 @@ export interface ScreenShare {
 }
 
 export type MemberRequest =
+  | { kind: "channel.move"; payload: { channelId: string } & ({ connectionId: string } | { connectionIds: string[] }) }
   | { kind: "moderation.mute"; payload: { connectionId: string; muted: boolean } }
   | { kind: "moderation.deafen"; payload: { connectionId: string; deafened: boolean } }
-  | { kind: "moderation.kick" | "moderation.ban"; payload: { accountId: string } }
+  | { kind: "moderation.kick" | "moderation.ban" | "moderation.unban"; payload: { accountId: string } }
   | { kind: "role.set"; payload: { accountId: string; role: string } };
 
 export interface Message {
@@ -99,10 +104,13 @@ export interface Message {
   attachment?: { name: string; size: number };
 }
 
-export interface DirectMessage {
+export interface DirectMessageReference {
   id: string;
   senderId: string;
   recipientId: string;
+}
+
+export interface DirectMessage extends DirectMessageReference {
   createdAt: number;
   /** Set when the sender replaced the ciphertext after sending. */
   editedAt?: number | null;
@@ -111,6 +119,14 @@ export interface DirectMessage {
   signature: string;
   /** Present on packets queued while the recipient was offline. */
   senderName?: string;
+}
+
+export type DirectMessageChange =
+  | { type: "edit"; message: DirectMessage }
+  | { type: "delete"; message: DirectMessageReference };
+
+export function isSameDirectMessage(a: DirectMessageReference, b: DirectMessageReference) {
+  return a.id === b.id && a.senderId === b.senderId && a.recipientId === b.recipientId;
 }
 
 export interface Poke {
@@ -130,8 +146,8 @@ export interface VoiceState {
   snapshot: Snapshot | null;
   messages: Message[];
   directMessages?: DirectMessage[];
-  /** IDs of direct messages deleted during this session, so loaded history can drop them. */
-  directDeleted?: string[];
+  /** A live change to apply to any history the client has already loaded. */
+  directChange?: DirectMessageChange;
   lastPoke?: Poke | null;
   speaking: string[];
   voice: "idle" | "active" | "muted" | "deafened" | "error";
@@ -146,6 +162,7 @@ export interface ServerInfo {
   identityAuthentication?: boolean;
   identityEnrollment?: boolean;
   channelBackgrounds?: boolean;
+  channelIcons?: boolean;
   profilePictures?: boolean;
   maxAttachmentBytes?: number;
   richChat?: boolean;
@@ -185,11 +202,13 @@ export function directRequest<T>(connectionId: string, kind: DirectOperation, pa
 
 /** Starts the signed-in session for a server prepared with `browserSessions.select` or `prepare_server`. */
 export function startSession(origin: string, memberVolumes: Record<string, number>) {
-  return desktopApp() ? call("start_session", { origin, memberVolumes }) : browserSessions.session(origin).start(memberVolumes);
+  return desktopApp() ? call("start_session", { origin }) : browserSessions.session(origin).start(memberVolumes);
 }
 
-export function watchVoice(onState: (state: VoiceState) => void) {
-  return watchDesktop<VoiceState>("korero:state", onState);
+export type DesktopSessionState = Omit<VoiceState, "voice" | "voiceError" | "whisperChannelId">;
+
+export function watchDesktopSession(onState: (state: DesktopSessionState) => void) {
+  return watchDesktop<DesktopSessionState>("korero:state", onState);
 }
 
 export function apiFor(origin: string) {

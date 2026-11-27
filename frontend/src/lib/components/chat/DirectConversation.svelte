@@ -8,7 +8,8 @@
   import Modal from "#lib/components/Modal.svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
-  import { directRequest, messageFrom, type DirectMessage } from "#lib/connection/client";
+  import { directRequest, isSameDirectMessage, messageFrom, type DirectMessage, type DirectMessageChange,
+    type DirectMessageReference } from "#lib/connection/client";
   import { decodeDirectContent, directConversation, encodeDirectContent, type DirectCursor, type DirectPacket, type DirectPage, type DirectPeer } from "#lib/chat/direct-crypto";
   import { getIdentity } from "#lib/identity/identity";
   import { preferences } from "#lib/preferences";
@@ -38,30 +39,53 @@
   let loadingHistory = $state(false);
   let historyLoaded = $state(false);
   let history = $state.raw<DirectMessage[]>([]);
+  let changesDuringHistory: DirectMessageChange[] | undefined;
   let next = $state.raw<DirectCursor | null>(null);
   let list: HTMLDivElement | undefined;
   let lastMessageId: string | undefined;
   const safetyCode = $derived(conversation?.safetyCode.match(/.{4}/g)?.join(" ") ?? "");
   const messages = $derived.by(() => {
-    const packets = new Map(history.map((message) => [message.id, message]));
+    const packets = new Map(history.map((message) => [messageKey(message), message]));
     for (const message of workspace.view.directMessages ?? []) {
-      if ((message.senderId === accountId && message.recipientId === snapshot.account.id) ||
-          (message.recipientId === accountId && message.senderId === snapshot.account.id)) {
-        const known = packets.get(message.id);
-        // A live edit replaces the copy loaded from history.
-        if (!known || (message.editedAt ?? 0) > (known.editedAt ?? 0)) {
-          packets.set(message.id, known ? { ...known, ...message, createdAt: known.createdAt } : message);
-        }
+      if (isInConversation(message, snapshot.account.id)) {
+        const key = messageKey(message);
+        const known = packets.get(key);
+        if (!known || (message.editedAt ?? 0) > (known.editedAt ?? 0)) packets.set(key, message);
       }
     }
-    for (const id of workspace.view.directDeleted ?? []) packets.delete(id);
     return [...packets.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   });
 
   onMount(() => {
     connectionId = snapshot.connectionId;
+    const ownId = snapshot.account.id;
+    const unwatch = workspace.watchDirectChanges(connectionId, (change) => {
+      if (!isInConversation(change.message, ownId)) return;
+      changesDuringHistory?.push(change);
+      history = applyHistoryChange(history, change);
+    });
     void open();
+    return unwatch;
   });
+
+  function isInConversation({ senderId, recipientId }: DirectMessageReference, ownId: string) {
+    return (senderId === ownId && recipientId === accountId) || (senderId === accountId && recipientId === ownId);
+  }
+
+  function messageKey({ id, senderId, recipientId }: DirectMessageReference) {
+    return `${senderId}/${recipientId}/${id}`;
+  }
+
+  function applyHistoryChange(messages: DirectMessage[], change: DirectMessageChange) {
+    const index = messages.findIndex((message) => isSameDirectMessage(message, change.message));
+    if (index < 0) return messages;
+    if (change.type === "delete") return messages.filter((_, position) => position !== index);
+    const original = messages[index];
+    if ((change.message.editedAt ?? 0) < (original.editedAt ?? 0)) return messages;
+    const updated = messages.slice();
+    updated[index] = { ...original, ...change.message, createdAt: original.createdAt };
+    return updated;
+  }
 
   $effect.pre(() => {
     const latest = messages.at(-1)?.id;
@@ -145,12 +169,14 @@
   async function loadHistory(before?: DirectCursor) {
     if (loadingHistory || !policy.persistent) return;
     loadingHistory = true;
+    changesDuringHistory = [];
     historyError = "";
     const oldHeight = list?.scrollHeight;
     const oldTop = list?.scrollTop ?? 0;
     try {
       const page = await directRequest<DirectPage>(connectionId, "direct.history", { accountId, before });
-      history = [...history, ...page.messages];
+      // A change can arrive while the server's history response is in flight.
+      history = [...history, ...changesDuringHistory.reduce(applyHistoryChange, page.messages)];
       next = page.next;
       historyLoaded = true;
       if (before && oldHeight !== undefined) {
@@ -160,6 +186,7 @@
     } catch (cause) {
       historyError = messageFrom(cause);
     } finally {
+      changesDuringHistory = undefined;
       loadingHistory = false;
     }
   }
@@ -187,7 +214,6 @@
 
   async function remove(message: DirectMessage) {
     await directRequest(connectionId, "direct.delete", { accountId, id: message.id });
-    history = history.filter(({ id }) => id !== message.id);
   }
 
   async function send(text: string, html?: string) {
@@ -242,7 +268,7 @@
           </Button>
         </div>
       {/if}
-      {#each messages as message, index (message.id)}
+      {#each messages as message, index (messageKey(message))}
         {@const name = message.senderId === snapshot.account.id ? snapshot.account.displayName : peer?.displayName ?? "Contact"}
         {@const own = message.senderId === snapshot.account.id}
         {#await conversation.decrypt(message)}

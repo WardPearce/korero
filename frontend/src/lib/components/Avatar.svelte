@@ -34,7 +34,7 @@
 <span class={["member-avatar", { small }]} data-speaking={speaking && !afk} aria-hidden="true" {@attach loadPicture}>
   {#key source}
     <Avatar.Root size={small ? "sm" : "default"} delayMs={0}>
-      {#if source}<Avatar.Image src={source} alt="" />{/if}
+      {#if source}<Avatar.Image src={source} alt="" draggable={false} />{/if}
       <Avatar.Fallback>
         {#if name.trim()}{initials(name)}{:else}<UserRound size={15} aria-hidden="true" />{/if}
       </Avatar.Fallback>

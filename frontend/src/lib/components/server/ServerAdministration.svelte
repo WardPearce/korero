@@ -10,6 +10,7 @@
   import IconButton from "#lib/components/IconButton.svelte";
   import ServerAuditLog from "./ServerAuditLog.svelte";
   import { apiFor, messageFrom, requestError } from "#lib/connection/client";
+  import { getWorkspace } from "#lib/workspace";
 
   let { origin, title, permissions, bannerSupported, bannerImageUrl, extended, onclose }: {
     origin: string;
@@ -21,8 +22,11 @@
     extended: boolean;
   } = $props();
 
+  const workspace = getWorkspace();
+
   const tabs = [
     { id: "overview", label: "Overview", permission: "manageSettings" },
+    { id: "users", label: "Users", permission: "manageRoles" },
     { id: "roles", label: "Roles", permission: "manageRoles" },
     { id: "audit", label: "Audit log", permission: "viewAdmin" },
     { id: "banner", label: "Banner", permission: "manageSettings" },
@@ -85,6 +89,7 @@
   let editedRole = $state("");
   let editingBadge = $state("");
   let badgeDraft = $state("");
+  let banningAccount = $state("");
   let deletingRole = $state("");
   let roleName = $state("");
   let selectedTemplate = $state("");
@@ -153,7 +158,7 @@
     error = "";
     notice = "";
     if (next === "overview") await loadPreferences();
-    if (next === "roles") await loadMembers(pages);
+    if (next === "roles" || next === "users") await loadMembers(pages);
     if (next === "banner") bannerUrl = bannerImageUrl ?? "";
     if (next === "invitation") await loadInvitations();
   }
@@ -173,6 +178,22 @@
   function editBadge(account: Roles["accounts"][number]) {
     editingBadge = account.id;
     badgeDraft = account.badge ?? "";
+  }
+
+  async function toggleBan(account: Roles["accounts"][number]) {
+    const banned = account.banned;
+    await run(async () => {
+      const ok = await workspace.memberAction({
+        kind: banned ? "moderation.unban" : "moderation.ban",
+        payload: { accountId: account.id },
+      });
+      if (!ok) throw new Error(workspace.actionError || `Could not ${banned ? "unban" : "ban"} ${account.displayName}.`);
+      if (members) {
+        members = { ...members, accounts: members.accounts.map((row) => row.id === account.id ? { ...row, banned: !banned } : row) };
+      }
+      banningAccount = "";
+      notice = banned ? `Unbanned ${account.displayName}.` : `Banned ${account.displayName}.`;
+    });
   }
 
   async function saveBadge(event: SubmitEvent, account: Roles["accounts"][number]) {
@@ -528,14 +549,21 @@
               {/if}
             {/if}
           </section>
+        {:else}
+          <p class="field-hint">You can view and assign member roles from the Users tab.</p>
         {/if}
-        <h3>Accounts</h3>
+      {:else if !busy}
+        <Button variant="outline" onclick={() => loadMembers(pages)}>Load roles</Button>
+      {/if}
+    {:else if tab === "users" && permissions.includes("manageRoles")}
+      {#if members}
         <ul class="admin-members">
           {#each members.accounts as account (account.id)}
             <li>
               <span class="shrinkable">
                 <strong class="truncate" title={account.displayName}>{account.displayName}</strong>
                 {#if account.badge}<span class="member-badge" title={account.badge}>{account.badge}</span>{/if}
+                {#if account.banned}<span class="member-badge banned-tag">Banned</span>{/if}
                 <small class="field-hint">{account.id}</small>
               </span>
               {#if account.editable}
@@ -562,6 +590,17 @@
                     onclick={() => editBadge(account)}>{account.badge ? "Edit badge" : "Set badge"}</Button>
                 {/if}
               {/if}
+              {#if account.bannable}
+                {#if banningAccount === account.id}
+                  <Button variant="outline" disabled={busy} onclick={() => { banningAccount = ""; }}>Cancel</Button>
+                  <Button variant="default" disabled={busy} onclick={() => toggleBan(account)}>
+                    {account.banned ? "Confirm unban" : "Confirm ban"}
+                  </Button>
+                {:else}
+                  <Button variant="outline" disabled={busy} aria-label={`${account.banned ? "Unban" : "Ban"} ${account.displayName}`}
+                    onclick={() => { banningAccount = account.id; }}>{account.banned ? "Unban" : "Ban"}</Button>
+                {/if}
+              {/if}
             </li>
           {/each}
         </ul>
@@ -572,7 +611,7 @@
           </div>
         {/if}
       {:else if !busy}
-        <Button variant="outline" onclick={() => loadMembers(pages)}>Load accounts</Button>
+        <Button variant="outline" onclick={() => loadMembers(pages)}>Load users</Button>
       {/if}
     {:else if tab === "banner" && permissions.includes("manageSettings")}
       <form class="dialog-form" onsubmit={saveBanner}>
@@ -647,6 +686,7 @@
 <style>
   .badge-form { width: 100%; display: grid; gap: .4rem; }
   .badge-form label { display: grid; gap: .25rem; }
+  .banned-tag { border-color: color-mix(in srgb, var(--destructive) 40%, var(--border)); background: color-mix(in srgb, var(--destructive) 12%, transparent); color: var(--destructive); }
   .role-settings { margin-block-end: 1rem; }
   .role-settings h4 { margin-block-start: .4rem; font-weight: 600; }
   .role-list { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); }

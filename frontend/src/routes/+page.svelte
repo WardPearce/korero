@@ -1,16 +1,15 @@
 <script lang="ts">
   import { BitsConfig } from "bits-ui";
-  import { Button, buttonVariants } from "#lib/components/ui/button/index.js";
+  import { Button } from "#lib/components/ui/button/index.js";
   import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
-  import * as DropdownMenu from "#lib/components/ui/dropdown-menu/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
   import SelectField from "#lib/components/fields/SelectField.svelte";
   import VoiceBitrateField from "#lib/components/fields/VoiceBitrateField.svelte";
   import { Textarea } from "#lib/components/ui/textarea/index.js";
   import {
     ChevronDown, CircleAlert, PhoneOff, Headphones,
-    HeadphoneOff, ListTree, LockKeyhole, MessageCircle, Mic, MicOff, Pencil, Plus, Search,
-    Download, Mail, Server, Settings2, X,
+    ListTree, LockKeyhole, MessageCircle, Pencil, Plus, Search,
+    Download, Mail, Server, X,
   } from "@lucide/svelte";
   import { tick } from "svelte";
   import ChannelMember from "#lib/components/server/ChannelMember.svelte";
@@ -18,12 +17,10 @@
   import IconButton from "#lib/components/IconButton.svelte";
   import Modal from "#lib/components/Modal.svelte";
   import PaneDivider from "#lib/components/PaneDivider.svelte";
-  import QuickAudio from "#lib/components/media/QuickAudio.svelte";
-  import { getAudioSettings } from "#lib/media/audio.svelte";
-  import WhisperControls from "#lib/components/media/WhisperControls.svelte";
+  import VoiceToolbar from "#lib/components/media/VoiceToolbar.svelte";
   import { playUiSound } from "#lib/ui-sounds";
   import { forgetPassword, getSavedPassword, savePassword } from "#lib/preferences";
-  import { desktopApp, type Channel } from "#lib/connection/client";
+  import type { Channel, Member } from "#lib/connection/client";
   import { voiceApp } from "#lib/connection/platform";
   import ChatComposer from "#lib/components/chat/ChatComposer.svelte";
   import ChatMessage from "#lib/components/chat/ChatMessage.svelte";
@@ -35,7 +32,6 @@
   import { maxChatTextLength } from "#lib/chat/rich-chat";
 
   const workspace = getWorkspace();
-  const audio = getAudioSettings();
   const voiceAvailable = voiceApp();
   const { run } = workspace;
   const view = $derived(workspace.view);
@@ -54,6 +50,7 @@
   let removeChannelPassword = $state(false);
   let channelFormOrigin = "";
   let backgroundImageUrl = $state("");
+  let channelIcon = $state("");
   let passwordOpen = $state(false);
   let channelPassword = $state("");
   let joining = $state.raw<{ channel: Channel; connectionId: string } | null>(null);
@@ -63,13 +60,14 @@
   let channelSearchOpen = $state(false);
   let collapsed = $state<string[]>([]);
   let channelAudioBitrate = $state<number | null>(null);
-  let afkFormOpen = $state(false);
-  let afkMessage = $state("");
-  let afkFormOrigin = $state("");
   let messageList: HTMLDivElement | undefined;
   let lastChatChannel: string | null | undefined;
   let knownMessageIds = new Set<string>();
   let initializedMessages = false;
+  type MemberSelection = { connectionId: string; members: ReadonlyMap<string, string> };
+  const memberDragType = "application/x-korero-members";
+  let memberSelection = $state.raw<MemberSelection | null>(null);
+  let draggedMembers = $state.raw<MemberSelection | null>(null);
   let draggedChannel = $state.raw<{ id: string; origin: string } | null>(null);
   let dropTarget = $state.raw<{ id: string; placement: ChannelPlacement } | null>(null);
 
@@ -85,8 +83,16 @@
     return groups;
   });
   let me = $derived(snapshot?.account);
-  let ownMember = $derived(snapshot?.members.find((member) => member.connectionId === snapshot?.connectionId));
   let online = $derived(view.phase === "online");
+  const movableMembers = $derived(new Map((snapshot?.channels ?? []).flatMap((channel) =>
+    channel.canMove ? membersIn(channel.id)
+      .filter((member) => member.accountId !== me?.id && member.role && snapshot?.lowerRoles?.includes(member.role))
+      .map((member) => [member.connectionId, channel.id] as const) : [])));
+  const selectedMembers = $derived(new Map(
+    memberSelection && online && memberSelection.connectionId === snapshot?.connectionId
+      ? [...memberSelection.members].filter(([id, channelId]) => movableMembers.get(id) === channelId)
+      : [],
+  ));
   let activeChannel = $derived(snapshot?.channels.find((channel) => channel.id === snapshot?.channelId));
   let currentChannel = $derived(snapshot?.channels.find((channel) => channel.id === workspace.selectedChannelId) ?? activeChannel ?? snapshot?.channels[0]);
   let isInRoom = $derived(Boolean(currentChannel && activeChannel?.id === currentChannel.id));
@@ -99,8 +105,6 @@
   let canSetAudioBitrate = $derived(workspace.channelAudioQuality && (editingChannel
     ? editingChannel.canSetAudioBitrate
     : snapshot?.serverPermissions.includes("manageSettings")));
-  let canVoice = $derived(voiceAvailable && online && Boolean(activeChannel));
-  let canSetAfk = $derived(canVoice && ownMember?.afk !== undefined && !pending);
   let canSetChannelAccess = $derived(editingChannel?.canSetPassword !== false);
   let possibleParents = $derived((snapshot?.channels ?? []).filter((parent, _, all) => {
     for (let candidate: Channel | undefined = parent; candidate; candidate = all.find(({ id }) => id === candidate?.parentId)) {
@@ -160,6 +164,7 @@
   }
 
   function selectChannel(channel: Channel) {
+    memberSelection = null;
     workspace.roomView = "chat";
     workspace.selectedChannelId = channel.id;
     workspace.mobilePane = "room";
@@ -251,6 +256,7 @@
     newChannelPassword = "";
     removeChannelPassword = false;
     backgroundImageUrl = channel?.backgroundImageUrl ?? "";
+    channelIcon = channel?.icon ?? "";
     if (channel) workspace.roomView = "channelSettings";
     else createChannelOpen = true;
   }
@@ -275,6 +281,7 @@
     if (editingChannel) payload.channelId = editingChannel.id;
     if (canSetAudioBitrate && channelAudioBitrate !== (editingChannel?.audioBitrate ?? null)) payload.audioBitrate = channelAudioBitrate;
     if (workspace.channelBackgrounds) payload.backgroundImageUrl = backgroundImageUrl.trim() || null;
+    if (workspace.channelIcons) payload.icon = channelIcon.trim() || null;
     if (canSetChannelAccess) {
       if (parentChannelId !== (editingChannel?.parentId ?? "")) payload.parentId = parentChannelId || null;
       if (channelCapacity !== (editingChannel?.capacity ?? undefined)) payload.capacity = channelCapacity ?? null;
@@ -284,28 +291,6 @@
     if (await run("channel-save", "save_channel", { payload })) {
       createChannelOpen = false;
       closeChannelSettings();
-    }
-  }
-
-  async function toggleAfk() {
-    if (!canSetAfk) return;
-    const markingAfk = !ownMember?.afk;
-    if (await run("afk", "set_presence", { afk: markingAfk, afkMessage: "" })) playUiSound(markingAfk ? "afk" : "back");
-  }
-
-  function showAfkForm() {
-    workspace.actionError = "";
-    afkFormOrigin = workspace.serverOrigin;
-    afkMessage = ownMember?.afkMessage ?? "";
-    afkFormOpen = true;
-  }
-
-  async function saveAfkMessage(event: SubmitEvent) {
-    event.preventDefault();
-    if (!canSetAfk || afkFormOrigin !== workspace.serverOrigin) return;
-    if (await run("afk", "set_presence", { afk: true, afkMessage: afkMessage.trim() })) {
-      if (!ownMember?.afk) playUiSound("afk");
-      afkFormOpen = false;
     }
   }
 
@@ -358,11 +343,55 @@
     }
   }
 
+  function membersIn(channelId: string) {
+    return snapshot?.channelMembers?.[channelId] ?? (snapshot?.channelId === channelId ? snapshot?.members ?? [] : []);
+  }
+
+  function toggleMemberSelection(channel: Channel, member: Member) {
+    if (!snapshot || !online || pending || movableMembers.get(member.connectionId) !== channel.id) return;
+    const members = new Map(selectedMembers);
+    if (!members.delete(member.connectionId)) members.set(member.connectionId, channel.id);
+    memberSelection = { connectionId: snapshot.connectionId, members };
+  }
+
+  function startMemberDrag(event: DragEvent, channel: Channel, member: Member) {
+    if (!snapshot || !online || pending || movableMembers.get(member.connectionId) !== channel.id || !event.dataTransfer) {
+      event.preventDefault();
+      return;
+    }
+    endDrag();
+    const selected = selectedMembers.has(member.connectionId);
+    if (!selected) memberSelection = null;
+    draggedMembers = {
+      connectionId: snapshot.connectionId,
+      members: selected ? selectedMembers : new Map([[member.connectionId, channel.id]]),
+    };
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(memberDragType, member.connectionId);
+  }
+
+  function memberDropIds(channel: Channel) {
+    if (!draggedMembers || draggedMembers.connectionId !== snapshot?.connectionId || !online || pending || !channel.canMove) return [];
+    const ids: string[] = [];
+    for (const [id, sourceId] of draggedMembers.members) {
+      if (movableMembers.get(id) !== sourceId) return [];
+      if (sourceId !== channel.id) ids.push(id);
+    }
+    return ids;
+  }
+
+  async function moveMembers(channelId: string, connectionIds: string[]) {
+    const selection = memberSelection;
+    const payload = connectionIds.length === 1 ? { channelId, connectionId: connectionIds[0] } : { channelId, connectionIds };
+    if (await workspace.memberAction({ kind: "channel.move", payload }) && memberSelection === selection) memberSelection = null;
+  }
+
   function startDrag(event: DragEvent, channel: Channel) {
     if (!canReorder || !channel.canEdit || !event.dataTransfer) {
       event.preventDefault();
       return;
     }
+    endDrag();
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("application/x-korero-channel", channel.id);
     draggedChannel = { id: channel.id, origin: workspace.serverOrigin };
@@ -381,8 +410,13 @@
   }
 
   function dragOver(event: DragEvent & { currentTarget: HTMLDivElement }, channel: Channel) {
-    const source = dragSource();
-    const placement = source && dragPlacement(event, source, channel);
+    let placement: ChannelPlacement | null | undefined;
+    if (event.dataTransfer?.types.includes(memberDragType)) {
+      placement = memberDropIds(channel).length ? "inside" : null;
+    } else {
+      const source = dragSource();
+      placement = source && dragPlacement(event, source, channel);
+    }
     if (!placement) {
       dropTarget = null;
       return;
@@ -393,11 +427,21 @@
   }
 
   function endDrag() {
+    draggedMembers = null;
     draggedChannel = null;
     dropTarget = null;
   }
 
   function dropChannel(event: DragEvent & { currentTarget: HTMLDivElement }, channel: Channel) {
+    if (event.dataTransfer?.types.includes(memberDragType)) {
+      const ids = memberDropIds(channel);
+      endDrag();
+      if (ids.length) {
+        event.preventDefault();
+        void moveMembers(channel.id, ids);
+      }
+      return;
+    }
     const source = dragSource();
     if (!source) return;
     const placement = dragPlacement(event, source, channel);
@@ -421,7 +465,7 @@
 
 {#snippet channelRow(channel: Channel, depth: number, nested: boolean)}
   {@const children = nested ? channelsByParent.get(channel.id) ?? [] : []}
-  {@const members = snapshot?.channelMembers?.[channel.id] ?? (snapshot?.channelId === channel.id ? snapshot?.members ?? [] : [])}
+  {@const members = membersIn(channel.id)}
   {@const expandable = children.length > 0 || members.length > 0}
   {@const isActive = activeChannel?.id === channel.id}
   {@const isSelected = currentChannel?.id === channel.id}
@@ -452,6 +496,7 @@
         aria-current={isSelected ? "true" : undefined} aria-describedby={isActive ? "joined-channel-description" : undefined}
         onclick={() => selectChannel(channel)} ondblclick={() => joinChannel(channel)} draggable={canReorder && channel.canEdit === true}
         ondragstart={(event) => startDrag(event, channel)} ondragend={endDrag}>
+        {#if channel.icon}<span class="channel-icon" aria-hidden="true">{channel.icon}</span>{/if}
         <span class="truncate" title={channel.name}>{channel.name}</span>
         {#if channel.passwordRequired}
           <span class="channel-access access-lock" title="Password protected">
@@ -466,7 +511,11 @@
     {#if members.length && !collapsed.includes(channel.id)}
       <ul class="member-list" aria-label={`Members in ${channel.name}`} style:--depth={Math.min(depth, 6)}>
         {#each members as member (member.connectionId)}
-          <ChannelMember {channel} {member} />
+          {@const movable = movableMembers.get(member.connectionId) === channel.id}
+          <ChannelMember {channel} {member} selected={selectedMembers.has(member.connectionId)}
+            onToggleSelection={movable ? () => toggleMemberSelection(channel, member) : undefined}
+            onDragStart={movable ? (event) => startMemberDrag(event, channel, member) : undefined}
+            onDragEnd={endDrag} />
         {/each}
       </ul>
     {/if}
@@ -498,46 +547,7 @@
       <span class="online-count">{snapshot.presence.length.toLocaleString()} online</span>
     </div>
   {/if}
-  <div class="voice-toolbar" role="group" aria-label="Voice controls">
-    <div class="voice-split" role="group" aria-label="Microphone">
-      <IconButton label={ownMember?.muted ? "Unmute microphone" : "Mute microphone"}
-        disabled={!canVoice || Boolean(pending) || ownMember?.adminMuted || ownMember?.afk}
-        active={Boolean(ownMember?.muted || ownMember?.adminMuted)}
-        onclick={async () => { if (await run("mute", "set_presence", { muted: !ownMember?.muted, deafened: null })) playUiSound(ownMember?.muted ? "unmute" : "mute"); }}>
-        {#if ownMember?.muted || ownMember?.adminMuted}<MicOff size={18} aria-hidden="true" />{:else}<Mic size={18} aria-hidden="true" />{/if}
-      </IconButton>
-      <QuickAudio direction="input" />
-    </div>
-    {#if audio.talking}<span class="text-xs font-medium text-[var(--success)]" role="status">Transmitting</span>{/if}
-    <div class="voice-split" role="group" aria-label="Playback">
-      <IconButton label={ownMember?.adminDeafened ? "Server deafened" : ownMember?.deafened ? "Undeafen" : "Deafen"}
-        disabled={!canVoice || Boolean(pending) || ownMember?.afk || ownMember?.adminDeafened}
-        active={Boolean(ownMember?.deafened || ownMember?.adminDeafened)}
-        onclick={async () => { if (await run("deafen", "set_presence", { muted: null, deafened: !ownMember?.deafened })) playUiSound(ownMember?.deafened ? "undeafen" : "deafen"); }}>
-        {#if ownMember?.deafened || ownMember?.adminDeafened}<HeadphoneOff size={18} aria-hidden="true" />{:else}<Headphones size={18} aria-hidden="true" />{/if}
-      </IconButton>
-      <QuickAudio direction="output" />
-    </div>
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger disabled={!canSetAfk} class={buttonVariants({ variant: "outline" })}>
-        {ownMember?.afk ? "AFK (away)" : "AFK"} <ChevronDown aria-hidden="true" />
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Content align="start">
-        <DropdownMenu.Item onSelect={ownMember?.afk ? toggleAfk : showAfkForm}>{ownMember?.afk ? "Return from AFK" : "Mark as AFK"}</DropdownMenu.Item>
-        <DropdownMenu.Item onSelect={showAfkForm}>Set AFK message</DropdownMenu.Item>
-      </DropdownMenu.Content>
-    </DropdownMenu.Root>
-    {#if desktopApp() && snapshot?.whispers}
-      <WhisperControls />
-    {/if}
-    {#if activeChannel}
-      <span class="toolbar-separator"></span>
-      <IconButton label="Leave voice channel" disabled={!canVoice || Boolean(pending)} onclick={async () => { if (await run("leave", "leave_channel")) playUiSound("disconnect"); }}><PhoneOff size={18} aria-hidden="true" /></IconButton>
-    {/if}
-    {#if workspace.canAdminister}
-      <IconButton label="Server settings" disabled={Boolean(pending)} onclick={workspace.showServerSettings}><Settings2 size={18} aria-hidden="true" /></IconButton>
-    {/if}
-  </div>
+  <VoiceToolbar />
   {#if snapshot?.directMessages && workspace.serverId}
     <div class="border-b border-border px-3 py-2.5">
       <Button variant={workspace.roomView === "directMessages" ? "default" : "secondary"} class="w-full justify-start gap-2.5 font-semibold"
@@ -632,9 +642,9 @@
           {#each view.messages as entry, index (entry.id)}
             {@const own = entry.senderId === me?.id}
             <ChatMessage message={entry} previous={view.messages[index - 1]} name={senderName(entry.senderId)}
-              editText={own ? entry.text : undefined} editLimit={maxChatTextLength}
-              onedit={own ? (text) => changeMessage("message-edit", "edit_message", { messageId: entry.id, text }) : undefined}
-              ondelete={own || snapshot?.serverPermissions.includes("deleteChannels")
+              editText={own && canChat ? entry.text : undefined} editLimit={maxChatTextLength}
+              onedit={own && canChat ? (text) => changeMessage("message-edit", "edit_message", { messageId: entry.id, text }) : undefined}
+              ondelete={own || currentChannel?.canDeleteMessages
                 ? () => changeMessage("message-delete", "delete_message", { messageId: entry.id }) : undefined}>
               <RichMessage text={entry.text} html={entry.html} />
               {#if entry.attachment && snapshot}
@@ -690,16 +700,6 @@
 </main>
 
 
-<Modal bind:open={afkFormOpen} title="AFK message" description="People who can see your voice channel can read this message while you’re AFK." dismissible={pending !== "afk"}>
-  {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}
-  <form class="dialog-form" onsubmit={saveAfkMessage}>
-    <label>Message <Input type="text" maxlength={120} placeholder="Optional" autofocus bind:value={afkMessage} /></label>
-    <Button variant="default" type="submit" disabled={!canSetAfk || afkFormOrigin !== workspace.serverOrigin}>
-      {ownMember?.afk ? "Save message" : "Go AFK"}
-    </Button>
-  </form>
-</Modal>
-
 <Modal bind:open={() => passwordOpen && joining?.connectionId === snapshot?.connectionId, (open) => {
   passwordOpen = open;
   if (!open) { channelPassword = ""; joining = null; }
@@ -749,6 +749,10 @@
         <VoiceBitrateField label="Voice bitrate" defaultLabel="Server default"
           defaultBitrate={snapshot?.targetAudioBitrate} savedBitrate={editingChannel?.audioBitrate} bind:value={channelAudioBitrate} />
       </BitsConfig>
+    {/if}
+    {#if workspace.channelIcons}
+      <label>Channel emoji <Input maxlength={16} placeholder="Optional, for example 🎮" autocomplete="off" spellcheck="false" bind:value={channelIcon} /></label>
+      {#if editingChannel}<p class="field-hint">Clear the emoji to remove the channel icon.</p>{/if}
     {/if}
     {#if workspace.channelBackgrounds}
       <label>Background image URL <Input type="url" pattern="https://.+" maxlength={512} placeholder="https://example.com/channel.jpg"

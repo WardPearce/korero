@@ -11,7 +11,14 @@
   import { maxMemberVolume } from "#lib/preferences";
   import { getWorkspace } from "#lib/workspace";
 
-  let { channel, member }: { channel: Channel; member: Member } = $props();
+  let { channel, member, selected, onToggleSelection, onDragStart, onDragEnd }: {
+    channel: Channel;
+    member: Member;
+    selected: boolean;
+    onToggleSelection?: () => void;
+    onDragStart?: (event: DragEvent) => void;
+    onDragEnd: () => void;
+  } = $props();
   const workspace = getWorkspace();
   import { voiceApp } from "#lib/connection/platform";
 
@@ -162,7 +169,22 @@
     {/snippet}
     {#snippet trigger(props)}
       <button {...props} type="button" class="tree-member member-target" tabindex={enabled ? 0 : -1}
-        aria-haspopup={enabled ? "menu" : undefined}>
+        aria-haspopup={enabled ? "menu" : undefined} aria-pressed={onToggleSelection ? selected : undefined}
+        draggable={enabled && Boolean(onDragStart)}
+        onclick={(event) => {
+          if (enabled && onToggleSelection && (event.ctrlKey || event.metaKey)) {
+            event.preventDefault();
+            onToggleSelection();
+          } else props.onclick?.(event);
+        }}
+        ondblclick={(event) => {
+          if (!onToggleSelection || !(event.ctrlKey || event.metaKey)) props.ondblclick?.();
+        }}
+        ondragstart={(event) => {
+          if (enabled && onDragStart) onDragStart(event);
+          else event.preventDefault();
+        }}
+        ondragend={onDragEnd}>
         <Avatar name={member.displayName} accountId={member.accountId} small {speaking} afk={member.afk} />
         <span class="member-details">
           <span class="inline-flex min-w-0 items-center gap-1.5">

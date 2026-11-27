@@ -1,4 +1,4 @@
-import { offline, requestError, messageFrom, type DirectMessage, type DirectOperation, type Member, type MemberRequest, type Message, type Poke, type RelayResponse, type ScreenShare, type Snapshot, type VoiceState } from "./client";
+import { offline, requestError, messageFrom, isSameDirectMessage, type DirectMessage, type DirectMessageChange, type DirectMessageReference, type DirectOperation, type Member, type MemberRequest, type Message, type Poke, type RelayResponse, type ScreenShare, type Snapshot, type VoiceState } from "./client";
 import { MobileCallAudio } from "../media/mobile-call-audio";
 import { WebVoice } from "../media/web-voice";
 import { mobileApp, voiceApp } from "./platform";
@@ -36,7 +36,6 @@ class BrowserSession {
   private messages: Message[] = [];
   private directMessages: DirectMessage[] = [];
   private lastPoke?: Poke;
-  private directDeleted: string[] = [];
   private historyRequest = 0;
   private deletedDuringHistory?: Set<string>;
 
@@ -181,7 +180,7 @@ class BrowserSession {
   }
 
   private addDirectMessage(message: DirectMessage) {
-    if (this.directMessages.some(({ id }) => id === message.id)) return false;
+    if (this.directMessages.some((known) => isSameDirectMessage(known, message))) return false;
     this.directMessages = [...this.directMessages, message].slice(-directMessageLimit);
     return true;
   }
@@ -246,9 +245,9 @@ class BrowserSession {
     this.voice?.update(snapshot);
   }
 
-  private show() {
+  private show(directChange?: DirectMessageChange) {
     this.update({ ...offline, phase: "online", snapshot: this.snapshot, messages: this.messages, directMessages: this.directMessages,
-      directDeleted: this.directDeleted, lastPoke: this.lastPoke, voice: this.voice?.voice ?? "idle", voiceError: this.voice?.error ?? null });
+      directChange, lastPoke: this.lastPoke, voice: this.voice?.voice ?? "idle", voiceError: this.voice?.error ?? null });
   }
 
   private event({ type, payload }: Reply) {
@@ -285,20 +284,19 @@ class BrowserSession {
     } else if (type === "direct.edited") {
       const edit = payload as Partial<DirectMessage> & Pick<DirectMessage, "id" | "senderId" | "recipientId" | "nonce" | "ciphertext" | "signature" | "editedAt">;
       if (edit.senderId !== snapshot.account.id && edit.recipientId !== snapshot.account.id) return;
-      const known = this.directMessages.find(({ id, senderId, recipientId }) =>
-        id === edit.id && senderId === edit.senderId && recipientId === edit.recipientId);
+      const known = this.directMessages.find((message) => isSameDirectMessage(message, edit));
       // A packet loaded from history is not held here. Keep the edit so the conversation can apply it.
       const base = known ?? (edit.createdAt === undefined ? undefined : edit as DirectMessage);
       if (!base) return;
       const next = { ...base, nonce: edit.nonce, ciphertext: edit.ciphertext, signature: edit.signature, editedAt: edit.editedAt };
       this.directMessages = known ? this.directMessages.map((message) => message === known ? next : message)
         : [...this.directMessages, next].slice(-directMessageLimit);
-      this.show();
+      this.show({ type: "edit", message: next });
     } else if (type === "direct.deleted") {
-      const { id, senderId } = payload as { id: string; senderId: string };
-      this.directMessages = this.directMessages.filter((message) => message.id !== id || message.senderId !== senderId);
-      this.directDeleted = [...this.directDeleted, id].slice(-directMessageLimit);
-      this.show();
+      const deleted = payload as DirectMessageReference;
+      if (deleted.senderId !== snapshot.account.id && deleted.recipientId !== snapshot.account.id) return;
+      this.directMessages = this.directMessages.filter((message) => !isSameDirectMessage(message, deleted));
+      this.show({ type: "delete", message: deleted });
     } else if (type === "direct.poked") {
       const poke = payload as Poke;
       if (poke.recipientId !== snapshot.account.id) return;
@@ -404,7 +402,6 @@ class BrowserSession {
     this.messages = [];
     this.directMessages = [];
     this.lastPoke = undefined;
-    this.directDeleted = [];
     this.historyRequest++;
     this.deletedDuringHistory = undefined;
     clearInterval(this.heartbeat);
