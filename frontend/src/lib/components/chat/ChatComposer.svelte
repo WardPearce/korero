@@ -14,7 +14,11 @@
   import { maxChatHtmlLength, maxChatTextLength, sanitizeChatHtml } from "#lib/chat/rich-chat";
   import { getWorkspace } from "#lib/workspace";
 
-  let { channelId, channelName, enabled }: { channelId: string; channelName: string; enabled: boolean } = $props();
+  type DirectComposer = { busy: boolean; maxBytes: number; send: (text: string, html?: string) => Promise<boolean> };
+  let { channelId, channelName, direct, enabled }: { enabled: boolean } & (
+    { channelId: string; channelName: string; direct?: never } |
+    { channelId?: never; channelName?: never; direct: DirectComposer }
+  ) = $props();
   const workspace = getWorkspace();
   let message = $state("");
   let editor = $state.raw<TipexEditor>();
@@ -22,11 +26,16 @@
   let field = $state<HTMLInputElement | null>(null);
   let fileInput = $state<HTMLInputElement>();
   let pickerOpen = $state(false);
-  const attaching = $derived(workspace.maxAttachmentBytes > 0 && workspace.view.snapshot?.canAttachFiles !== false);
-  const busy = $derived(Boolean(workspace.pending));
-  const rich = $derived(workspace.richChat);
-  const placeholder = $derived(enabled ? `Message #${channelName}` : "Join a channel to send a message");
-  const draftTooLong = $derived(message.length > maxChatTextLength);
+  let formattingError = $state("");
+  const attaching = $derived(!direct && workspace.maxAttachmentBytes > 0 && workspace.view.snapshot?.canAttachFiles !== false);
+  const busy = $derived(direct ? direct.busy : Boolean(workspace.pending));
+  const rich = $derived(Boolean(direct) || workspace.richChat);
+  const label = $derived(direct ? "Encrypted message" : "Channel message");
+  const sendLabel = $derived(direct ? "Send direct message" : "Send message");
+  const placeholder = $derived(direct ? "Write a direct message"
+    : enabled ? `Message #${channelName}` : "Join a channel to send a message");
+  const textLimit = $derived(direct?.maxBytes ?? maxChatTextLength);
+  const draftTooLong = $derived(message.length > textLimit);
   const extensions = [
     StarterKit.configure({ heading: false, horizontalRule: false, trailingNode: false,
       link: { openOnClick: false, defaultProtocol: "https" } }),
@@ -59,11 +68,11 @@
 
   function configureEditor({ editor: draft }: { editor: Editor }) {
     draft.setOptions({ editorProps: {
-      attributes: { "aria-label": "Channel message", "aria-multiline": "true", role: "textbox" },
+      attributes: { "aria-label": label, "aria-multiline": "true", role: "textbox" },
       transformPastedHTML: sanitizeChatHtml,
       handleKeyDown(view, event) {
         if (!draft.isEditable || event.key !== "Enter" || event.isComposing || view.composing || event.keyCode === 229 || event.shiftKey || event.altKey) return false;
-        if (!event.ctrlKey && !event.metaKey && (draft.isActive("listItem") || draft.isActive("codeBlock"))) return false;
+        if (!direct && !event.ctrlKey && !event.metaKey && (draft.isActive("listItem") || draft.isActive("codeBlock"))) return false;
         view.dom.closest("form")?.requestSubmit();
         return true;
       },
@@ -95,13 +104,13 @@
   }
 
   function dragOver(event: DragEvent) {
-    if (!event.dataTransfer?.types.includes("Files")) return;
+    if (direct || !event.dataTransfer?.types.includes("Files")) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = enabled && attaching && !busy ? "copy" : "none";
   }
 
   function dropFile(event: DragEvent) {
-    if (!event.dataTransfer?.types.includes("Files")) return;
+    if (direct || !event.dataTransfer?.types.includes("Files")) return;
     event.preventDefault();
     if (event.dataTransfer.files.length > 1) {
       workspace.actionError = "Attach one file per message.";
@@ -150,20 +159,33 @@
   async function send(event: SubmitEvent) {
     event.preventDefault();
     const text = message.trim();
+    if (!enabled || busy || draftTooLong || (!text && !file)) return;
+    const markup = rich && text && editor ? formattedMessage(editor) : undefined;
+    const html = markup ? sanitizeChatHtml(markup) || undefined : undefined;
+    if ((markup?.length ?? 0) > maxChatHtmlLength || (html?.length ?? 0) > maxChatHtmlLength) {
+      if (direct) {
+        formattingError = "This message has too much formatting.";
+        return;
+      }
+      workspace.actionError = "This message has too much formatting.";
+      return;
+    }
+    if (direct) {
+      formattingError = "";
+      if (await direct.send(text, html)) {
+        editor?.commands.clearContent();
+        message = "";
+      }
+      return;
+    }
     const snapshot = workspace.view.snapshot;
-    if (!enabled || busy || draftTooLong || snapshot?.channelId !== channelId || (!text && !file)) return;
+    if (!snapshot || channelId === undefined || snapshot.channelId !== channelId) return;
     const attachment = file;
     if (attachment && !attaching) {
       workspace.actionError = "Remove the attachment to send this message. Your role cannot upload files in this channel.";
       return;
     }
     if (attachment && !validAttachment(attachment)) return;
-    const markup = rich && text && editor ? formattedMessage(editor) : undefined;
-    const html = markup ? sanitizeChatHtml(markup) || undefined : undefined;
-    if ((markup?.length ?? 0) > maxChatHtmlLength || (html?.length ?? 0) > maxChatHtmlLength) {
-      workspace.actionError = "This message has too much formatting.";
-      return;
-    }
     const payload = { channelId, text, html };
     const limit = workspace.maxWebSocketBytes;
     if (!attachment && limit !== undefined) {
@@ -202,7 +224,7 @@
       {#if pickerOpen}<div class="picker" {@attach mountPicker}></div>{/if}
     </Popover.Content>
   </Popover.Root>
-  <Button type="submit" class="send-button" variant="default" aria-label="Send message" title="Send message"
+  <Button type="submit" class="send-button" variant="default" aria-label={sendLabel} title={sendLabel}
     disabled={!enabled || (!message.trim() && !file) || busy || draftTooLong}>
     <Send size={17} />
   </Button>
@@ -219,7 +241,10 @@
   {#if rich}
     <div class="rich-editor">
       <Tipex {extensions} autofocus={false} focal={false} controlComponent={null} bind:tipex={editor}
-        oncreate={configureEditor} onupdate={({ editor: draft }) => { message = draft.getText({ blockSeparator: "\n" }); }} />
+        oncreate={configureEditor} onupdate={({ editor: draft }) => {
+          message = draft.getText({ blockSeparator: "\n" });
+          formattingError = "";
+        }} />
       <div class="editor-footer">
         <div class="formatting" role="group" aria-label="Message formatting">
           {#each formatting as format (format.mark)}
@@ -230,9 +255,10 @@
         <div class="message-actions">{@render actions()}</div>
       </div>
     </div>
-    {#if draftTooLong}<p class="draft-limit" role="status">Messages can contain up to {maxChatTextLength} characters.</p>{/if}
+    {#if formattingError}<p class="draft-limit" role="alert">{formattingError}</p>{/if}
+    {#if draftTooLong}<p class="draft-limit" role="status">Messages can contain up to {textLimit} characters.</p>{/if}
   {:else}
-    <Input aria-label="Channel message" {placeholder} disabled={!enabled || busy} maxlength={maxChatTextLength}
+    <Input aria-label={label} {placeholder} disabled={!enabled || busy} maxlength={maxChatTextLength}
       bind:ref={field} bind:value={message} />
     <div class="message-actions">{@render actions()}</div>
   {/if}

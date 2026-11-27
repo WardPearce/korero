@@ -17,6 +17,9 @@ interface Workspace {
   readonly canAdminister: boolean;
   readonly serverSettings: Snippet | undefined;
   readonly channelBackgrounds: boolean;
+  readonly profilePictures: boolean;
+  avatarId(accountId: string): string | null | undefined;
+  profilePicture(origin: string, connectionId: string, accountId: string, avatarId?: string | null): Promise<string | undefined>;
   readonly maxAttachmentBytes: number;
   readonly richChat: boolean;
   readonly maxWebSocketBytes: number | undefined;
@@ -33,7 +36,8 @@ interface Workspace {
   mobilePane: MobilePane;
   roomView: RoomView;
   readonly directAccountId: string | null;
-  readonly unreadDirectAccounts: ReadonlySet<string>;
+  readonly unreadDirectCounts: ReadonlyMap<string, number>;
+  readonly unreadDirectCount: number;
   showDirectMessages(accountId?: string): void;
   showPoke(member: Pick<Member, "accountId" | "displayName">): void;
   showConnectionInfo(connectionId: string): void;

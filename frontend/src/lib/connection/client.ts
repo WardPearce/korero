@@ -10,6 +10,7 @@ export interface Account {
   displayName: string;
   role: string;
   badge?: string | null;
+  avatarId?: string | null;
 }
 
 export interface Channel {
@@ -52,7 +53,7 @@ export interface Snapshot {
   channelId: string | null;
   totalUsers?: number;
   channels: Channel[];
-  presence: { accountId: string; displayName: string; connections: number }[];
+  presence: { accountId: string; displayName: string; connections: number; avatarId?: string | null }[];
   members: Member[];
   channelMembers?: Record<string, Member[]>;
   serverPermissions: string[];
@@ -136,6 +137,7 @@ export interface ServerInfo {
   identityAuthentication?: boolean;
   identityEnrollment?: boolean;
   channelBackgrounds?: boolean;
+  profilePictures?: boolean;
   maxAttachmentBytes?: number;
   richChat?: boolean;
   maxWebSocketBytes?: number;

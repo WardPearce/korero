@@ -99,6 +99,13 @@
       "when": 1795766976592,
       "tag": "0013_hosted_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1795772513883,
+      "tag": "0014_profile_pictures",
+      "breakpoints": true
     }
   ]
 }

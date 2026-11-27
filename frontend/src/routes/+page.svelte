@@ -537,9 +537,9 @@
       <Button variant={workspace.roomView === "directMessages" ? "default" : "secondary"} class="w-full justify-start gap-2.5 font-semibold"
         aria-pressed={workspace.roomView === "directMessages"} onclick={() => workspace.showDirectMessages()}>
         <Mail size={16} aria-hidden="true" /> Direct messages
-        {#if workspace.unreadDirectAccounts.size}
+        {#if workspace.unreadDirectCount}
           <span class="ms-auto min-w-5 rounded-full bg-background px-1.5 text-center text-xs text-foreground">
-            {workspace.unreadDirectAccounts.size}<span class="sr-only"> unread conversations</span>
+            {workspace.unreadDirectCount}<span class="sr-only">{workspace.unreadDirectCount === 1 ? " unread message" : " unread messages"}</span>
           </span>
         {/if}
       </Button>

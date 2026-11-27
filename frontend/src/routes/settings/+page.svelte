@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ProfilePictureSettings from "#lib/components/ProfilePictureSettings.svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
   import { asset, resolve } from "$app/paths";
@@ -74,8 +75,11 @@
           <Button type="submit" variant="default" disabled={saving || Boolean(workspace.pending)}>Save name</Button>
         </div>
       </form>
+      {#if workspace.profilePictures}
+        {#key workspace.view.snapshot?.connectionId}<ProfilePictureSettings {account} />{/key}
+      {/if}
     {:else}
-      <p class="notice">Connect to a voice server to change your display name there.</p>
+      <p class="notice">Connect to a voice server to edit your profile there.</p>
     {/if}
   </div>
 </main>

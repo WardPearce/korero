@@ -56,7 +56,7 @@
         <h3 id="chat-preview-heading">Live preview</h3>
         <div class="chat-preview" role="group" aria-labelledby="chat-preview-heading">
           {#each sample as message, index (message.id)}
-            <ChatMessage {message} previous={sample[index - 1]} name={message.name}>
+            <ChatMessage {message} previous={sample[index - 1]} name={message.name} showProfilePicture={false}>
               <p>{message.text}</p>
             </ChatMessage>
           {/each}

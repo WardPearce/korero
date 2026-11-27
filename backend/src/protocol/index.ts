@@ -23,6 +23,7 @@ export const bytesPerMiB = 1024 * 1024;
 export const defaultAttachmentMiB = 4;
 export const maxSupportedAttachmentMiB = 32;
 export const attachmentDataLength = (bytes: number) => Math.ceil(bytes / 3) * 4;
+export const maxProfilePictureBytes = 192 * 1024;
 export const maxScreenVideoBitrate = 12000000;
 const richMessageHtml = optional(text(32768));
 export const httpBodies = {
@@ -33,6 +34,9 @@ export const httpBodies = {
   refresh: object({ refreshToken: token }),
   bootstrap: object({ token, displayName, deviceName, password: optional(password), identity: enrollmentProof }),
   account: object({ displayName }),
+  profilePicture: object({
+    data: nullable(t.String({ minLength: 4, maxLength: attachmentDataLength(maxProfilePictureBytes), pattern: "^[A-Za-z0-9+/]+={0,2}$" })),
+  }),
   serverPassword: object({ password: nullable(password) }),
   invitationUpdate: object({ expiresAt: optional(nullable(invitationExpiry)), usesLeft: optional(nullable(int(0, 10000))) }),
   roleDefinition: object({ name: roleName, permissions: list(t.UnionEnum([...permissions]), permissions.length) }),

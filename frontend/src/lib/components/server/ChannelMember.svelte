@@ -163,7 +163,7 @@
     {#snippet trigger(props)}
       <button {...props} type="button" class="tree-member member-target" tabindex={enabled ? 0 : -1}
         aria-haspopup={enabled ? "menu" : undefined}>
-        <Avatar name={member.displayName} small {speaking} afk={member.afk} />
+        <Avatar name={member.displayName} accountId={member.accountId} small {speaking} afk={member.afk} />
         <span class="member-details">
           <span class="inline-flex min-w-0 items-center gap-1.5">
             <span class="truncate" title={member.displayName}>{member.displayName}</span>

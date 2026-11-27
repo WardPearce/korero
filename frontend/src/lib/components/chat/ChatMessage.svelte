@@ -6,10 +6,11 @@
 
   type MessageHeader = { senderId: string; createdAt: number };
 
-  let { message, previous, name, children }: {
+  let { message, previous, name, showProfilePicture = true, children }: {
     message: MessageHeader;
     previous?: MessageHeader;
     name: string;
+    showProfilePicture?: boolean;
     children: Snippet;
   } = $props();
 
@@ -22,7 +23,7 @@
 
 <article class={["chat-message", { compact, grouped, "with-avatar": display.value.showAvatars }]}>
   {#if display.value.showAvatars && !grouped}
-    <Avatar {name} small={compact} />
+    <Avatar {name} accountId={showProfilePicture ? message.senderId : undefined} small={compact} />
   {/if}
   <div class="chat-content">
     <div class={["chat-meta", { "sr-only": grouped && !display.value.showTimestamps }]}>

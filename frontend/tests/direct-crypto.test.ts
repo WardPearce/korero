@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { browserIdentity } from "../src/lib/identity/browser-identity";
-import { directConversation } from "../src/lib/chat/direct-crypto";
+import { decodeDirectContent, directConversation, encodeDirectContent } from "../src/lib/chat/direct-crypto";
 
 test("both identities can read direct messages and detect altered content or routing", async () => {
   const [alice, bob, stranger] = await Promise.all([browserIdentity(), browserIdentity(), browserIdentity()]);
@@ -23,6 +23,14 @@ test("both identities can read direct messages and detect altered content or rou
   const message = { ...sealed, senderId: from.accountId, recipientId: accountId, createdAt: Date.now() };
   expect(await sender.decrypt(message)).toBe(text);
   expect(await receiver.decrypt(message)).toBe(text);
+  expect(encodeDirectContent(text)).toBe(text);
+  expect(decodeDirectContent(await receiver.decrypt(message))).toEqual({ text });
+  const html = "<p><strong>Private kōrero 🔒</strong></p>";
+  const { accountId: recipientId, ...formatted } = await sender.encrypt(encodeDirectContent(text, html));
+  expect(JSON.stringify(formatted)).not.toContain(html);
+  expect(decodeDirectContent(await receiver.decrypt({
+    ...formatted, senderId: from.accountId, recipientId, createdAt: Date.now(),
+  }))).toEqual({ text, html });
   const ciphertext = (sealed.ciphertext[0] === "A" ? "B" : "A") + sealed.ciphertext.slice(1);
   await expect(receiver.decrypt({ ...message, ciphertext })).rejects.toThrow();
   await expect(receiver.decrypt({ ...message, id: crypto.randomUUID() })).rejects.toThrow();

@@ -11,6 +11,25 @@ export type DirectPage = { messages: DirectMessage[]; next: DirectCursor | null 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const transcript = (fields: unknown[]) => encoder.encode(JSON.stringify(fields));
+const richMessagePrefix = "\0korero-rich-message-v1\n";
+
+export function encodeDirectContent(text: string, html?: string) {
+  return html ? richMessagePrefix + JSON.stringify({ text, html }) : text;
+}
+
+export function decodeDirectContent(value: string): { text: string; html?: string } {
+  if (value.startsWith(richMessagePrefix)) {
+    try {
+      const content = JSON.parse(value.slice(richMessagePrefix.length));
+      if (typeof content?.text === "string" && typeof content.html === "string") {
+        return { text: content.text, html: content.html };
+      }
+    } catch {
+      // An unrecognized payload can still be displayed as plain text.
+    }
+  }
+  return { text: value };
+}
 
 function publicKey(value: string) {
   const bytes = decodeBase64Url(value);

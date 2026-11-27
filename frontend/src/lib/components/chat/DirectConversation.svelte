@@ -1,14 +1,15 @@
 <script lang="ts">
-  import { ArrowLeft, LockKeyhole, Send } from "@lucide/svelte";
+  import { ArrowLeft, ExternalLink, LockKeyhole } from "@lucide/svelte";
   import { onMount, tick } from "svelte";
   import ChatMessage from "./ChatMessage.svelte";
+  import ChatComposer from "./ChatComposer.svelte";
+  import RichMessage from "./RichMessage.svelte";
   import IconButton from "#lib/components/IconButton.svelte";
   import Modal from "#lib/components/Modal.svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
-  import { Textarea } from "#lib/components/ui/textarea/index.js";
   import { directRequest, messageFrom, type DirectMessage } from "#lib/connection/client";
-  import { directConversation, type DirectCursor, type DirectPacket, type DirectPage, type DirectPeer } from "#lib/chat/direct-crypto";
+  import { decodeDirectContent, directConversation, encodeDirectContent, type DirectCursor, type DirectPacket, type DirectPage, type DirectPeer } from "#lib/chat/direct-crypto";
   import { getIdentity } from "#lib/identity/identity";
   import { preferences } from "#lib/preferences";
   import { getWorkspace } from "#lib/workspace";
@@ -28,9 +29,9 @@
   let confirmation = $state("");
   let verificationError = $state("");
   let verificationPending = $state(false);
-  let draft = $state("");
   let connectionId = "";
-  let retry: { text: string; packet: DirectPacket } | undefined;
+  let retry: { content: string; packet: DirectPacket } | undefined;
+  let externalUrl = $state("");
   let pending = $state(false);
   let error = $state("");
   let historyError = $state("");
@@ -158,25 +159,34 @@
     }
   }
 
-  async function send(event: SubmitEvent) {
-    event.preventDefault();
-    if ((mode !== "verified" && mode !== "unverified") || !conversation || !canSend || pending || !draft.trim()) return;
-    if (new TextEncoder().encode(draft).length > policy.maxBytes) {
-      error = `Messages can use up to ${policy.maxBytes} bytes on this server.`;
-      return;
+  function confirmLink(url: string) {
+    externalUrl = url;
+  }
+
+  function openLink() {
+    window.open(externalUrl, "_blank", "noopener,noreferrer");
+    externalUrl = "";
+  }
+
+  async function send(text: string, html?: string) {
+    if ((mode !== "verified" && mode !== "unverified") || !conversation || !canSend || pending || !text) return false;
+    const content = encodeDirectContent(text, html);
+    if (new TextEncoder().encode(content).length > policy.maxBytes) {
+      error = `Messages can use up to ${policy.maxBytes} bytes on this server. Shorten this message or remove formatting.`;
+      return false;
     }
     pending = true;
     error = "";
-    const text = draft;
     try {
-      const packet = retry?.text === text ? retry.packet : await conversation.encrypt(text);
-      retry = { text, packet };
+      const packet = retry?.content === content ? retry.packet : await conversation.encrypt(content);
+      retry = { content, packet };
       await directRequest(connectionId, "direct.send", packet);
       retry = undefined;
-      if (draft === text) draft = "";
       await scrollToBottom();
+      return true;
     } catch (cause) {
       error = messageFrom(cause);
+      return false;
     } finally {
       pending = false;
     }
@@ -215,8 +225,8 @@
         <ChatMessage {message} previous={messages[index - 1]} {name}>
           {#await conversation.decrypt(message)}
             <p class="text-muted-foreground">Decrypting…</p>
-          {:then text}
-            <p>{text}</p>
+          {:then content}
+            <RichMessage {...decodeDirectContent(content)} onlink={confirmLink} />
           {:catch}
             <p class="form-error">Message could not be verified or decrypted.</p>
           {/await}
@@ -234,12 +244,17 @@
     {:else if !canSendDirectMessages}
       <p class="px-3 text-sm text-muted-foreground">Your role cannot send direct messages on this server.</p>
     {/if}
-    <form class="composer" onsubmit={send}>
-      <Textarea rows={2} maxlength={policy.maxBytes} disabled={!canSend || pending}
-        aria-label="Encrypted message" placeholder="Write a direct message" bind:value={draft} />
-      <Button type="submit" aria-label="Send direct message" disabled={!canSend || pending || !draft.trim()}><Send size={18} /></Button>
-    </form>
+    <ChatComposer enabled={canSend} direct={{ busy: pending, maxBytes: policy.maxBytes, send }} />
   </section>
+  <Modal bind:open={() => Boolean(externalUrl), (open) => { if (!open) externalUrl = ""; }} title="Open external link?"
+    description="This link opens a website outside Korero.chat. Check the address before continuing.">
+    {#snippet icon()}<ExternalLink size={20} aria-hidden="true" />{/snippet}
+    <div class="key-display mb-3"><code dir="ltr">{externalUrl}</code></div>
+    <div class="dialog-actions">
+      <Button variant="outline" onclick={() => { externalUrl = ""; }}>Cancel</Button>
+      <Button onclick={openLink}>Open in browser</Button>
+    </div>
+  </Modal>
   <Modal bind:open={verificationOpen} title="Compare safety codes" dismissible={!verificationPending}
     description={mode === "verified"
       ? "You verified this contact’s safety code on this device."

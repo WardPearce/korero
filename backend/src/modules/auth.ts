@@ -3,11 +3,12 @@ import { integer, sqliteTable } from "drizzle-orm/sqlite-core";
 import { createPublicKey, randomUUID, verify } from "node:crypto";
 import type { Config } from "../config";
 import { audit, DEFAULT_ROLE_KEY, INITIAL_ROLE, type Queries, type Role, type Store } from "../database";
-import { accountIdentities, accounts, accountRoles, bans, invitations, refreshHistory, sessions, settings, setup } from "../database/schema";
+import { accountIdentities, accounts, accountRoles, bans, invitations, profilePictures, refreshHistory, sessions, settings, setup } from "../database/schema";
+import { maxProfilePictureBytes } from "../protocol";
 import { Credentials, equalDigest, randomToken } from "../security/credentials";
 import { fail, ProtocolError } from "../security/errors";
 
-export type Account = typeof accounts.$inferSelect & { role: Role };
+export type Account = typeof accounts.$inferSelect & { role: Role; avatarId: string | null };
 const { accessDigest: _, ...sessionColumns } = getTableColumns(sessions);
 export type Session = Omit<typeof sessions.$inferSelect, "accessDigest">;
 type IdentityOperation = "login" | "register" | "bootstrap";
@@ -26,14 +27,39 @@ const invitationDetails = {
 };
 const passwordKey = "serverPasswordHash";
 const passwordOptions = { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 } as const;
+const pngSignature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+function decodeProfilePicture(encoded: string) {
+  const image = Buffer.from(encoded, "base64");
+  const invalid = () => { throw new ProtocolError("INVALID_REQUEST", "Use a PNG profile picture up to 192 pixels per side."); };
+  if (image.length > maxProfilePictureBytes || image.length < 45 || image.toString("base64") !== encoded ||
+      !image.subarray(0, 8).equals(pngSignature) || image.readUInt32BE(8) !== 13 ||
+      image.toString("ascii", 12, 16) !== "IHDR") return invalid();
+  const width = image.readUInt32BE(16);
+  const height = image.readUInt32BE(20);
+  if (!width || !height || width > 192 || height > 192) return invalid();
+  let hasImageData = false;
+  for (let offset = 8; offset + 12 <= image.length;) {
+    const size = image.readUInt32BE(offset);
+    const end = offset + 8 + size;
+    if (end + 4 > image.length ||
+        Bun.hash.crc32(image.subarray(offset + 4, end)) !== image.readUInt32BE(end)) return invalid();
+    const type = image.toString("ascii", offset + 4, offset + 8);
+    if (type === "IDAT" && size > 0) hasImageData = true;
+    if (type === "IEND") return hasImageData && size === 0 && end + 4 === image.length ? image : invalid();
+    offset = end + 4;
+  }
+  return invalid();
+}
 
 function invitationScope(actor: Account) {
   return actor.role === "Administrator" || actor.role === "Owner" ? undefined : eq(invitations.createdBy, actor.id);
 }
 
 function getAccount(db: Queries, id: string): Account {
-  const row = db.select({ ...getTableColumns(accounts), role: accountRoles.role })
-    .from(accounts).innerJoin(accountRoles, eq(accounts.id, accountRoles.accountId)).where(eq(accounts.id, id)).get();
+  const row = db.select({ ...getTableColumns(accounts), role: accountRoles.role, avatarId: profilePictures.revision })
+    .from(accounts).innerJoin(accountRoles, eq(accounts.id, accountRoles.accountId))
+    .leftJoin(profilePictures, eq(accounts.id, profilePictures.accountId)).where(eq(accounts.id, id)).get();
   if (!row) fail("NOT_FOUND");
   return row;
 }
@@ -79,6 +105,26 @@ export class Auth {
     this.onAccountChanged(id);
     return { ...previous, displayName };
   }
+
+  profilePicture(accountId: string) {
+    const picture = this.db.select().from(profilePictures).where(eq(profilePictures.accountId, accountId)).get();
+    return picture ? { avatarId: picture.revision, data: picture.data.toString("base64") } : { avatarId: null, data: null };
+  }
+
+  updateProfilePicture(accountId: string, encoded: string | null) {
+    const data = encoded === null ? null : decodeProfilePicture(encoded);
+    const avatarId = data ? randomUUID() : null;
+    if (data && avatarId) {
+      this.db.insert(profilePictures).values({ accountId, revision: avatarId, data })
+        .onConflictDoUpdate({ target: profilePictures.accountId, set: { revision: avatarId, data } }).run();
+    } else if (!this.db.delete(profilePictures).where(eq(profilePictures.accountId, accountId))
+      .returning({ accountId: profilePictures.accountId }).get()) {
+      return { avatarId };
+    }
+    this.onAccountChanged(accountId);
+    return { avatarId };
+  }
+
   hasOwner() { return hasOwner(this.db); }
 
   private passwordHash() {
@@ -211,7 +257,7 @@ export class Auth {
     db.insert(accountRoles).values({ accountId: id, role }).run();
     db.insert(accountIdentities).values({ accountId: id, publicKey, origin }).run();
     audit(db, id, "identity.attached", id);
-    return { account: { id, displayName: name, role, createdAt, badge: null }, ...this.createSession(db, id, device) };
+    return { account: { id, displayName: name, role, createdAt, badge: null, avatarId: null }, ...this.createSession(db, id, device) };
   }
 
   challengeIdentity(serverId: string, operation: IdentityOperation, publicKey: string, deviceName: string, origin: string) {

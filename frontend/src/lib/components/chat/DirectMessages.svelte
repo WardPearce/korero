@@ -162,15 +162,16 @@
 </script>
 
 {#snippet person(contact: (typeof contacts)[number])}
+  {@const unread = workspace.unreadDirectCounts.get(contact.accountId)}
   <li>
     <button type="button" class="tree-member dm-person" onclick={() => openConversation(contact.accountId)}>
-      <Avatar name={contact.displayName} small />
+      <Avatar name={contact.displayName} accountId={contact.accountId} small />
       <span class="dm-person-details">
         <span class="dm-person-name truncate">{contact.displayName}</span>
         <small>{contact.online ? "Online" : "Offline"}</small>
       </span>
       <span class="dm-person-statuses">
-        {#if workspace.unreadDirectAccounts.has(contact.accountId)}<span class="dm-unread">Unread</span>{/if}
+        {#if unread}<span class="dm-unread">{unread} unread</span>{/if}
         {#if contact.verified}<span class="dm-trust" title="Verified on this device"><ShieldCheck size={13} aria-hidden="true" /> Verified</span>
         {:else}<span class="dm-trust dm-trust-pending" title="Safety codes have not been compared"><ShieldAlert size={13} aria-hidden="true" /> Unverified</span>{/if}
       </span>

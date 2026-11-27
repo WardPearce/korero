@@ -1,6 +1,6 @@
 import * as Tone from "tone";
 
-type Sound = "channel" | "connect" | "disconnect" | "mute" | "unmute" | "deafen" | "undeafen" | "message" | "poke" | "afk" | "back";
+type Sound = "channel" | "connect" | "disconnect" | "mute" | "unmute" | "deafen" | "undeafen" | "message" | "directMessage" | "poke" | "afk" | "back";
 
 const notes: Record<Sound, [number, number, number]> = {
   channel: [520, 660, 0.12],
@@ -11,6 +11,7 @@ const notes: Record<Sound, [number, number, number]> = {
   deafen: [440, 330, 0.14],
   undeafen: [330, 440, 0.14],
   message: [740, 880, 0.1],
+  directMessage: [330, 495, 0.24],
   poke: [960, 570, 0.25],
   afk: [660, 520, 0.2],
   back: [520, 660, 0.2],

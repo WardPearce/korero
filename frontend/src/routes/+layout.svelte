@@ -29,6 +29,7 @@
   import { authenticateIdentity, getIdentity, identityError, setIdentity } from "#lib/identity/identity";
   import { HostedAccount } from "#lib/identity/hosted-account";
   import { identityModeKey, readLocalIdentity, rememberIdentityMode, type LocalProfile } from "#lib/identity/local-identity";
+  import { createProfilePictureCache } from "#lib/identity/profile-picture";
   import { browserServerOrigin, browserSession } from "#lib/connection/browser-session";
   import { applyAppearance, readAppearance } from "#lib/theme";
   import { readChatDisplay, saveChatDisplay, setChatDisplay, type ChatDisplay } from "#lib/chat/chat-display";
@@ -101,7 +102,8 @@
   let screenShareControlsTarget = $state<HTMLElement>();
   let directAccountId = $state<string | null>(null);
   let connectionInfo = $state.raw<{ origin: string; viewerId: string; connectionId: string } | null>(null);
-  let unreadDirectAccounts = $state.raw<ReadonlySet<string>>(new Set());
+  let unreadDirectCounts = $state.raw<ReadonlyMap<string, number>>(new Map());
+  const unreadDirectCount = $derived([...unreadDirectCounts.values()].reduce((total, count) => total + count, 0));
   let poke = $state.raw<Poke | null>(null);
   let pokeTarget = $state.raw<(Pick<Member, "accountId" | "displayName"> & { viewerId: string }) | null>(null);
   let pokeDraft = $state("");
@@ -110,6 +112,8 @@
 
   let me = $derived(view.snapshot?.account);
   let online = $derived(view.phase === "online");
+  const profilePictureCache = createProfilePictureCache();
+  const avatarIds = $derived(new Map(view.snapshot?.presence.map(({ accountId, avatarId }) => [accountId, avatarId])));
   let serverPermissions = $derived(view.snapshot?.serverPermissions ?? []);
   let canAdminister = $derived(online && Boolean(serverInfo?.serverAdministration) &&
     (["manageRoles", "manageSettings", "manageInvitations"].some((permission) => serverPermissions.includes(permission)) ||
@@ -140,6 +144,9 @@
     get canAdminister() { return canAdminister; },
     get serverSettings() { return roomView === "serverSettings" && canAdminister ? serverSettings : undefined; },
     get channelBackgrounds() { return Boolean(serverInfo?.channelBackgrounds); },
+    get profilePictures() { return serverInfo?.profilePictures === true; },
+    avatarId(accountId) { return accountId === me?.id ? me.avatarId : avatarIds.get(accountId); },
+    profilePicture: profilePictureCache,
     get maxAttachmentBytes() { return view.snapshot?.maxAttachmentBytes ?? serverInfo?.maxAttachmentBytes ?? 0; },
     get richChat() { return serverInfo?.richChat === true; },
     get maxWebSocketBytes() { return serverInfo?.maxWebSocketBytes; },
@@ -162,7 +169,8 @@
     get roomView() { return roomView; },
     set roomView(value) { roomView = value; },
     get directAccountId() { return directAccountId; },
-    get unreadDirectAccounts() { return unreadDirectAccounts; },
+    get unreadDirectCounts() { return unreadDirectCounts; },
+    get unreadDirectCount() { return unreadDirectCount; },
     showDirectMessages,
     showPoke,
     showConnectionInfo,
@@ -307,7 +315,7 @@
       ? { channelId: channel, connectionId: connection } : undefined);
     if (channel && channel !== view.snapshot?.channelId) selectedChannelId = channel;
     if (connection !== view.snapshot?.connectionId) {
-      unreadDirectAccounts = new Set();
+      unreadDirectCounts = new Map();
       poke = null;
       pokeTarget = null;
     }
@@ -317,13 +325,19 @@
     }
     if (state.directMessages?.at(-1)?.id !== view.directMessages?.at(-1)?.id) {
       const previous = new Set(view.directMessages?.map(({ id }) => id));
-      const unread = new Set(unreadDirectAccounts);
-      for (const message of state.directMessages ?? []) {
-        if (message.recipientId !== state.snapshot?.account.id || previous.has(message.id)) continue;
-        if (onWorkspace && mobilePane === "room" && roomView === "directMessages" && directAccountId === message.senderId) continue;
-        unread.add(message.senderId);
+      const incoming = state.directMessages?.filter((message) =>
+        message.recipientId === state.snapshot?.account.id && !previous.has(message.id)) ?? [];
+      if (incoming.length) {
+        if (notify) playUiSound("directMessage");
+        const unread = new Map(unreadDirectCounts);
+        const viewingDirect = onWorkspace && roomView === "directMessages" &&
+          (mobilePane === "room" || viewport > 760);
+        for (const message of incoming) {
+          if (viewingDirect && directAccountId === message.senderId) continue;
+          unread.set(message.senderId, (unread.get(message.senderId) ?? 0) + 1);
+        }
+        unreadDirectCounts = unread;
       }
-      unreadDirectAccounts = unread;
     }
     view = state;
   }
@@ -684,8 +698,10 @@
   function showDirectMessages(accountId?: string) {
     if (!online || !view.snapshot?.directMessages || !serverInfo?.serverId) return;
     directAccountId = accountId ?? null;
-    if (accountId && unreadDirectAccounts.has(accountId)) {
-      unreadDirectAccounts = new Set([...unreadDirectAccounts].filter((id) => id !== accountId));
+    if (accountId && unreadDirectCounts.has(accountId)) {
+      const unread = new Map(unreadDirectCounts);
+      unread.delete(accountId);
+      unreadDirectCounts = unread;
     }
     roomView = "directMessages";
     openWorkspace("room");
@@ -807,7 +823,7 @@
     </div>
     <div class="rail-bottom">
       <div class="account-line">
-        <Avatar name={me?.displayName ?? username} />
+        <Avatar name={me?.displayName ?? username} accountId={me?.id} />
         <div class="flex-content">
           <strong class="truncate">{me?.displayName ?? (username || "Guest")}</strong>
           <span class="account-status"><span class="connection-dot" data-online={online}></span>{status}</span>

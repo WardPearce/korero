@@ -122,8 +122,11 @@ async fn fetch(
     );
     let is_account = matches!(
         (method.as_str(), path.as_str()),
-        ("GET", "/api/v1/account" | "/api/v1/account/sessions") | ("PATCH", "/api/v1/account")
-    );
+        ("GET", "/api/v1/account" | "/api/v1/account/sessions")
+            | ("PATCH", "/api/v1/account" | "/api/v1/account/picture")
+    ) || (method == "GET" && path.strip_prefix("/api/v1/account/picture/").is_some_and(|id| {
+        id.len() == 36 && id.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+    }));
     let endpoint = path.split('?').next().unwrap_or_default();
     let is_administration = matches!(
         (method.as_str(), endpoint),
@@ -708,4 +711,39 @@ async fn main() -> Result<()> {
     let _ = disconnect(&state).await;
     output.abort();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn desktop_badge_update_requires_a_session() -> Result<()> {
+        let origin = "https://127.0.0.1:8443";
+        let (outgoing, _messages) = mpsc::unbounded_channel();
+        let state = Arc::new(AppState {
+            client: Mutex::new(Client {
+                server: Some(Server::new(origin, None)?),
+                ..Client::default()
+            }),
+            audio: Mutex::default(),
+            outgoing,
+            #[cfg(target_os = "linux")]
+            shortcut: Mutex::default(),
+        });
+
+        for (method, path, expected) in [
+            ("PATCH", "/api/v1/account/picture", "You are not signed in"),
+            ("GET", "/api/v1/account/picture/555ae5fc-f10b-45a4-bb1b-bdbc4e228141", "You are not signed in"),
+            ("PATCH", "/api/v1/admin/badges", "You are not signed in"),
+            ("DELETE", "/api/v1/admin/badges", "Unsupported client HTTP operation"),
+            ("PATCH", "/api/v1/admin/badges/extra", "Unsupported client HTTP operation"),
+        ] {
+            let response = handle(&state, "api_fetch", serde_json::json!({
+                "origin": origin, "method": method, "path": path, "body": null,
+            })).await;
+            assert_eq!(response.unwrap_err(), expected, "{method} {path}");
+        }
+        Ok(())
+    }
 }

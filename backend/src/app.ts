@@ -5,7 +5,7 @@ import type { Auth } from "./modules/auth";
 import type { HostedAccounts } from "./modules/hosted-accounts";
 import type { Media } from "./modules/media";
 import type { Realtime } from "./modules/realtime";
-import { attachmentDataLength, auditQuery, bytesPerMiB, httpBodies, id, maxSupportedAttachmentMiB, payloads, version } from "./protocol";
+import { attachmentDataLength, auditQuery, bytesPerMiB, httpBodies, id, maxProfilePictureBytes, maxSupportedAttachmentMiB, payloads, version } from "./protocol";
 import { errorResponse, fail, ProtocolError, RateLimit } from "./security/errors";
 import { version as serverVersion } from "../package.json";
 
@@ -16,6 +16,30 @@ const normalizeIp = (address: string) => {
 
 // Allow worst-case JSON escaping of the caption, formatting and filename.
 const attachmentBodyLimit = (bytes: number) => attachmentDataLength(bytes) + 262144;
+const pictureBodyLimit = attachmentDataLength(maxProfilePictureBytes) + 256;
+
+async function readBoundedJson(request: Request, limit: number, tooLarge: () => never) {
+  if (Number(request.headers.get("content-length")) > limit) tooLarge();
+  const reader = request.body?.getReader() ?? fail("INVALID_REQUEST");
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let length = 0;
+  let body = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > limit) {
+        void reader.cancel().catch(() => {});
+        tooLarge();
+      }
+      body += decoder.decode(value, { stream: true });
+    }
+    return JSON.parse(body + decoder.decode());
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 const hostedAccountPath = "/api/v1/hosted-account/";
 const hostedCredentials = {
@@ -33,6 +57,8 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
   const attachmentRequests = new RateLimit(config.limits.attachment_uploads_per_minute);
   const attachmentDownloads = new RateLimit(config.limits.attachment_downloads_per_minute);
   const connectionInfoRequests = new RateLimit(30);
+  const profilePictureUpdates = new RateLimit(10);
+  const profilePictureDownloads = new RateLimit(300);
   const attachmentUploadsInProgress = new Set<string>();
   const attachmentPath = "/api/v1/chat/attachments";
   const proxyIps = new Set(config.server.trusted_proxies.map(normalizeIp));
@@ -62,28 +88,11 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
   const parseAttachment = async ({ request }: { request: Request }) => {
     const { accountId } = bearer(request);
     attachmentRequests.take(accountId);
-    const limit = attachmentBodyLimit(realtime.maxAttachmentBytes);
-    if (Number(request.headers.get("content-length")) > limit) realtime.attachmentTooLarge();
     if (attachmentUploadsInProgress.has(accountId) || attachmentUploadsInProgress.size >= config.limits.attachment_uploads_concurrent) fail("RATE_LIMITED");
-    const reader = request.body?.getReader() ?? fail("INVALID_REQUEST");
     attachmentUploadsInProgress.add(accountId);
-    const decoder = new TextDecoder("utf-8", { fatal: true });
-    let length = 0;
-    let body = "";
     try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        length += value.byteLength;
-        if (length > limit) {
-          void reader.cancel().catch(() => {});
-          realtime.attachmentTooLarge();
-        }
-        body += decoder.decode(value, { stream: true });
-      }
-      return JSON.parse(body + decoder.decode());
+      return await readBoundedJson(request, attachmentBodyLimit(realtime.maxAttachmentBytes), () => realtime.attachmentTooLarge());
     } finally {
-      reader.releaseLock();
       attachmentUploadsInProgress.delete(accountId);
     }
   };
@@ -133,7 +142,7 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
       identityEnrollment: true, channelBackgrounds: true, serverAdministration: true, extendedServerAdministration: true,
       passwordRequired: auth.passwordRequired(),
       invitationPasswordBypass: true, bannerImageUrl: realtime.bannerImageUrl,
-      screenSharing: true, richChat: true, channelAudioQuality: true,
+      screenSharing: true, richChat: true, channelAudioQuality: true, profilePictures: true,
       maxWebSocketBytes: config.limits.websocket_bytes, maxAttachmentBytes: realtime.maxAttachmentBytes }))
     .get("/api/v1/server/capabilities", ({ request }) => {
       const access = request.headers.get("authorization");
@@ -213,6 +222,17 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
       return realtime.downloadAttachment(session, query.connectionId, params.messageId);
     }, { params: t.Object({ messageId: id }), query: t.Object({ connectionId: id }) })
     .patch("/api/v1/account", ({ request, body }) => auth.updateAccount(bearer(request).accountId, body.displayName.trim()), { body: httpBodies.account })
+    .patch("/api/v1/account/picture", ({ request, body }) => auth.updateProfilePicture(bearer(request).accountId, body.data), {
+      body: httpBodies.profilePicture,
+      parse: ({ request }) => {
+        profilePictureUpdates.take(bearer(request).accountId);
+        return readBoundedJson(request, pictureBodyLimit, () => fail("LIMIT"));
+      },
+    })
+    .get("/api/v1/account/picture/:accountId", ({ request, params }) => {
+      profilePictureDownloads.take(bearer(request).accountId);
+      return auth.profilePicture(params.accountId);
+    }, { params: t.Object({ accountId: id }) })
     .get("/api/v1/account/sessions", ({ request }) => auth.listSessions(bearer(request).accountId))
     .delete("/api/v1/account/sessions/:id", ({ request, params }) => {
       auth.revoke(bearer(request).accountId, params.id);

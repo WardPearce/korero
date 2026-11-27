@@ -296,9 +296,9 @@ export class Realtime {
   private presenceAccount(accountId: string, except?: Peer) {
     const members = this.online.get(accountId);
     if (!members?.size) return;
-    const { id, displayName } = members.values().next().value!.account!;
+    const { id, displayName, avatarId } = members.values().next().value!.account!;
     this.broadcast([...this.online.values()].flatMap((set) => [...set]), "presence.changed",
-      { accountId: id, displayName, connections: members.size }, except);
+      { accountId: id, displayName, avatarId, connections: members.size }, except);
   }
   private accountChanged(id: string) {
     const peers = this.online.get(id);
@@ -616,8 +616,8 @@ export class Realtime {
             canMute: this.allowed(account, "mute") && this.allowed(account, "mute", channel) };
         }),
       presence: [...this.online.values()].map((connections) => {
-        const { id, displayName } = connections.values().next().value!.account!;
-        return { accountId: id, displayName, connections: connections.size };
+        const { id, displayName, avatarId } = connections.values().next().value!.account!;
+        return { accountId: id, displayName, avatarId, connections: connections.size };
       }),
       members: peer.channelId ? [...(this.memberships.get(peer.channelId) ?? [])].map((member) => this.member(member)) : [],
       channelMembers: Object.fromEntries(visible.filter(({ id }) => this.memberships.has(id)).map(({ id }) =>

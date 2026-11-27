@@ -24,7 +24,7 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | --- | --- | --- | --- |
 | GET `/health` | Public | — | `{status:"ok"}` |
 | GET `/ready` | Public | — | `{status:"ready"}`, or 503 with `{status:"unavailable"}` |
-| GET `/api/v1/server/info` | Public | — | `serverId, name, version, protocolVersions, registration, setupRequired, passwordRequired, invitationPasswordBypass, serverAdministration, bannerImageUrl, richChat?, maxWebSocketBytes?, fingerprint?` |
+| GET `/api/v1/server/info` | Public | — | `serverId, name, version, protocolVersions, registration, setupRequired, passwordRequired, invitationPasswordBypass, serverAdministration, bannerImageUrl, richChat?, maxWebSocketBytes?, profilePictures?, fingerprint?` |
 | GET `/api/v1/server/capabilities` | Optional | — | `protocolVersions, websocketPath, audio, targetAudioBitrate, heartbeatSeconds, maxWebSocketBytes, udp, tcp, textPersistence, iceServers?` |
 | POST `/api/v1/auth/identity/challenge` | Public | `operation, publicKey, deviceName, origin` | Single-use challenge |
 | POST `/api/v1/auth/identity/login` | Signed login challenge and server password where required | `id, signature, password?` | Account and new session |
@@ -37,6 +37,8 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | GET `/api/v1/connections/:id` | Access token for the same session or a viewer with access to the member’s channel | — | `{displayName, channelName, connectedSeconds, latencyMs}` |
 | GET `/api/v1/account` | Access token | — | Account |
 | PATCH `/api/v1/account` | Access token | `displayName` | Account |
+| PATCH `/api/v1/account/picture` | Access token | `data`, a base64 PNG or `null` to remove the picture | `{avatarId}` |
+| GET `/api/v1/account/picture/:accountId` | Access token | — | `{avatarId, data}`, with both fields null when there is no picture |
 | GET `/api/v1/account/sessions` | Access token | — | Array of `id, deviceName, createdAt, lastActive, expiresAt` |
 | POST `/api/v1/chat/attachments` | Access token and matching connection | `connectionId, channelId, text, html?, name, data` | `{messageId}` |
 | GET `/api/v1/chat/attachments/:messageId` | Access token and matching connection | Query `connectionId` | `{data}` |
@@ -171,7 +173,12 @@ lists roles the caller can assign to a subordinate account. The channel list has
 Invisible parents are represented as null. Members have `connectionId, accountId,
 displayName, role, badge, muted, deafened, adminMuted, adminDeafened` and cover the socket's
 current channel. Presence entries have
-`accountId, displayName, connections`. Badges are cosmetic text labels of up to 32
+`accountId, displayName, connections`. On servers with `profilePictures`, accounts
+and presence entries include a nullable `avatarId` revision. Profile pictures are
+limited to 192 KiB and 192 pixels per side. Updating a picture refreshes the
+account's presence and invalidates its active sessions' snapshots.
+
+Badges are cosmetic text labels of up to 32
 characters. The badge endpoint accepts `null` to clear a badge. It only allows edits
 to other accounts below the caller's role, and records changes in the audit log.
 

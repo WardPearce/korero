@@ -13,6 +13,11 @@ export const accounts = sqliteTable("accounts", {
   id: text().primaryKey(), displayName: text("display_name").notNull(), createdAt: integer("created_at").notNull(),
   badge: text(),
 });
+export const profilePictures = sqliteTable("profile_pictures", {
+  accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
+  revision: text().notNull(),
+  data: blob({ mode: "buffer" }).notNull(),
+});
 export const hostedAccounts = sqliteTable("hosted_accounts", {
   username: text().primaryKey().notNull(),
   credentialDigest: text("credential_digest").notNull(),
