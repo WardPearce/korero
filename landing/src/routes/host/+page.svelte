@@ -79,14 +79,17 @@
 		<p>
 			The image supports AMD64 and ARM64. Start with a <code>server.toml</code> next to your
 			compose file. Every setting is optional, so this one only sets the server name and the
-			public address clients use for media. See <a href="#configure">Configure</a> for the rest.
+			public addresses clients use for signalling and media. See
+			<a href="#configure">Configure</a> for the rest.
 		</p>
 		<CodeBlock lang="toml" label="server.toml" code={`[server]
 name = "My Kōrero server"
 registration = "invitation"
+# The public IP or hostname clients use for HTTPS/WSS.
+public_addresses = ["203.0.113.10"]
 
 [media]
-# The public IP or hostname clients can reach this host on.
+# The public IP or hostname clients can reach the media port on.
 announced_address = "203.0.113.10"`} />
 		<p>
 			Then create a <code>compose.yaml</code> that mounts the file read-only and points
@@ -181,13 +184,18 @@ journalctl -u korero`} />
 
 		<h2 id="first-owner">Claim the server</h2>
 		<p>
-			The first start prints the signalling address (for example <code>192.168.1.100:8443</code>),
-			the TLS public-key fingerprint and a one-time setup token. The token lasts 15 minutes by
-			default. Treat the logs as sensitive until you have used it.
+			The first start prints the local signalling address (for example
+			<code>192.168.1.100:8443</code>), the TLS public-key fingerprint and a one-time setup
+			token. If you set <code>server.public_addresses</code>, it also prints a <code>Public</code>
+			endpoint — share that one with remote clients. The token lasts 15 minutes by default. Treat
+			the logs as sensitive until you have used it.
 		</p>
 		<ol>
 			<li>Open Kōrero and choose <strong>Connect to server</strong>.</li>
-			<li>Enter the address and compare the fingerprint with the one in the log.</li>
+			<li>
+				Enter the address (the <code>Public</code> one if configured) and compare the fingerprint
+				with the one in the log.
+			</li>
 			<li>Enter the setup token to create the first owner.</li>
 		</ol>
 		<p>
@@ -219,6 +227,10 @@ journalctl -u korero`} />
 					<td>Who can create accounts: <code>open</code>, <code>invitation</code>, <code>admin</code> or <code>disabled</code>.</td>
 				</tr>
 				<tr><td><code>server.password</code></td><td>A shared password for new sign-ins.</td></tr>
+				<tr>
+					<td><code>server.public_addresses</code></td>
+					<td>The public IP or hostname clients use for signalling; also added to TLS SANs.</td>
+				</tr>
 				<tr>
 					<td><code>media.announced_address</code></td>
 					<td>The public IP or hostname in media candidates.</td>
