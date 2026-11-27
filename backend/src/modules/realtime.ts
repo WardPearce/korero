@@ -683,7 +683,7 @@ export class Realtime {
       motd: this.motd,
       targetAudioBitrate: this.targetAudioBitrate,
       maxAttachmentBytes: this.maxAttachmentBytes,
-      canReorderChannels: this.allowed(account, "editChannels"),
+      canReorderChannels: visible.some((channel) => this.allowed(account, "editChannels", channel)),
     };
   }
   private leave(peer: Peer) {
@@ -769,7 +769,8 @@ export class Realtime {
 
   private password<T>(accountId: string, run: () => Promise<T>) { return this.passwordWork.run(accountId, run); }
   reorderChannel(accountId: string, { channelId, targetId, placement, parentId: expectedParentId }: typeof httpBodies.channelOrder.static) {
-    const actor = this.authorize(accountId, "editChannels");
+    // Ordering is scoped to the channels involved; a server-wide grant is not required.
+    const actor = this.auth.account(accountId);
     const source = this.channel(channelId);
     const target = this.channel(targetId);
     this.require(actor, "join", source);
