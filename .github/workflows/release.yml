@@ -98,12 +98,40 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          pattern: "{android,desktop-linux-x64,desktop-osx-arm64,desktop-win-x64,server-linux-amd64,server-linux-arm64}"
           path: release-assets
-          merge-multiple: true
+
+      - name: Validate release assets
+        run: |
+          set -euo pipefail
+          for artifact in android desktop-linux-x64 desktop-osx-arm64 desktop-win-x64 server-linux-amd64 server-linux-arm64; do
+            if [ ! -d "release-assets/$artifact" ] || [ -z "$(find "release-assets/$artifact" -type f -print -quit)" ]; then
+              echo "::error::Missing or empty release artifact: $artifact"
+              exit 1
+            fi
+          done
+          while IFS= read -r -d '' asset; do
+            case "$asset" in
+              release-assets/android/*.apk|release-assets/android/*.aab|\
+              release-assets/desktop-linux-x64/*.deb|release-assets/desktop-linux-x64/*.rpm|release-assets/desktop-linux-x64/*.AppImage|release-assets/desktop-linux-x64/*.zip|release-assets/desktop-linux-x64/*.blockmap|release-assets/desktop-linux-x64/*.yml|\
+              release-assets/desktop-osx-arm64/*.dmg|release-assets/desktop-osx-arm64/*.zip|release-assets/desktop-osx-arm64/*.blockmap|release-assets/desktop-osx-arm64/*.yml|\
+              release-assets/desktop-win-x64/*.exe|release-assets/desktop-win-x64/*.7z|release-assets/desktop-win-x64/*.zip|release-assets/desktop-win-x64/*.blockmap|release-assets/desktop-win-x64/*.yml|\
+              release-assets/server-linux-amd64/voice-server-linux-amd64|release-assets/server-linux-arm64/voice-server-linux-arm64) ;;
+              *) echo "::error::Unexpected release asset: $asset"; exit 1 ;;
+            esac
+            relative=${asset#release-assets/}
+            relative=${relative#*/}
+            if [[ "$relative" == */* ]]; then
+              echo "::error::Unexpected nested release asset: $asset"
+              exit 1
+            fi
+          done < <(find release-assets -type f -print0)
 
       - name: Create checksums for server binaries
         working-directory: release-assets
-        run: sha256sum voice-server-linux-amd64 voice-server-linux-arm64 > SHA256SUMS
+        run: |
+          sha256sum server-linux-amd64/voice-server-linux-amd64 server-linux-arm64/voice-server-linux-arm64 |
+            sed 's|  server-linux-[^/]*/|  |' > SHA256SUMS
 
       - name: Create or update GitHub release
         env:
@@ -112,8 +140,12 @@ jobs:
         run: |
           set -euo pipefail
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            release_flags=()
+            if [[ "$TAG" == *-* ]]; then
+              release_flags+=(--prerelease)
+            fi
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" --title "$TAG" --generate-notes --draft
+              --target "$GITHUB_SHA" --title "$TAG" --generate-notes --draft "${release_flags[@]}"
           fi
           mapfile -d '' assets < <(find release-assets -type f -print0)
           (( ${#assets[@]} > 0 ))
