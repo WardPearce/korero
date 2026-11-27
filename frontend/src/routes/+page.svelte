@@ -100,7 +100,8 @@
     search.trim() ? (snapshot?.channels ?? []).filter((channel) => channel.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())) : [],
   );
   let canCreate = $derived(online && Boolean(snapshot?.serverPermissions.includes("createChannels")));
-  let canReorder = $derived(online && Boolean(snapshot?.canReorderChannels) && !search.trim() && !pending);
+  let canReorder = $derived(online && !search.trim() && !pending &&
+    Boolean(snapshot?.canReorderChannels || snapshot?.channels.some((channel) => channel.canEdit)));
   let canChat = $derived(online && isInRoom && snapshot?.canSendText !== false);
   let canSetAudioBitrate = $derived(workspace.channelAudioQuality && (editingChannel
     ? editingChannel.canSetAudioBitrate
@@ -467,7 +468,6 @@
   {@const children = nested ? channelsByParent.get(channel.id) ?? [] : []}
   {@const members = membersIn(channel.id)}
   {@const expandable = children.length > 0 || members.length > 0}
-  {@const isActive = activeChannel?.id === channel.id}
   {@const isSelected = currentChannel?.id === channel.id}
   {@const image = channel.backgroundImageUrl?.startsWith("https://") ? channel.backgroundImageUrl : null}
   <li>
@@ -493,7 +493,7 @@
         </button>
       {/if}
       <button {...props} type="button" class="channel-target" data-leaf={expandable ? undefined : ""}
-        aria-current={isSelected ? "true" : undefined} aria-describedby={isActive ? "joined-channel-description" : undefined}
+        aria-current={isSelected ? "true" : undefined}
         onclick={() => selectChannel(channel)} ondblclick={() => joinChannel(channel)} draggable={canReorder && channel.canEdit === true}
         ondragstart={(event) => startDrag(event, channel)} ondragend={endDrag}>
         {#if channel.icon}<span class="channel-icon" aria-hidden="true">{channel.icon}</span>{/if}
@@ -503,7 +503,6 @@
             <LockKeyhole size={14} aria-hidden="true" /><span class="sr-only">Password protected</span>
           </span>
         {/if}
-        {#if isActive}<span class="joined-dot" title="Joined" aria-hidden="true"></span>{/if}
       </button>
     </div>
       {/snippet}
@@ -549,7 +548,7 @@
   {/if}
   <VoiceToolbar />
   {#if snapshot?.directMessages && workspace.serverId}
-    <div class="border-b border-border px-3 py-2.5">
+    <div class="channel-direct border-b border-border px-3 py-2.5">
       <Button variant={workspace.roomView === "directMessages" ? "default" : "secondary"} class="w-full justify-start gap-2.5 font-semibold"
         aria-pressed={workspace.roomView === "directMessages"} onclick={() => workspace.showDirectMessages()}>
         <Mail size={16} aria-hidden="true" /> Direct messages
@@ -573,7 +572,6 @@
     {/if}
   </div>
   <div class="channel-scroll">
-    <span id="joined-channel-description" class="sr-only">Joined</span>
     {#if snapshot?.channels.length}
       <ul class="channel-list">
         {#if search.trim()}

@@ -239,7 +239,6 @@ body {
   font-weight: 600;
   text-align: center;
 }
-.rail-server .rail-unread + .connection-dot { margin-left: 0; }
 .rail-tile, .server-tile, .heading-icon, .dialog-icon {
   display: grid;
   flex: none;
@@ -251,7 +250,7 @@ body {
   background: var(--card);
 }
 .rail-tile { width: 28px; height: 28px; }
-.connection-dot, .joined-dot {
+.connection-dot {
   display: inline-block;
   flex: none;
   width: 7px;
@@ -259,13 +258,12 @@ body {
   border: 1px solid currentColor;
   border-radius: min(var(--radius), 50%);
 }
-.connection-dot[data-online="true"], .joined-dot { color: var(--success); background: currentColor; }
-.rail-server .connection-dot, .joined-dot { margin-left: auto; }
+.connection-dot[data-online="true"] { color: var(--success); background: currentColor; }
 .rail-bottom { padding: 10px 8px; border-top: 1px solid var(--border); }
 .account-line { display: flex; align-items: center; gap: 8px; font-size: var(--type-small); }
 .account-status { display: flex; align-items: center; gap: 5px; }
 
-.channel-pane { background: var(--muted); }
+.channel-pane { background: var(--muted); container-type: inline-size; container-name: channel-pane; }
 .channel-top, .workspace-header {
   display: flex;
   align-items: center;
@@ -296,6 +294,8 @@ body {
   inset: -6px;
   width: calc(100% + 12px);
   height: calc(100% + 12px);
+  max-width: none;
+  max-height: none;
   filter: blur(3px);
 }
 .channel-top:has(.server-banner:not([hidden]))::before,
@@ -336,12 +336,12 @@ body {
   inset-inline: 0;
   height: 3px;
   border-radius: 2px;
-  background: var(--accent);
+  background: var(--primary);
   pointer-events: none;
 }
 .channel-row[data-drop="before"]::after { top: -3px; }
 .channel-row[data-drop="after"]::after { bottom: -3px; }
-.channel-row[data-drop="inside"] { outline: 2px solid var(--accent); outline-offset: -2px; }
+.channel-row[data-drop="inside"] { outline: 2px solid var(--primary); outline-offset: -2px; }
 .tree-expander { display: grid; place-items: center; border-radius: var(--radius-sm); }
 .tree-expander, .channel-target, .tree-member {
   appearance: none;
@@ -369,7 +369,6 @@ body {
 .channel-target[draggable="true"] { cursor: grab; }
 .access-lock { flex: none; color: var(--muted-foreground); }
 .channel-access { margin-left: auto; }
-.channel-access + .joined-dot { margin-left: 0; }
 .channel-empty { padding: 8px 0; color: var(--muted-foreground); font-size: var(--type-small); }
 .member-list { margin-left: calc(26px + var(--depth) * 10px); }
 .tree-member {
@@ -415,6 +414,28 @@ body {
   gap: 6px;
   padding: 8px 12px;
   border-top: 1px solid var(--border);
+}
+
+/* A narrow channel pane compacts its top and bottom controls so they hold their
+   shape instead of wrapping into tall, awkward stacks. */
+@container channel-pane (max-width: 300px) {
+  .channel-pane :is(.voice-toolbar, .channel-direct, .channel-search, .channel-footer) {
+    --control-height: 32px;
+  }
+  .channel-pane .voice-toolbar {
+    gap: 4px;
+    padding: 6px 8px;
+  }
+  .channel-pane .channel-direct {
+    padding-block: 6px;
+  }
+  .channel-pane .channel-search {
+    margin: 8px;
+  }
+  .channel-pane .channel-footer {
+    gap: 4px;
+    padding: 6px 8px;
+  }
 }
 
 .breadcrumb { color: var(--muted-foreground); font-size: var(--type-caption); }
@@ -731,4 +752,33 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
   background-color: var(--glass-overlay, var(--popover));
   -webkit-backdrop-filter: var(--glass-blur, none);
   backdrop-filter: var(--glass-blur, none);
+}
+
+/* Theme background image: the background colour is slightly transparent so the image shows
+   through the whole UI, and the sidebars/cards become translucent to match. */
+:root[data-image] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: var(--theme-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  transition: filter 240ms ease;
+}
+:root[data-image] body { background-color: color-mix(in srgb, var(--background) 90%, transparent); }
+:root[data-image]:not([data-glass]) :is(.server-rail, .channel-pane, .settings-nav, .mobile-nav) {
+  background-color: color-mix(in srgb, var(--muted) 88%, transparent);
+}
+:root[data-image]:not([data-glass]) :is(.composer, .settings-card, [data-slot="card"]) {
+  background-color: color-mix(in srgb, var(--card) 90%, transparent);
+}
+:root[data-image][data-glass] body::before {
+  filter: blur(18px) saturate(130%);
+}
+:root[data-image][data-glass] body { background-image: none; }
+
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  :root[data-image][data-glass] body::before { filter: none; }
 }

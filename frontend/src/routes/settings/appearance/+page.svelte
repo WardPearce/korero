@@ -1,6 +1,6 @@
 <script lang="ts">
   import { downloadFile } from "#lib/download-file";
-  import { Check, Download, Hash, Palette, Pencil, Plus, Send, Upload } from "@lucide/svelte";
+  import { Check, Download, Hash, Image as ImageIcon, Palette, Pencil, Plus, Send, Upload } from "@lucide/svelte";
   import { onDestroy, tick } from "svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
@@ -47,6 +47,11 @@
   let workspace: HTMLDivElement;
   let importButton = $state<HTMLButtonElement | null>(null);
   let editorTrigger: HTMLElement | null = null;
+  let imageUrl = $state("");
+  let imageInput = $state<HTMLInputElement | null>(null);
+
+  const backgroundMaxBytes = 10 * 1024 * 1024;
+  const backgroundMaxDimension = 1920;
 
   let readability = $derived.by(() => {
     if (!draft) return 0;
@@ -77,9 +82,45 @@
     updateAppearance({ ...appearance, glassmorphism }, glassmorphism ? "Frosted glass enabled." : "Frosted glass disabled.");
   }
 
+  function applyImageUrl(event: Event & { currentTarget: HTMLInputElement }) {
+    const value = event.currentTarget.value.trim();
+    if (draft) draft.image = /^https?:\/\//.test(value) ? value : "";
+  }
+
+  function removeBackground() {
+    if (draft) draft.image = "";
+    imageUrl = "";
+  }
+
+  async function chooseBackground(event: Event & { currentTarget: HTMLInputElement }) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file || !draft) return;
+    try {
+      if (file.size > backgroundMaxBytes) throw new Error("Choose an image smaller than 10 MiB.");
+      const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+      try {
+        const scale = Math.min(1, backgroundMaxDimension / Math.max(bitmap.width, bitmap.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("This device could not prepare the image.");
+        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        draft.image = canvas.toDataURL("image/jpeg", 0.8);
+        imageUrl = "";
+      } finally {
+        bitmap.close();
+      }
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : "Choose a readable PNG, JPEG, or WebP image.";
+    }
+  }
+
   function startEditor(theme: Theme, trigger: HTMLElement | null, id?: string) {
     editorTrigger = trigger;
     draft = { ...theme, colors: { ...theme.colors } };
+    imageUrl = theme.image && !theme.image.startsWith("data:") ? theme.image : "";
     editingId = id;
     status = "";
     error = "";
@@ -189,7 +230,7 @@
 {/snippet}
 
 {#snippet channelPreview(theme: Theme, showStatuses = false)}
-  <div class="sample theme-sample" data-glass={appearance.glassmorphism ? "" : undefined} style={themeStyle(theme)} aria-label="Sample channel" role="group">
+  <div class="sample theme-sample" data-glass={appearance.glassmorphism ? "" : undefined} data-image={theme.image ? "" : undefined} style={themeStyle(theme)} aria-label="Sample channel" role="group">
     <div class="sample-sidebar">
       <strong>Channels</strong>
       <span class="sample-selection"><Hash size={14} aria-hidden="true" /> General</span>
@@ -269,6 +310,26 @@
                     </label>
                   {/each}
                 </div>
+              </fieldset>
+              <fieldset>
+                <legend>Background image</legend>
+                <div class="background-controls">
+                  <label class="editor-field background-url">
+                    <span>Image URL</span>
+                    <Input type="url" placeholder="https://example.com/background.jpg" bind:value={imageUrl} oninput={applyImageUrl} />
+                  </label>
+                  <span class="background-or">or</span>
+                  <Button variant="outline" onclick={() => imageInput?.click()}><ImageIcon /> Choose image</Button>
+                  <input type="file" accept="image/*" hidden bind:this={imageInput} onchange={chooseBackground} />
+                </div>
+                {#if draft.image}
+                  <div class="background-preview">
+                    <img src={draft.image} alt="" aria-hidden="true" />
+                    <span>{draft.image.startsWith("data:") ? "Uploaded image" : "Image URL"}</span>
+                    <Button variant="ghost" onclick={removeBackground}>Remove</Button>
+                  </div>
+                {/if}
+                <p class="field-hint">The background becomes slightly transparent so the image shows through. Frosted glass blurs it.</p>
               </fieldset>
             </div>
             <div class="preview-column">
@@ -406,7 +467,10 @@
     overflow: hidden;
     border: 1px solid var(--border);
     border-radius: min(var(--radius), .5rem);
-    background: color-mix(in srgb, var(--background) 85%, var(--primary));
+    background-color: color-mix(in srgb, var(--background) 85%, var(--primary));
+    background-image: var(--theme-image, none);
+    background-size: cover;
+    background-position: center;
   }
   .tile-window {
     display: grid;
@@ -473,6 +537,19 @@
   .color-field { display: flex; align-items: center; gap: .45rem; font-size: var(--type-small); line-height: 1.24; }
   .color-field input { width: 2rem; height: 2rem; flex: none; cursor: pointer; }
   .color-field small { display: block; font-family: var(--font-mono); }
+  .background-controls { display: flex; align-items: flex-end; flex-wrap: wrap; gap: .5rem; }
+  .background-url { flex: 1 1 14rem; }
+  .background-or { align-self: center; color: var(--muted-foreground); font-size: var(--type-small); }
+  .background-preview { display: flex; align-items: center; gap: .6rem; margin-top: .6rem; }
+  .background-preview img {
+    width: 4rem;
+    height: 2.5rem;
+    flex: none;
+    object-fit: cover;
+    border: 1px solid var(--border);
+    border-radius: min(var(--radius), .5rem);
+  }
+  .background-preview span { flex: 1; min-width: 0; color: var(--muted-foreground); font-size: var(--type-small); overflow-wrap: anywhere; }
   .preview-column { position: sticky; top: 0; }
   .sample {
     display: grid;
@@ -484,8 +561,22 @@
     background: var(--background);
     background-image: var(--glass-backdrop, none);
     color: var(--foreground);
-    font-size: calc(.875rem * var(--text-scale));
+    /* Scale the mock down on narrow containers so the two-pane preview stays
+       proportional on mobile instead of squashing its desktop proportions. */
+    font-size: calc(clamp(.68rem, 3cqi, .875rem) * var(--text-scale));
     overflow-wrap: anywhere;
+  }
+  .sample[data-image] {
+    background-color: var(--background);
+    background-image: linear-gradient(color-mix(in srgb, var(--background) 90%, transparent), color-mix(in srgb, var(--background) 90%, transparent)), var(--theme-image);
+    background-size: cover, cover;
+    background-position: center, center;
+  }
+  .sample[data-image]:not([data-glass]) .sample-sidebar {
+    background: color-mix(in srgb, var(--muted) 88%, transparent);
+  }
+  .sample[data-image]:not([data-glass]) .sample-message {
+    background: color-mix(in srgb, var(--card) 90%, transparent);
   }
   .sample-sidebar, .sample-channel { display: grid; align-content: start; min-width: 0; gap: calc(var(--ui-gap) * .55); }
   .sample-sidebar { padding: calc(var(--ui-gap) * .7); border-inline-end: 1px solid var(--border); background: var(--glass-panel, var(--muted)); }
@@ -510,6 +601,7 @@
     display: flex; align-items: start; gap: .55rem; padding: calc(var(--ui-gap) * .65);
     border-radius: var(--radius); background: var(--glass-card, var(--card)); box-shadow: var(--glass-highlight, none);
   }
+  .sample-message > div { min-width: 0; }
   .sample-message small { color: var(--muted-foreground); }
   .sample-avatar {
     display: grid; flex: none; place-items: center; width: 2em; height: 2em;

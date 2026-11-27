@@ -29,7 +29,6 @@
     { id: "users", label: "Users", permission: "manageRoles" },
     { id: "roles", label: "Roles", permission: "manageRoles" },
     { id: "audit", label: "Audit log", permission: "viewAdmin" },
-    { id: "banner", label: "Banner", permission: "manageSettings" },
     { id: "invitation", label: "Invitations", permission: "manageInvitations" },
   ] as const;
   type Tab = typeof tabs[number]["id"];
@@ -64,7 +63,7 @@
   type Invitation = InvitationList["invitations"][number];
   let tab = $state<Tab>("roles");
   let availableTabs = $derived(tabs.filter(({ id, permission }) => permissions.includes(permission) &&
-    (id !== "banner" || bannerSupported) && (id !== "overview" && id !== "audit" || extended)));
+    (id === "overview" ? extended || bannerSupported : id !== "audit" || extended)));
   let busy = $state(false);
   let error = $state("");
   let notice = $state("");
@@ -157,9 +156,11 @@
     tab = next;
     error = "";
     notice = "";
-    if (next === "overview") await loadPreferences();
+    if (next === "overview") {
+      bannerUrl = bannerImageUrl ?? "";
+      if (extended) await loadPreferences();
+    }
     if (next === "roles" || next === "users") await loadMembers(pages);
-    if (next === "banner") bannerUrl = bannerImageUrl ?? "";
     if (next === "invitation") await loadInvitations();
   }
 
@@ -422,38 +423,48 @@
     {#if notice}<p class="field-hint" role="status">{notice}</p>{/if}
     {#if busy}<p class="field-hint" role="status">Working…</p>{/if}
 
-    {#if tab === "overview" && extended && permissions.includes("manageSettings")}
-      {#if serverPreferences}
-        <form class="dialog-form" onsubmit={savePreferences}>
-          <label>Message of the day
-            <Textarea rows={4} maxlength={1000} disabled={busy} bind:value={motd} placeholder="Leave blank to hide the message" />
-          </label>
-          <p class="field-hint">Appears above the chat for connected members.</p>
-          {#if serverPreferences.audioBitrateLocked}
-            <VoiceBitrateField label="Default voice bitrate" defaultLabel="Server configuration"
-              defaultBitrate={serverPreferences.configuredAudioBitrate} value={null} disabled />
-          {:else}
-            <VoiceBitrateField label="Default voice bitrate" defaultLabel="Server configuration"
-              defaultBitrate={serverPreferences.configuredAudioBitrate} savedBitrate={serverPreferences.defaultAudioBitrate}
-              bind:value={voiceBitrate} disabled={busy} />
-          {/if}
-          <p class="field-hint">{serverPreferences.audioBitrateLocked ? "The server environment sets this value." :
-            "Used by voice channels that inherit the default."}</p>
-          {#if serverPreferences.maxSupportedAttachmentMiB !== undefined}
-            <label>Maximum chat attachment size (MiB)
-              <Input type="number" min="1" max={serverPreferences.maxSupportedAttachmentMiB} step="1" required
-                disabled={busy} bind:value={attachmentMiB} />
+    {#if tab === "overview" && permissions.includes("manageSettings") && (extended || bannerSupported)}
+      {#if extended}
+        {#if serverPreferences}
+          <form class="dialog-form" onsubmit={savePreferences}>
+            <label>Message of the day
+              <Textarea rows={4} maxlength={1000} disabled={busy} bind:value={motd} placeholder="Leave blank to hide the message" />
             </label>
-          {/if}
-          <SelectField label="Default role for new members" options={defaultRoleOptions} bind:value={defaultRole}
-            disabled={busy || !serverPreferences.canSetDefaultRole || defaultRoleOptions.length < 2} />
-          <p class="field-hint">New accounts get this role when they register.</p>
-          <div class="dialog-actions">
-            <Button variant="default" type="submit" disabled={busy || !preferencesChanged}>Save settings</Button>
-          </div>
+            <p class="field-hint">Appears above the chat for connected members.</p>
+            {#if serverPreferences.audioBitrateLocked}
+              <VoiceBitrateField label="Default voice bitrate" defaultLabel="Server configuration"
+                defaultBitrate={serverPreferences.configuredAudioBitrate} value={null} disabled />
+            {:else}
+              <VoiceBitrateField label="Default voice bitrate" defaultLabel="Server configuration"
+                defaultBitrate={serverPreferences.configuredAudioBitrate} savedBitrate={serverPreferences.defaultAudioBitrate}
+                bind:value={voiceBitrate} disabled={busy} />
+            {/if}
+            <p class="field-hint">{serverPreferences.audioBitrateLocked ? "The server environment sets this value." :
+              "Used by voice channels that inherit the default."}</p>
+            {#if serverPreferences.maxSupportedAttachmentMiB !== undefined}
+              <label>Maximum chat attachment size (MiB)
+                <Input type="number" min="1" max={serverPreferences.maxSupportedAttachmentMiB} step="1" required
+                  disabled={busy} bind:value={attachmentMiB} />
+              </label>
+            {/if}
+            <SelectField label="Default role for new members" options={defaultRoleOptions} bind:value={defaultRole}
+              disabled={busy || !serverPreferences.canSetDefaultRole || defaultRoleOptions.length < 2} />
+            <p class="field-hint">New accounts get this role when they register.</p>
+            <div class="dialog-actions">
+              <Button variant="default" type="submit" disabled={busy || !preferencesChanged}>Save settings</Button>
+            </div>
+          </form>
+        {:else if !busy}
+          <Button variant="outline" onclick={loadPreferences}>Load server settings</Button>
+        {/if}
+      {/if}
+      {#if bannerSupported}
+        <form class="dialog-form" onsubmit={saveBanner}>
+          <label>Banner image URL<Input type="url" pattern="https://.+" maxlength={512} placeholder="https://example.com/banner.jpg"
+            disabled={busy} bind:value={bannerUrl} /></label>
+          <p class="field-hint">Clear the URL to remove the banner.</p>
+          <div class="dialog-actions"><Button variant="default" type="submit" disabled={busy}>Save banner</Button></div>
         </form>
-      {:else if !busy}
-        <Button variant="outline" onclick={loadPreferences}>Load server settings</Button>
       {/if}
     {:else if tab === "audit" && extended && permissions.includes("viewAdmin")}
       <ServerAuditLog {origin} />
@@ -613,13 +624,6 @@
       {:else if !busy}
         <Button variant="outline" onclick={() => loadMembers(pages)}>Load users</Button>
       {/if}
-    {:else if tab === "banner" && permissions.includes("manageSettings")}
-      <form class="dialog-form" onsubmit={saveBanner}>
-        <label>Banner image URL<Input type="url" pattern="https://.+" maxlength={512} placeholder="https://example.com/banner.jpg"
-          disabled={busy} bind:value={bannerUrl} /></label>
-        <p class="field-hint">Clear the URL to remove the banner.</p>
-        <div class="dialog-actions"><Button variant="default" type="submit" disabled={busy}>Save banner</Button></div>
-      </form>
     {:else if tab === "invitation" && permissions.includes("manageInvitations")}
       <form class="dialog-form" onsubmit={saveInvitation}>
         <section class="invite-panel">

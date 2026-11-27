@@ -152,6 +152,15 @@
       .map((origin) => ({ origin, name: serverName(origin) })),
     ...savedServers.map((entry) => ({ ...entry, name: connections.get(entry.origin)?.info?.name ?? entry.name })),
   ]);
+  // Keep saved bookmark names in step with a server that has been renamed.
+  $effect(() => {
+    const renamed = savedServers.flatMap((entry) => {
+      const name = connections.get(entry.origin)?.info?.name;
+      return name && name !== entry.name ? [{ ...entry, name }] : [];
+    });
+    if (!renamed.length) return;
+    void updateSavedServers("", (servers) => servers.map((entry) => renamed.find(({ origin }) => origin === entry.origin) ?? entry)).catch(() => {});
+  });
   let serverTitle = $derived(serverInfo?.name ?? (serverOrigin ? shortHost(serverOrigin) : online ? "Connected server" : "No server connected"));
   let bannerImageUrl = $derived(view.snapshot?.bannerImageUrl === undefined ? serverInfo?.bannerImageUrl ?? null : view.snapshot.bannerImageUrl);
   let claimOwnership = $derived(Boolean(discovery?.info.setupRequired && setupToken.trim()));
@@ -1034,7 +1043,6 @@
               {#if unread}
                 <span class="rail-unread">{unread}<span class="sr-only">{unread === 1 ? " unread message" : " unread messages"}</span></span>
               {/if}
-              {#if connection && !connection.attention}<span class="connection-dot" data-online={connection.view.phase === "online"}></span>{/if}
             </button>
           {/snippet}
           <ContextActions actions={serverActions(entry)} disabled={connectBusy || Boolean(pending)}>

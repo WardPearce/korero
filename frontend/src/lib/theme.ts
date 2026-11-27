@@ -18,6 +18,8 @@ export type Theme = {
   radius: number;
   density: Density;
   textSize: number;
+  /** Background image URL or data URI; an empty string means no image. */
+  image: string;
 };
 export type SavedTheme = Theme & { id: string };
 export type Appearance = { active: string; custom: SavedTheme[]; glassmorphism: boolean };
@@ -37,7 +39,7 @@ function preset(id: string, name: string, scheme: Theme["scheme"], surfaces: Sur
     ? ["#f1f3fa", "#adb7cb"] as const : ["#222638", "#505a6c"] as const;
   const [background, panel, surface, border, input, text = defaultText, mutedText = defaultMutedText] = surfaces;
   const [primary, secondary, accent, success, danger, warning, info] = swatches;
-  return { id, name, scheme, radius, density: "comfortable", textSize: 100, colors: {
+  return { id, name, scheme, radius, density: "comfortable", textSize: 100, image: "", colors: {
     background, panel, surface, border, input, text, mutedText, primary, secondary, accent, success, danger, warning, info,
   } };
 }
@@ -141,6 +143,8 @@ const legacyThemes = new Map([
 ]);
 const maxNameLength = 40;
 const hexColor = /^#[\da-f]{6}$/i;
+const imageSource = /^(https?:\/\/|data:image\/)/i;
+const maxImageLength = 3_000_000;
 let session: Appearance | undefined;
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -167,7 +171,9 @@ export function parseTheme(value: unknown): Theme | undefined {
     if (typeof color !== "string" || !hexColor.test(color)) return;
     colors[key] = color.toLowerCase();
   }
-  return { name, scheme, colors, radius, density, textSize };
+  const image = typeof data.image === "string" && imageSource.test(data.image) && data.image.length <= maxImageLength
+    ? data.image : "";
+  return { name, scheme, colors, radius, density, textSize, image };
 }
 
 export function themeFor(appearance: Appearance): SavedTheme {
@@ -234,6 +240,7 @@ function properties(theme: Theme) {
   return {
     "color-scheme": scheme,
     "--background": colors.background,
+    "--theme-image": theme.image ? `url("${theme.image.replace(/["\\\n\r]/g, "")}")` : "none",
     "--foreground": colors.text,
     "--card": colors.surface,
     "--muted": colors.panel,
@@ -265,6 +272,7 @@ export function applyAppearance(appearance: Appearance, theme: Theme = themeFor(
   const root = document.documentElement;
   root.classList.toggle("dark", theme.scheme === "dark");
   root.toggleAttribute("data-glass", appearance.glassmorphism);
+  root.toggleAttribute("data-image", Boolean(theme.image));
   for (const [key, value] of Object.entries(properties(theme))) root.style.setProperty(key, value);
 
   const favicon = document.querySelector<HTMLLinkElement>("#app-favicon");
