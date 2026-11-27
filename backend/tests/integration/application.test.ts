@@ -247,13 +247,6 @@ test("member moves enforce channel permissions and capacity for the whole group"
     expect(await channelOf(bobWs)).toBe(LOBBY);
 
     await adminWs.rpc("channel.edit", { channelId: destination.channelId, capacity: 2 });
-    await adminWs.rpc("channel.override", { channelId: LOBBY, role: "Moderator", permission: "move", allow: false });
-    expect((await moderatorWs.rpc<Snapshot>("state.get")).channels).toContainEqual(
-      expect.objectContaining({ id: LOBBY, canMove: false }));
-    await expect(move()).rejects.toThrow("FORBIDDEN");
-    expect(await channelOf(aliceWs)).toBe(source.channelId);
-    expect(await channelOf(bobWs)).toBe(LOBBY);
-    await adminWs.rpc("channel.override", { channelId: LOBBY, role: "Moderator", permission: "move", allow: null });
     await adminWs.rpc("channel.override", { channelId: destination.channelId, role: "Member", permission: "join", allow: false });
     await expect(move()).rejects.toThrow("FORBIDDEN");
     expect(await channelOf(aliceWs)).toBe(source.channelId);
@@ -282,10 +275,14 @@ test("server deafen follows the moderation hierarchy and survives reconnects", a
   try {
     const owner = await connect(await server.owner());
     const member = await server.register("Listener");
+    const moderator = await server.register("Moderator");
+    await owner.rpc("role.set", { accountId: moderator.account.id, role: "Moderator" });
+    const moderatorWs = await connect(moderator);
     const listener = await connect(member);
     const otherDevice = await connect(member);
     const join = (socket: typeof listener) => socket.rpc<Snapshot>("channel.join", { channelId: LOBBY });
     await join(owner);
+    await join(moderatorWs);
     await join(listener);
     await join(otherDevice);
     const target = { connectionId: listener.state.connectionId };
@@ -294,6 +291,8 @@ test("server deafen follows the moderation hierarchy and survives reconnects", a
       .rejects.toThrow("FORBIDDEN");
     await owner.rpc("moderation.mute", { ...target, muted: true });
     await deafen(true);
+    await expect(moderatorWs.rpc("moderation.mute", { ...target, muted: false })).rejects.toThrow("FORBIDDEN");
+    await expect(moderatorWs.rpc("moderation.deafen", { ...target, deafened: false })).rejects.toThrow("FORBIDDEN");
     const ownPresence = await listener.rpc("presence.set", { deafened: false });
     expect(ownPresence).toMatchObject({ deafened: false, adminDeafened: true, adminMuted: true });
     const consumer = { consumerId: crypto.randomUUID() };
@@ -307,11 +306,37 @@ test("server deafen follows the moderation hierarchy and survives reconnects", a
     await deafen(false);
     expect(await reconnected.rpc("presence.set")).toMatchObject({ adminDeafened: false, adminMuted: true });
     await expect(reconnected.rpc("media.consumer.resume", consumer)).rejects.toThrow("NOT_FOUND");
+    await moderatorWs.rpc("moderation.deafen", { ...target, deafened: true });
+    await moderatorWs.rpc("moderation.deafen", { ...target, deafened: false });
   } finally {
     for (const socket of sockets) socket.close();
     await Promise.all(sockets.map((socket) => socket.closed));
     await server.cleanup();
   }
+});
+
+test("a receiving connection has one audio consumer per producer and can replace it after closing", async () => {
+  const server = await fixture();
+  try {
+    const sender = await server.ws(await server.register("Sender"));
+    const listener = await server.ws(await server.register("Listener"));
+    await sender.rpc("channel.join", { channelId: LOBBY });
+    await listener.rpc("channel.join", { channelId: LOBBY });
+    const outgoing = await sender.rpc<{ id: string }>("media.transport.create", { direction: "send" });
+    const incoming = await listener.rpc<{ id: string }>("media.transport.create", { direction: "receive" });
+    const other = await listener.rpc<{ id: string }>("media.transport.create", { direction: "receive" });
+    const codec = { mimeType: "audio/opus", clockRate: 48000, channels: 2 };
+    const producer = await sender.rpc<{ id: string }>("media.producer.create", {
+      kind: "audio", transportId: outgoing.id, rtpParameters: { codecs: [{ ...codec, payloadType: 111 }], encodings: [{ ssrc: 12345 }] },
+    });
+    const consume = (transportId: string) => listener.rpc<{ id: string }>("media.consumer.create", {
+      transportId, producerId: producer.id, rtpCapabilities: { codecs: [{ ...codec, kind: "audio", preferredPayloadType: 111 }] },
+    });
+    const consumer = await consume(incoming.id);
+    await expect(consume(other.id)).rejects.toThrow("LIMIT");
+    await listener.rpc("media.consumer.close", { consumerId: consumer.id });
+    expect((await consume(other.id)).id).not.toBe(consumer.id);
+  } finally { await server.cleanup(); }
 });
 
 test("duplicate requests are replayed safely, malformed requests are correlated, oversized frames are closed", async () => {

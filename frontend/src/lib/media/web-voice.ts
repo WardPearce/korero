@@ -1,3 +1,4 @@
+import { Capacitor } from "@capacitor/core";
 import type { Consumer, ConsumerOptions, Producer, RtpCapabilities, Transport, TransportOptions } from "mediasoup-client/types";
 import type { Snapshot, VoiceState } from "../connection/client";
 import type { AudioPreferences } from "../preferences";
@@ -25,6 +26,7 @@ interface RemoteAudio {
   node: MediaStreamAudioSourceNode;
   gain: GainNode;
   accountId: string;
+  element?: HTMLAudioElement;
 }
 
 export class WebVoice {
@@ -459,11 +461,20 @@ export class WebVoice {
       consumer = await receiver.consume(options);
       await this.request("media.consumer.resume", { consumerId: consumer.id });
       if (!this.isReceiving(generation) || !this.sources.has(producerId)) return;
-      const node = this.audio.createMediaStreamSource(new MediaStream([consumer.track]));
+      const stream = new MediaStream([consumer.track]);
+      const node = this.audio.createMediaStreamSource(stream);
       const gain = this.audio.createGain();
       gain.gain.value = (this.volumes[options.accountId] ?? 100) / 100;
       node.connect(gain).connect(this.output);
-      this.remote.set(producerId, { consumer, node, gain, accountId: options.accountId });
+      let element: HTMLAudioElement | undefined;
+      if (Capacitor.getPlatform() === "android") {
+        // Android WebView can leave a remote track silent in Web Audio until an element starts playback.
+        element = new Audio();
+        element.muted = true;
+        element.srcObject = stream;
+        void element.play().catch(() => {});
+      }
+      this.remote.set(producerId, { consumer, node, gain, accountId: options.accountId, element });
       consumer = undefined;
       consumerId = undefined;
     } catch {
@@ -480,6 +491,10 @@ export class WebVoice {
     if (!entry) return;
     entry.node.disconnect();
     entry.gain.disconnect();
+    if (entry.element) {
+      entry.element.pause();
+      entry.element.srcObject = null;
+    }
     entry.consumer.close();
     this.remote.delete(producerId);
   }

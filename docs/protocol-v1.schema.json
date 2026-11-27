@@ -917,16 +917,12 @@
                     "join",
                     "speak",
                     "text",
-                    "createChannels",
-                    "editChannels",
                     "deleteChannels",
-                    "move",
                     "mute",
                     "attachFiles",
                     "shareScreen",
                     "useCamera",
-                    "whisper",
-                    "removeChannels"
+                    "whisper"
                   ]
                 },
                 "allow": {
@@ -4241,16 +4237,12 @@
                   "join",
                   "speak",
                   "text",
-                  "createChannels",
-                  "editChannels",
                   "deleteChannels",
-                  "move",
                   "mute",
                   "attachFiles",
                   "shareScreen",
                   "useCamera",
-                  "whisper",
-                  "removeChannels"
+                  "whisper"
                 ]
               },
               "allow": {

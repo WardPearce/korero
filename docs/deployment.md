@@ -94,8 +94,22 @@ attachments are limited to 2 GiB per server and 256 MiB per sender by default
 `limits.stored_attachment_bytes_per_account`). HTTP sign-in requests are limited
 to 60 per client IP per minute (`limits.auth_per_minute`). Server-wide, they are
 also capped at the largest of 240, eight times that value and four per allowed
-user (`server.max_users`). Each account can hold up to eight simultaneous
-WebSocket connections (`limits.connections_per_account`).
+user (`server.max_users`). Each source can hold up to 16 pending identity
+challenges. Valid refresh tokens and authenticated ticket requests have separate
+limits per device session and per account, respectively. Each account can hold up
+to eight simultaneous WebSocket connections (`limits.connections_per_account`).
+
+`messaging.stored_message_bytes` sets a shared budget for channel messages and
+encrypted direct messages, including offline delivery. The default is 512 MiB of
+stored payloads and per-message overhead. Attachment quotas apply separately.
+Upgrades count existing messages toward the budget. If the server is already over
+budget, message writes that increase storage return `LIMIT` until deletions or
+retention cleanup free enough space.
+
+When upgrading from channel-scoped administration grants, existing denials for
+`createChannels`, `editChannels`, `removeChannels`, and `move` still apply to
+the role and inherit down the channel tree. Scoped allows for these actions are
+removed as the grants move to server scope.
 
 - `self-signed` is the default. Clients verify a public-key pin.
 - `manual` loads `tls.certificate` and an owner-only `tls.private_key`. Use PEM,

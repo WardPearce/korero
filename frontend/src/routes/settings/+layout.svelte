@@ -1,7 +1,7 @@
 <script lang="ts">
   import { resolve } from "$app/paths";
   import { page } from "$app/state";
-  import { ArrowLeft, Fingerprint, Headphones, MessageCircle, Palette, UserRound } from "@lucide/svelte";
+  import { ArrowLeft, Fingerprint, Headphones, Keyboard, MessageCircle, Palette, UserRound } from "@lucide/svelte";
   import VoiceToolbar from "#lib/components/media/VoiceToolbar.svelte";
   import { getWorkspace } from "#lib/workspace";
   let { children } = $props();
@@ -13,6 +13,7 @@
     { path: "/settings/appearance", label: "Appearance", icon: Palette },
     { path: "/settings/chat", label: "Chat", icon: MessageCircle },
     { path: "/settings/audio", label: "Audio", icon: Headphones },
+    { path: "/settings/shortcuts", label: "Shortcuts", icon: Keyboard },
     { path: "/settings/identity", label: "Identity", icon: Fingerprint },
   ] as const;
 </script>

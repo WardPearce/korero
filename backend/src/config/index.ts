@@ -30,6 +30,7 @@ const configuration = object({
     auth_per_minute: integer(1, 1000), registration_per_minute: integer(1, 1000), upgrades_per_minute: integer(1, 1000), max_channels: integer(1, 10000),
     hosted_accounts: integer(1, 10000000) }),
   messaging: object({ persistence: t.Boolean(), retention_hours: integer(1, 8760), offline_delivery_hours: integer(1, 8760),
+    stored_message_bytes: integer(1048576, 1099511627776),
     offline_delivery_queue: integer(1, 100000), offline_delivery_per_sender: integer(1, 100000), max_length: integer(1, 8192), per_minute: integer(1, 10000) }),
 });
 type Settings = typeof configuration.static;
@@ -45,7 +46,8 @@ const defaults: Settings = {
     attachment_download_bytes_per_minute: 134217728, attachment_uploads_concurrent: 32,
     stored_attachment_bytes: 2147483648, stored_attachment_bytes_per_account: 268435456,
     auth_per_minute: 60, registration_per_minute: 12, upgrades_per_minute: 60, max_channels: 1024, hosted_accounts: 10000 },
-  messaging: { persistence: true, retention_hours: 168, offline_delivery_hours: 168, offline_delivery_queue: 1000, offline_delivery_per_sender: 100, max_length: 2000, per_minute: 120 },
+  messaging: { persistence: true, retention_hours: 168, offline_delivery_hours: 168, stored_message_bytes: 536870912,
+    offline_delivery_queue: 1000, offline_delivery_per_sender: 100, max_length: 2000, per_minute: 120 },
 };
 export const localAddresses = () => [...new Set(Object.values(networkInterfaces()).flatMap((entries) =>
   (entries ?? []).filter(({ address }) => !address.toLowerCase().startsWith("fe80:")).map(({ address }) => address)))];

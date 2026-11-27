@@ -134,6 +134,20 @@
       "when": 1795784649015,
       "tag": "0018_invitation_sign_in",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1795785000000,
+      "tag": "0019_channel_scoped_permissions",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1795785000001,
+      "tag": "0020_stored_message_usage",
+      "breakpoints": true
     }
   ]
 }

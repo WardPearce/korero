@@ -1,9 +1,9 @@
-import { and, count, desc, eq, gt, gte, inArray, like, lt, sum } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, like, lt, sum } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Config } from "../config";
 import { audit, channelPermissions, defaultPermissions, DEFAULT_ROLE_KEY, editableBuiltInRoles, INITIAL_ROLE, LOBBY,
-  memberPermissions, permissions, roles, type Permission, type Role, type Store } from "../database";
+  inheritedChannelPermissions, memberPermissions, permissions, roles, type Permission, type Role, type Store } from "../database";
 import { accounts, accountRoles, attachments, auditEvents, bans, channelOverrides, channels, hearingRestrictions, messages, rolePermissions, rolesTable, settings, speakingRestrictions } from "../database/schema";
 import { attachmentDataLength, bytesPerMiB, decode, defaultAttachmentMiB, maxSupportedAttachmentMiB, pokeMaxLength, type httpBodies, type Request } from "../protocol";
 import { errorResponse, fail, ProtocolError, RateLimit } from "../security/errors";
@@ -13,6 +13,7 @@ import { Auth, isBanned, type Account, type Session } from "./auth";
 import { DirectMessages } from "./direct-messages";
 import { LiveMessageIndex, liveMessageLifetime } from "./live-message-index";
 import { Media, type VideoSource, type WhisperRoute } from "./media";
+import { MessageStorage } from "./message-storage";
 
 type Channel = typeof channels.$inferSelect;
 type Socket = { sendText(data: string): number; ping(data: Buffer): number; close(code?: number, reason?: string): unknown; terminate(): unknown };
@@ -57,6 +58,7 @@ export class Realtime {
   private readonly messageRate: RateLimit;
   private readonly pokeRate = new RateLimit(6);
   private readonly directMessages: DirectMessages;
+  private readonly messageStorage: MessageStorage;
   private readonly mediaRate: RateLimit;
   private readonly iceRate: RateLimit;
   private readonly joinRate: RateLimit;
@@ -74,7 +76,8 @@ export class Realtime {
   private banner: string | null;
 
   constructor(private readonly db: Store, private readonly auth: Auth, private readonly media: Media, private readonly config: Config) {
-    this.directMessages = new DirectMessages(db, config);
+    this.messageStorage = new MessageStorage(db, config.messaging);
+    this.directMessages = new DirectMessages(db, config, this.messageStorage);
     this.banner = db.select().from(settings).where(eq(settings.key, "bannerImageUrl")).get()?.value ?? null;
     this.motd = db.select().from(settings).where(eq(settings.key, "motd")).get()?.value ?? "";
     this.defaultRole = db.select().from(settings).where(eq(settings.key, DEFAULT_ROLE_KEY)).get()?.value ?? INITIAL_ROLE;
@@ -204,11 +207,10 @@ export class Realtime {
     this.tick++;
     const persistent = this.tick === 60;
     this.auth.sweep(now, persistent);
+    this.messageStorage.prune(now);
     if (persistent) {
       this.tick = 0;
-      const expired = this.db.select({ id: messages.id }).from(messages).where(lt(messages.createdAt, this.retentionCutoff())).limit(1000);
-      this.db.delete(messages).where(inArray(messages.id, expired)).run();
-      this.directMessages.prune();
+      this.directMessages.pruneLive(now);
       this.liveText.prune(now);
       for (const [id, entry] of this.liveAttachments) {
         if (entry.expiresAt <= now) this.removeLiveAttachment(id);
@@ -364,7 +366,7 @@ export class Realtime {
     if (!this.holdsServerGrants(actor, grants)) return false;
     // Effective grants can only differ from their parent where either role has an override.
     for (const [channelId, overrides] of this.overrides) {
-      for (const permission of channelPermissions) {
+      for (const permission of inheritedChannelPermissions) {
         if (!overrides.has(`${role}/${permission}`) && !overrides.has(`${actor.role}/${permission}`)) continue;
         const channel = this.channel(channelId);
         const granted = this.channelOverride(role, permission, channel) ?? grants?.has(permission);
@@ -768,7 +770,7 @@ export class Realtime {
 
   private password<T>(accountId: string, run: () => Promise<T>) { return this.passwordWork.run(accountId, run); }
   reorderChannel(accountId: string, { channelId, targetId, placement, parentId: expectedParentId }: typeof httpBodies.channelOrder.static) {
-    // Ordering is scoped to the channels involved; a server-wide grant is not required.
+    // Ordering requires edit access and visibility in both channels.
     const actor = this.auth.account(accountId);
     const source = this.channel(channelId);
     const target = this.channel(targetId);
@@ -802,8 +804,7 @@ export class Realtime {
   private authorizeReparent(actor: Account, current: Channel, parent: Channel | undefined) {
     const previousParent = current.parentId ? this.channel(current.parentId) : undefined;
     this.require(actor, "join", current);
-    // Leaving or entering the root needs no server-wide grant; the edit grant on the moved channel
-    // and the inherited-permission checks below already cover it.
+    // Check visibility and edit access in each existing parent.
     for (const scope of [previousParent, parent]) {
       if (!scope) continue;
       this.require(actor, "join", scope);
@@ -814,7 +815,7 @@ export class Realtime {
     // A descendant either inherits the moved channel's effective grant or has a closer override.
     const moved = { ...current, parentId: parent?.id ?? null };
     for (const role of [...roles, ...this.customRoles.keys()]) {
-      for (const permission of channelPermissions) {
+      for (const permission of inheritedChannelPermissions) {
         if (this.roleAllowed(role, permission, current) === this.roleAllowed(role, permission, moved)) continue;
         this.authorizeRolePermissionChange(actor, current, role, permission, true);
       }
@@ -899,7 +900,7 @@ export class Realtime {
       this.require(actor, "join", scope);
       this.require(actor, "editChannels", scope);
       this.require(actor, permission, scope);
-      for (const grant of channelPermissions) {
+      for (const grant of inheritedChannelPermissions) {
         if (this.roleAllowed(role, grant, scope)) this.require(actor, grant, scope);
       }
     };
@@ -966,12 +967,11 @@ export class Realtime {
     if (peer.channelId !== channel.id) fail("FORBIDDEN");
     return channel;
   }
-  private retentionCutoff() { return Date.now() - this.config.messaging.retention_hours * 3600000; }
   private history(peer: Peer, payload: { channelId: string; before?: number }) {
     const channel = this.textChannel(peer, payload.channelId);
     if (!this.config.messaging.persistence) return [];
     const rows = this.db.select({ message: messages, attachment: { name: attachments.name, size: attachments.size } })
-      .from(messages).leftJoin(attachments, eq(attachments.messageId, messages.id)).where(and(eq(messages.channelId, channel.id), gte(messages.createdAt, this.retentionCutoff()),
+      .from(messages).leftJoin(attachments, eq(attachments.messageId, messages.id)).where(and(eq(messages.channelId, channel.id), gte(messages.createdAt, this.messageStorage.channelCutoff()),
       payload.before === undefined ? undefined : lt(messages.createdAt, payload.before)))
       .orderBy(desc(messages.createdAt), desc(messages.id)).limit(100).all();
     return rows.map(({ message, attachment }) => this.messagePayload(message, attachment));
@@ -987,16 +987,17 @@ export class Realtime {
     const message = { id: randomUUID(), channelId: channel.id, recipientId: null, senderId, createdAt: Date.now(), editedAt: null, text: payload.text,
       html: payload.text.trim() && payload.html ? sanitizeChatHtml(payload.html) : null };
     if (this.config.messaging.persistence) {
-      if (!file) this.db.insert(messages).values(message).run();
-      else this.db.transaction((tx) => {
-        const used = Number(tx.select({ size: sum(attachments.size) }).from(attachments).get()?.size ?? 0);
-        if (used + file.size > this.config.limits.stored_attachment_bytes) fail("LIMIT");
-        const usedByAccount = Number(tx.select({ size: sum(attachments.size) }).from(messages)
-          .innerJoin(attachments, eq(attachments.messageId, messages.id)).where(eq(messages.senderId, senderId)).get()?.size ?? 0);
-        if (usedByAccount + file.size > this.config.limits.stored_attachment_bytes_per_account) fail("LIMIT");
+      this.messageStorage.write((tx) => {
+        if (file) {
+          const used = Number(tx.select({ size: sum(attachments.size) }).from(attachments).get()?.size ?? 0);
+          if (used + file.size > this.config.limits.stored_attachment_bytes) fail("LIMIT");
+          const usedByAccount = Number(tx.select({ size: sum(attachments.size) }).from(messages)
+            .innerJoin(attachments, eq(attachments.messageId, messages.id)).where(eq(messages.senderId, senderId)).get()?.size ?? 0);
+          if (usedByAccount + file.size > this.config.limits.stored_attachment_bytes_per_account) fail("LIMIT");
+        }
         tx.insert(messages).values(message).run();
-        tx.insert(attachments).values({ messageId: message.id, ...file }).run();
-      }, { behavior: "immediate" });
+        if (file) tx.insert(attachments).values({ messageId: message.id, ...file }).run();
+      });
     } else {
       const reference = { id: message.id, channelId: channel.id, senderId, recipientId: null };
       if (file) {
@@ -1049,7 +1050,7 @@ export class Realtime {
     if (!this.config.messaging.persistence) fail("NOT_FOUND");
     const stored = this.db.select({ size: attachments.size }).from(attachments)
       .innerJoin(messages, eq(messages.id, attachments.messageId))
-      .where(and(eq(messages.id, messageId), eq(messages.channelId, channelId!), gte(messages.createdAt, this.retentionCutoff())))
+      .where(and(eq(messages.id, messageId), eq(messages.channelId, channelId!), gte(messages.createdAt, this.messageStorage.channelCutoff())))
       .get() ?? fail("NOT_FOUND");
     this.attachmentDownloadRate.take(session.accountId, stored.size);
     const { data } = this.db.select({ data: attachments.data }).from(attachments).where(eq(attachments.messageId, messageId)).get()!;
@@ -1222,7 +1223,11 @@ export class Realtime {
         const action = deafen ? (restricted ? "account.deafened" : "account.undeafened")
           : (restricted ? "account.muted" : "account.unmuted");
         this.db.transaction((tx) => {
-          if (restricted) tx.insert(table).values({ accountId, actorId: actor.id }).onConflictDoNothing().run();
+          const existing = tx.select({ actorId: table.actorId }).from(table).where(eq(table.accountId, accountId)).get();
+          if (existing && actor.role !== "Owner" &&
+              this.rank(actor.role) < this.rank(this.auth.account(existing.actorId).role)) fail("FORBIDDEN");
+          if (restricted) tx.insert(table).values({ accountId, actorId: actor.id })
+            .onConflictDoUpdate({ target: table.accountId, set: { actorId: actor.id } }).run();
           else tx.delete(table).where(eq(table.accountId, accountId)).run();
           audit(tx, actor.id, action, accountId);
         }, { behavior: "immediate" });
@@ -1371,7 +1376,7 @@ export class Realtime {
         if (text.length > this.config.messaging.max_length || (!hasFile && !text.trim())) fail("INVALID_REQUEST");
         const edited = { text, html: text.trim() && html ? sanitizeChatHtml(html) : null, editedAt: Date.now() };
         if (stored) {
-          this.db.update(messages).set(edited).where(eq(messages.id, messageId)).run();
+          this.messageStorage.write((tx) => tx.update(messages).set(edited).where(eq(messages.id, messageId)).run());
         }
         this.broadcast([...(this.memberships.get(channel.id) ?? [])].filter((member) => this.allowed(member.account!, "text", channel)),
           "message.edited", { messageId, text: edited.text, html: edited.html ?? undefined, editedAt: edited.editedAt });

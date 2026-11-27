@@ -97,10 +97,11 @@ its new role and to hold both roles’ server-wide and effective channel permiss
 Editing or deleting a role requires a higher rank and the role’s existing grants.
 New role grants must stay within the actor’s permissions at every scope where they apply.
 Custom roles share a rank between Moderator and Administrator. Channel ordering
-requires permission to see and edit both channels. `inside` appends the moved channel
-and its subtree to the target's children. `before` and `after` order siblings. To use
-either across levels, send the target's `parentId`, using `null` for the top level. A move to a new parent also
-requires permission to see and edit that parent. Invitation expiration can use either a future Unix
+requires server-wide `editChannels` and `join` in both the source and target channels.
+`inside` appends the moved channel and its subtree to the target's children. `before`
+and `after` order siblings. To use either across levels, send the target's `parentId`,
+using `null` for the top level. Reparenting also requires `join` in the old and new
+parent channels where they exist. Invitation expiration can use either a future Unix
 timestamp in milliseconds or a lifetime in seconds. Omitting both leaves the
 invitation without an expiration. Omitting `uses` allows unlimited registrations.
 Invitation updates leave omitted fields as they are and use `null` to remove an
@@ -176,7 +177,7 @@ in bits per second. Changes to either value trigger `state.invalidated`.
 `lowerRoles` lists roles below the caller in the server hierarchy. `assignableRoles`
 lists roles the caller can assign to a subordinate account. The channel list has
 `id, parentId, name, description, position, capacity, temporary, passwordRequired, canDeleteMessages, canMute, canMove, canReparent, canDelete, canManagePermissions`.
-`canMove` reports the caller's effective `move` permission in that channel.
+`canMove` reports whether the caller has the server-wide `move` permission.
 `canManagePermissions` reports whether the caller can use the channel permissions endpoints.
 Invisible parents are represented as null. Members have `connectionId, accountId,
 displayName, role, badge, muted, deafened, adminMuted, adminDeafened` and cover the socket's
@@ -240,32 +241,36 @@ password or permission-override fields.
 | `direct.delete` | `accountId, id` | `{}` |
 | `direct.poke` | `accountId, message?` | `{}` |
 
-`channel.override` requires `manageRoles`, server-wide `editChannels`, and the
-permission being changed at server scope. The actor must also rank above the target
-role and hold its server-wide grants. In the target channel and every descendant
-whose effective permission changes, the actor needs `join`, `editChannels`, the
-permission being changed, and the target role’s effective channel permissions.
+`channel.override` requires `manageRoles`, `editChannels`, and the permission being
+changed at server scope. The actor must also rank above the target role and hold
+its server-wide grants. In the target channel and every descendant whose effective
+permission changes, the actor needs `join`, the permission being changed, and the
+target role’s effective channel permissions.
 Moving a channel applies the same role and scope checks to changes in inherited
 permissions.
 
 The channel permissions endpoints need `manageRoles` and `editChannels` at server
-scope, plus `join` and `editChannels` in the channel. `roles` lists each role below
-the caller whose server grants the caller holds. Each role maps every channel
+scope, plus `join` in the channel. `roles` lists each role below the caller whose
+server grants the caller holds. Each role maps every channel
 permission to `allow`, the channel's own override (`true`, `false` or `null`), and
 `inherited`, the grant the role would have without that override. `editable` lists
 the channel permissions the caller holds at server and channel scope. PATCH applies
 `changes` in order with the `channel.override` checks. Changes before a failure stay
 applied. `allow: null` removes an override.
 
-`channel.delete` requires the effective `removeChannels` permission. The Lobby
-and channels with children cannot be deleted. Deleting another member’s channel
-message still requires `deleteChannels`.
+`channel.create`, `channel.edit`, and `channel.delete` require the server-wide grants
+`createChannels`, `editChannels`, and `removeChannels`, respectively. The Lobby and
+channels with children cannot be deleted. Deleting another member’s channel message
+requires `deleteChannels` in that channel.
 
 `channel.move` accepts one connection ID or an array of 1–1024 connection IDs.
-The caller needs `move` in the destination and each source channel. Each target
-must rank below the caller and have `join` in the destination. The server checks
-all targets and available capacity before moving the group. Duplicate IDs count
-once. A moderator can move a member into a password-protected channel.
+The caller needs the server-wide `move` grant. Each target must rank below the
+caller and have `join` in the destination. The server checks all targets and
+available capacity before moving the group. Duplicate IDs count once. A moderator
+can move a member into a password-protected channel.
+Existing channel denials for `createChannels`, `editChannels`, `removeChannels`,
+and `move` still apply after an upgrade. Moves honor the denials in both the
+source and destination.
 
 Registration and `server.max_users` are host-only settings: change them in TOML or
 with `VOICE_SERVER_REGISTRATION` / `VOICE_SERVER_MAX_USERS`, not through `server.settings`.
@@ -274,6 +279,8 @@ They apply to a subordinate account identified by its connection ID and persist
 across connections. Server mute blocks producers. Server deafen blocks producers
 and consumers independently of self-deafen. Enabling either restriction closes
 affected media resources. Clients recreate producers or consumers once allowed.
+Changing an existing restriction requires a rank at least as high as the issuer's
+current rank. The Owner can change any restriction.
 Kicking closes all account connections. Banning also
 revokes all device sessions. Temporary rooms are joined on creation and disappear
 when empty. Channel history requires current channel membership and text permission.
@@ -417,6 +424,8 @@ On the sending side, route the WebRTC transport's DTLS connect and produce
 callbacks through their respective requests. On the receiving side, create the
 consumer on the server, add the matching WebRTC consumer locally, then send
 `media.consumer.resume`. For late joins, query `media.producers` before consuming.
+A receiving connection can have one consumer per producer. Close the existing
+consumer before creating another for the same producer on a different transport.
 For ICE restart, apply the returned ICE parameters through the client transport.
 If the worker resets or the client changes rooms, discard stale media IDs and transports.
 

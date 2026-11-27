@@ -2,7 +2,6 @@
   import ProfilePictureSettings from "#lib/components/ProfilePictureSettings.svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
-  import { asset, resolve } from "$app/paths";
   import { ArrowDownLeft, LogOut, UserRound } from "@lucide/svelte";
   import { apiFor, messageFrom, requestError } from "#lib/connection/client";
   import { getWorkspace } from "#lib/workspace";
@@ -11,6 +10,7 @@
   let account = $derived(workspace.view.snapshot?.account);
   let accountName = $derived(account?.displayName ?? "");
   let status = $state("");
+  let profileError = $state("");
   let signOutError = $state("");
   let saving = $state(false);
 
@@ -19,19 +19,22 @@
     if (!workspace.serverOrigin || saving || workspace.pending) return;
     saving = true;
     status = "";
+    profileError = "";
     try {
       const result = await apiFor(workspace.serverOrigin).account.patch({ displayName: accountName.trim() });
       if (result.error) throw requestError(result.error);
       status = "Display name updated.";
     } catch (error) {
-      status = messageFrom(error);
+      profileError = messageFrom(error);
     } finally {
       saving = false;
     }
   }
 
   async function disconnect() {
-    if (!await workspace.disconnect()) status = workspace.actionError;
+    status = "";
+    profileError = "";
+    if (!await workspace.disconnect()) profileError = workspace.actionError;
   }
 
   async function signOut() {
@@ -47,33 +50,40 @@
 <main class="room-pane settings-pane">
   <header class="workspace-header">
     <div class="heading-icon"><UserRound size={19} aria-hidden="true" /></div>
-    <div class="flex-content">
-          <h1>Account settings</h1>
-    </div>
-    <Button variant="ghost" href={resolve("/")} aria-label="Korero.chat workspace">
-      <svg viewBox="2 0 126 29" class="size-auto w-20" aria-hidden="true"><use href={asset("/korero-logo.svg") + "#wordmark"} /></svg>
-    </Button>
+    <h1>Account</h1>
   </header>
-  <div class="workspace">
+  <div class="workspace settings-content">
     {#if workspace.identity?.provider}
-      <section class="dialog-form settings-card" aria-label="Hosted account">
-        <strong>{workspace.identity.username}</strong>
-        <p class="field-hint">{new URL(workspace.identity.provider).host}</p>
-        <Button variant="outline" class="fit-action" disabled={Boolean(workspace.pending)} onclick={signOut}>
-          <LogOut size={16} /> Sign out
-        </Button>
+      <section class="settings-card" aria-labelledby="hosted-account-heading">
+        <div class="settings-row">
+          <div class="settings-heading">
+            <h2 id="hosted-account-heading">Hosted account</h2>
+            <p class="field-hint">{workspace.identity.username} · {new URL(workspace.identity.provider).host}</p>
+          </div>
+          <Button variant="outline" disabled={Boolean(workspace.pending)} onclick={signOut}>
+            <LogOut size={16} aria-hidden="true" /> Sign out
+          </Button>
+        </div>
         {#if signOutError}<p class="form-error" role="alert">{signOutError}</p>{/if}
       </section>
     {/if}
     {#if account}
-      <form class="dialog-form settings-card" onsubmit={save}>
-        <p class="form-status">{workspace.serverTitle}</p>
-        <label>Display name<Input required maxlength={80} bind:value={accountName} /></label>
-        {#if status}<p class="form-status" role="status">{status}</p>{/if}
-        <div class="dialog-actions">
-          <Button variant="outline" type="button" disabled={saving || Boolean(workspace.pending)} onclick={disconnect}><ArrowDownLeft size={15} /> Disconnect</Button>
-          <Button type="submit" variant="default" disabled={saving || Boolean(workspace.pending)}>Save name</Button>
+      <form class="dialog-form settings-card" aria-labelledby="server-profile-heading" onsubmit={save}>
+        <div class="settings-row">
+          <div class="settings-heading">
+            <h2 id="server-profile-heading">Server profile</h2>
+            <p class="field-hint">{workspace.serverTitle}</p>
+          </div>
+          <Button variant="outline" disabled={saving || Boolean(workspace.pending)} onclick={disconnect}>
+            <ArrowDownLeft size={15} aria-hidden="true" /> Disconnect
+          </Button>
         </div>
+        <div class="settings-form-row">
+          <label>Display name<Input required maxlength={80} bind:value={accountName} /></label>
+          <Button type="submit" disabled={saving || Boolean(workspace.pending) || !accountName.trim()}>{saving ? "Saving…" : "Save name"}</Button>
+        </div>
+        {#if status}<p class="form-status" role="status">{status}</p>{/if}
+        {#if profileError}<p class="form-error" role="alert">{profileError}</p>{/if}
       </form>
       {#if workspace.profilePictures}
         {#key workspace.view.snapshot?.connectionId}<ProfilePictureSettings {account} />{/key}

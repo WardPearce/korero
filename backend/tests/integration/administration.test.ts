@@ -17,7 +17,7 @@ test("channel permission changes respect the caller's access throughout the affe
     const override = (socket: typeof ownerWs, channelId: string, role: string, permission: string, allow: boolean | null) =>
       socket.rpc("channel.override", { channelId, role, permission, allow });
 
-    for (const permission of ["join", "editChannels", "text"]) {
+    for (const permission of ["join", "text"]) {
       await override(ownerWs, child, "Administrator", permission, false);
       await expect(override(adminWs, child, "Guest", "text", true)).rejects.toThrow("FORBIDDEN");
       await override(ownerWs, child, "Administrator", permission, null);
@@ -162,7 +162,7 @@ test("built-in role permissions apply to connected accounts and protect the regi
       await expect(memberWs.rpc("direct.send", { accountId: owner.account.id, id: crypto.randomUUID(),
         nonce: randomBytes(12).toString("base64url"), ciphertext: randomBytes(25).toString("base64url"),
         signature: randomBytes(64).toString("base64url") })).rejects.toThrow("FORBIDDEN");
-      await expect(ownerWs.rpc("channel.override", { channelId: studio, role: "Member", permission: "editChannels", allow: true }))
+      await expect(ownerWs.rpc("channel.override", { channelId: studio, role: "Member", permission: "mute", allow: true }))
         .rejects.toThrow("CONFLICT");
       const listing = await server.call("/api/v1/admin/accounts", undefined, owner.accessToken);
       expect(listing.payload).toMatchObject({ defaultRole: "Member", customRoles: [], builtInRoles: expect.arrayContaining([
@@ -342,7 +342,7 @@ test("custom role grants, server presentation, and channel order are enforced an
   } finally { await server.cleanup(); }
 });
 
-test("channel deletion uses its own grant and respects inherited overrides", async () => {
+test("channel deletion uses its own grant and protects the Lobby and parents with children", async () => {
   const server = await fixture();
   try {
     const owner = await server.owner();
@@ -368,11 +368,6 @@ test("channel deletion uses its own grant and respects inherited overrides", asy
       expect(await capability(channelId)).toMatchObject({ canDelete: false });
       await expect(memberWs.rpc("channel.delete", { channelId })).rejects.toThrow("CONFLICT");
     }
-    const override = (allow: boolean) => ownerWs.rpc("channel.override", { channelId: parent, role: name, permission: "removeChannels", allow });
-    await override(false);
-    expect(await capability(child)).toMatchObject({ canDelete: false });
-    await expect(memberWs.rpc("channel.delete", { channelId: child })).rejects.toThrow("FORBIDDEN");
-    await override(true);
     await memberWs.rpc("channel.join", { channelId: child });
     await memberWs.rpc("channel.delete", { channelId: child });
     expect(await capability(child)).toBeUndefined();
@@ -410,11 +405,6 @@ test("channel moves preserve subtrees and enforce destination permissions and de
     expect((await order(source, sibling, "after", null)).response.status).toBe(409);
     const override = (channelId: string, role: string, permission: string, allow: boolean) =>
       ownerWs.rpc("channel.override", { channelId, role, permission, allow });
-    await override(destination, "Administrator", "editChannels", false);
-    await override(sibling, "Administrator", "editChannels", true);
-    expect((await order(source, sibling, "before", destination)).response.status).toBe(403);
-    await override(destination, "Administrator", "editChannels", true);
-
     await override(destination, "Member", "join", false);
     await memberWs.rpc("channel.join", { channelId: child });
     expect((await order(source, destination, "inside")).response.status).toBe(200);
@@ -423,12 +413,6 @@ test("channel moves preserve subtrees and enforce destination permissions and de
     const nested = await getState();
     expect(nested.channels.filter(({ parentId }) => parentId === destination).map(({ id }) => id)).toEqual([sibling, source]);
     expect(nested.channels.find(({ id }) => id === child)?.parentId).toBe(source);
-
-    await override(destination, "Administrator", "editChannels", false);
-    await override(source, "Administrator", "editChannels", true);
-    expect((await order(source, LOBBY, "before", null)).response.status).toBe(403);
-    await expect(adminWs.rpc("channel.edit", { channelId: source, parentId: null })).rejects.toThrow("FORBIDDEN");
-    await override(destination, "Administrator", "editChannels", true);
 
     const editor = await server.register("Channel editor");
     const roles = "/api/v1/admin/roles";
@@ -473,14 +457,14 @@ test("live server preferences and paged audit history enforce role permissions",
     const { channelId } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Studio", audioBitrate: 128000 });
     const listener = { name: "Listener", permissions: ["join"] };
     expect((await server.call(roles, listener, owner.accessToken)).response.status).toBe(200);
-    await ownerWs.rpc("channel.override", { channelId, role: listener.name, permission: "editChannels", allow: true });
+    await ownerWs.rpc("channel.override", { channelId, role: listener.name, permission: "mute", allow: true });
     expect((await save({ defaultRole: listener.name })).response.status).toBe(403);
-    await ownerWs.rpc("channel.override", { channelId, role: listener.name, permission: "editChannels", allow: null });
+    await ownerWs.rpc("channel.override", { channelId, role: listener.name, permission: "mute", allow: null });
     expect((await save({ defaultRole: listener.name, motd: " Hello!\nVoice meetup tonight. ", defaultAudioBitrate: 40000 })).payload)
       .toMatchObject({ defaultRole: listener.name, motd: "Hello!\nVoice meetup tonight.", defaultAudioBitrate: 40000 });
     expect((await remove(listener.name)).response.status).toBe(409);
     expect((await server.call(roles + "/definition", { ...listener, permissions: ["join", "kick"] }, owner.accessToken, "PATCH")).response.status).toBe(409);
-    await expect(ownerWs.rpc("channel.override", { channelId, role: listener.name, permission: "editChannels", allow: true }))
+    await expect(ownerWs.rpc("channel.override", { channelId, role: listener.name, permission: "mute", allow: true }))
       .rejects.toThrow("CONFLICT");
     expect(await ownerWs.rpc("state.get")).toMatchObject({
       motd: "Hello!\nVoice meetup tonight.", targetAudioBitrate: 40000,

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { fixture } from "../server";
 
-test("channel ordering follows channel-scoped edit grants", async () => {
+test("channel ordering requires a server-wide edit grant", async () => {
   const server = await fixture();
   try {
     const owner = await server.owner();
@@ -15,17 +15,20 @@ test("channel ordering follows channel-scoped edit grants", async () => {
     const create = async (name: string) => (await ownerWs.rpc<{ channelId: string }>("channel.create", { name })).channelId;
     const source = await create("Source");
     const target = await create("Target");
-    for (const channelId of [source, target]) {
-      await ownerWs.rpc("channel.override", { channelId, role: "Channel editor", permission: "editChannels", allow: true });
-    }
 
     type EditorSnapshot = {
       canReorderChannels?: boolean;
       channels: { id: string; parentId: string | null; name: string; canEdit?: boolean }[];
     };
     const state = await editorWs.rpc<EditorSnapshot>("state.get");
-    expect(state.canReorderChannels).toBe(true);
-    expect(state.channels.filter(({ id }) => id === source || id === target).every(({ canEdit }) => canEdit)).toBe(true);
+    expect(state.canReorderChannels).toBe(false);
+    expect(state.channels.filter(({ id }) => id === source || id === target).every(({ canEdit }) => !canEdit)).toBe(true);
+
+    expect((await server.call("/api/v1/channels/order",
+      { channelId: source, targetId: target, placement: "inside", parentId: target }, editor.accessToken, "PATCH")).response.status).toBe(403);
+
+    expect((await server.call(`${roles}/definition`, { name: "Channel editor", permissions: ["join", "editChannels"] }, owner.accessToken, "PATCH")).response.status).toBe(200);
+    expect(await editorWs.rpc<EditorSnapshot>("state.get")).toMatchObject({ canReorderChannels: true });
 
     const response = await server.call("/api/v1/channels/order",
       { channelId: source, targetId: target, placement: "inside", parentId: target }, editor.accessToken, "PATCH");

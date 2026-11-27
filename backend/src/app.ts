@@ -111,6 +111,7 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
     const client = clientIp(request);
     (register ? registration : authentication).take(client);
     globalAuth.take("auth");
+    return client;
   };
   const bearer = (request: Request) => auth.access(request.headers.get("authorization"));
   const manageSettings = (request: Request) => realtime.authorize(bearer(request).accountId, "manageSettings");
@@ -210,8 +211,8 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
     }, { body: t.Object({ ...hostedCredentials, encryptedData,
       revision: t.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER - 1 }) }, { additionalProperties: false }) })
     .post("/api/v1/auth/identity/challenge", ({ request, body }) => {
-      limit(request);
-      return auth.challengeIdentity(info.serverId, body.operation, body.publicKey, body.deviceName, body.origin);
+      const client = limit(request);
+      return auth.challengeIdentity(client, info.serverId, body.operation, body.publicKey, body.deviceName, body.origin);
     }, { body: httpBodies.identityChallenge })
     .post("/api/v1/auth/identity/login", ({ request, body }) => {
       limit(request);
@@ -224,10 +225,8 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
       set.status = 201;
       return result;
     }, { body: httpBodies.register })
-    .post("/api/v1/auth/refresh", ({ request, body }) => {
-      limit(request);
-      return auth.refresh(body.refreshToken);
-    }, { body: httpBodies.refresh })
+    .post("/api/v1/auth/refresh", ({ request, body }) => auth.refresh(body.refreshToken, () => limit(request)),
+      { body: httpBodies.refresh })
     .post("/api/v1/auth/logout", ({ request }) => {
       const session = bearer(request);
       auth.revoke(session.accountId, session.id);
@@ -239,8 +238,13 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
       return {};
     })
     .post("/api/v1/auth/connection-ticket", ({ request }) => {
-      limit(request);
-      return auth.ticket(bearer(request));
+      let session;
+      try { session = bearer(request); }
+      catch (error) {
+        if (error instanceof ProtocolError && error.code === "AUTH_FAILED") limit(request);
+        throw error;
+      }
+      return auth.ticket(session);
     })
     .get("/api/v1/account", ({ request }) => auth.account(bearer(request).accountId))
     .get("/api/v1/connections/:id", ({ request, params }) => {

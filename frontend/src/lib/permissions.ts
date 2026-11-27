@@ -13,6 +13,5 @@ export const permissionLabels = {
 export const channelPermissionGroups = [
   { label: "Access and voice", permissions: ["join", "speak", "shareScreen", "useCamera", "whisper"] },
   { label: "Messaging", permissions: ["text", "attachFiles", "deleteChannels"] },
-  { label: "Channel management", permissions: ["createChannels", "editChannels", "removeChannels"] },
-  { label: "Moderation", permissions: ["move", "mute"] },
+  { label: "Moderation", permissions: ["mute"] },
 ] as const;

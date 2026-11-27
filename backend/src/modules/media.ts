@@ -395,10 +395,10 @@ export class Media {
             headerExtensions: headerExtensions?.filter((entry) => entry.kind === kind) };
           if (!router.canConsume({ producerId, rtpCapabilities })) fail("NOT_FOUND");
           const checkLimit = () => {
-            const matching = [...resources.consumers.values()]
-              .filter((entry) => entry.kind === kind && entry.appData.videoSource === videoSource);
-            if (matching.length >= (videoSource === "camera" ? 1 : this.config.limits.consumers) ||
-                (videoSource === "screen" && matching.some((entry) => entry.producerId === producerId))) fail("LIMIT");
+            const consumers = [...resources.consumers.values()];
+            if (consumers.some((entry) => entry.producerId === producerId)) fail("LIMIT");
+            const matching = consumers.filter((entry) => entry.kind === kind && entry.appData.videoSource === videoSource);
+            if (matching.length >= (videoSource === "camera" ? 1 : this.config.limits.consumers)) fail("LIMIT");
           };
           checkLimit();
           const entry = await transport(request.payload.transportId, "receive", videoSource ? "video" : "audio", videoSource).consume({

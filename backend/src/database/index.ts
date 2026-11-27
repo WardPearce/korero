@@ -19,8 +19,9 @@ export const permissions = ["join", "speak", "text", "createChannels", "editChan
   "ban", "manageRoles", "manageInvitations", "manageSettings", "viewAdmin", "attachFiles", "sendDirectMessages",
   "shareScreen", "useCamera", "whisper", "removeChannels"] as const;
 export type Permission = typeof permissions[number];
-export const channelPermissions = ["join", "speak", "text", "createChannels", "editChannels", "deleteChannels", "move", "mute",
-  "attachFiles", "shareScreen", "useCamera", "whisper", "removeChannels"] as const;
+export const channelPermissions = ["join", "speak", "text", "deleteChannels", "mute",
+  "attachFiles", "shareScreen", "useCamera", "whisper"] as const;
+export const inheritedChannelPermissions = [...channelPermissions, "createChannels", "editChannels", "removeChannels", "move"] as const;
 export const memberPermissions = ["join", "speak", "text", "attachFiles", "sendDirectMessages", "shareScreen", "useCamera", "whisper"] as const;
 export const defaultPermissions: Record<typeof roles[number], readonly Permission[]> = {
   Guest: ["join"], Member: memberPermissions, Moderator: [...memberPermissions, "move", "mute", "kick", "manageInvitations"],

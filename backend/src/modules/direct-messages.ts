@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lt, max, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull, lt, max, or } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import type { Config } from "../config";
 import type { Store } from "../database";
@@ -6,6 +6,7 @@ import { accountIdentities, accounts, directMessages } from "../database/schema"
 import type { Request } from "../protocol";
 import { fail } from "../security/errors";
 import { LiveMessageIndex } from "./live-message-index";
+import { MessageStorage } from "./message-storage";
 
 type Send = Extract<Request, { type: "direct.send" }>["payload"];
 type Edit = Extract<Request, { type: "direct.edit" }>["payload"];
@@ -32,7 +33,7 @@ function packetDigest({ nonce, ciphertext, signature }: EncryptedPacket) {
 export class DirectMessages {
   private readonly live = new LiveMessageIndex<DeliveredMessage & { digest: string }>();
 
-  constructor(private readonly db: Store, private readonly config: Config) {}
+  constructor(private readonly db: Store, private readonly config: Config, private readonly storage: MessageStorage) {}
 
   get maxBytes() {
     // Reserve room for the request envelope and base64url expansion.
@@ -56,7 +57,7 @@ export class DirectMessages {
   inbox(actorId: string) {
     if (!this.config.messaging.persistence) return [];
     const { senderId, recipientId, createdAt } = directMessages;
-    const cutoff = this.cutoff();
+    const cutoff = this.storage.directCutoff();
     const partners = this.db.select({ accountId: recipientId, createdAt }).from(directMessages)
       .where(and(eq(senderId, actorId), gte(createdAt, cutoff)))
       .unionAll(this.db.select({ accountId: senderId, createdAt }).from(directMessages)
@@ -73,7 +74,7 @@ export class DirectMessages {
     const { id, senderId, recipientId, createdAt } = directMessages;
     const scope = or(and(eq(senderId, actorId), eq(recipientId, accountId)), and(eq(senderId, accountId), eq(recipientId, actorId)));
     const cursor = before && or(lt(createdAt, before.createdAt), and(eq(createdAt, before.createdAt), lt(id, before.id)));
-    const messages = this.db.select(packet).from(directMessages).where(and(scope, gte(createdAt, this.cutoff()), cursor))
+    const messages = this.db.select(packet).from(directMessages).where(and(scope, gte(createdAt, this.storage.directCutoff()), cursor))
       .orderBy(desc(createdAt), desc(id)).limit(pageSize + 1).all();
     const extra = messages.length > pageSize;
     if (extra) messages.pop();
@@ -111,8 +112,9 @@ export class DirectMessages {
         .where(and(eq(directMessages.senderId, senderId), eq(directMessages.recipientId, recipientId), isNull(directMessages.deliveredAt))).get()!;
       if (fromSender >= this.config.messaging.offline_delivery_per_sender) fail("LIMIT");
     }
-    const inserted = this.db.insert(directMessages).values({ ...message, deliveredAt: delivered ? createdAt : null })
-      .onConflictDoNothing().returning({ id: directMessages.id }).get();
+    const inserted = this.storage.write((tx) =>
+      tx.insert(directMessages).values({ ...message, deliveredAt: delivered ? createdAt : null })
+        .onConflictDoNothing().returning({ id: directMessages.id }).get());
     if (!inserted) {
       if (!this.checkStoredRetry(message)) fail("CONFLICT");
       return null;
@@ -154,9 +156,10 @@ export class DirectMessages {
     const editedAt = Date.now();
     const { id, nonce: newNonce, ciphertext: newCiphertext, signature: newSignature } = replacement;
     const scope = and(eq(directMessages.id, id), eq(directMessages.senderId, senderId), eq(directMessages.recipientId, recipientId),
-      gte(directMessages.createdAt, this.cutoff()));
-    const updated = this.db.update(directMessages).set({ nonce: newNonce, ciphertext: newCiphertext, signature: newSignature, editedAt })
-      .where(scope).returning(packet).get();
+      gte(directMessages.createdAt, this.storage.directCutoff()));
+    const updated = this.storage.write((tx) =>
+      tx.update(directMessages).set({ nonce: newNonce, ciphertext: newCiphertext, signature: newSignature, editedAt })
+        .where(scope).returning(packet).get());
     if (updated) return updated;
     const live = this.liveMessage(senderId, recipientId, id, relay);
     live.digest = packetDigest(replacement);
@@ -177,7 +180,7 @@ export class DirectMessages {
     const { recipientId, deliveredAt, createdAt, id } = directMessages;
     return this.db.select({ ...packet, senderName: accounts.displayName }).from(directMessages)
       .innerJoin(accounts, eq(accounts.id, directMessages.senderId))
-      .where(and(eq(recipientId, actorId), isNull(deliveredAt), gte(createdAt, this.cutoff())))
+      .where(and(eq(recipientId, actorId), isNull(deliveredAt), gte(createdAt, this.storage.directCutoff())))
       .orderBy(asc(createdAt), asc(id)).limit(pendingPageSize).all();
   }
 
@@ -192,18 +195,7 @@ export class DirectMessages {
     }
   }
 
-  prune() {
-    this.live.prune(Date.now());
-    const { id, createdAt, deliveredAt } = directMessages;
-    const stale = lt(createdAt, this.cutoff());
-    // Packets kept while persistence was enabled are history and are not retained once it is off.
-    const expired = this.db.select({ id }).from(directMessages)
-      .where(this.config.messaging.persistence ? stale : or(stale, isNotNull(deliveredAt))).limit(1000);
-    this.db.delete(directMessages).where(inArray(directMessages.id, expired)).run();
-  }
-
-  private cutoff() {
-    const { persistence, retention_hours, offline_delivery_hours } = this.config.messaging;
-    return Date.now() - (persistence ? retention_hours : offline_delivery_hours) * 3600000;
+  pruneLive(now: number) {
+    this.live.prune(now);
   }
 }

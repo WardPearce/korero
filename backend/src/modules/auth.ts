@@ -6,7 +6,7 @@ import { audit, DEFAULT_ROLE_KEY, INITIAL_ROLE, type Queries, type Role, type St
 import { accountIdentities, accounts, accountRoles, bans, invitations, profilePictures, refreshHistory, sessions, settings, setup } from "../database/schema";
 import { maxProfilePictureBytes } from "../protocol";
 import { Credentials, equalDigest, randomToken } from "../security/credentials";
-import { fail, ProtocolError } from "../security/errors";
+import { fail, ProtocolError, RateLimit } from "../security/errors";
 import { PasswordWork } from "../security/work";
 
 export type Account = typeof accounts.$inferSelect & { role: Role; avatarId: string | null };
@@ -18,7 +18,7 @@ type IdentityChallenge = {
   publicKey: string; operation: IdentityOperation;
   deviceName: string; serverId: string; origin: string; expiresAt: number;
 };
-type Ticket = { sessionId: string; expiresAt: number };
+type Ticket = { sessionId: string; accountId: string; expiresAt: number };
 type RevokedSession = { id: string };
 
 const invitationRow = sqliteTable("invitations", { rowId: integer("rowid") });
@@ -27,6 +27,8 @@ const invitationDetails = {
   usesLeft: invitations.usesLeft, revokedAt: invitations.revokedAt,
 };
 const passwordKey = "serverPasswordHash";
+const maxIdentityChallenges = 512;
+const maxIdentityChallengesPerSource = 16;
 const passwordOptions = { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 } as const;
 const pngSignature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
@@ -81,8 +83,11 @@ export function isBanned(db: Queries, accountId: string) {
 }
 
 export class Auth {
-  private readonly identityChallenges = new Map<string, IdentityChallenge>();
+  private readonly identityChallenges = new Map<string, IdentityChallenge & { source: string }>();
   private readonly tickets = new Map<string, Ticket>();
+  private readonly ticketsByAccount = new Map<string, number>();
+  private readonly refreshRate: RateLimit;
+  private readonly ticketRate: RateLimit;
   readonly passwordLocked = process.env.VOICE_SERVER_PASSWORD !== undefined;
   private readonly environmentPasswordHash?: string;
   private readonly passwordWork = new PasswordWork();
@@ -90,6 +95,8 @@ export class Auth {
   onAccountChanged: (accountId: string) => void = () => {};
   onAccountCreated: () => void = () => {};
   constructor(private readonly db: Store, private readonly credentials: Credentials, private readonly config: Config) {
+    this.refreshRate = new RateLimit(Math.max(4, config.limits.auth_per_minute));
+    this.ticketRate = new RateLimit(Math.max(config.limits.connections_per_account, config.limits.auth_per_minute));
     if (this.passwordLocked && config.server.password) {
       this.environmentPasswordHash = Bun.password.hashSync(config.server.password, passwordOptions);
     }
@@ -257,17 +264,21 @@ export class Auth {
     return { account: { id, displayName: name, role, createdAt, badge: null, avatarId: null }, ...this.createSession(db, id, device) };
   }
 
-  challengeIdentity(serverId: string, operation: IdentityOperation, publicKey: string, deviceName: string, origin: string) {
+  challengeIdentity(source: string, serverId: string, operation: IdentityOperation, publicKey: string, deviceName: string, origin: string) {
     const now = Date.now();
-    for (const [id, challenge] of this.identityChallenges) if (challenge.expiresAt <= now) this.identityChallenges.delete(id);
-    if (this.identityChallenges.size >= 512) fail("RATE_LIMITED");
+    let pending = 0;
+    for (const [id, challenge] of this.identityChallenges) {
+      if (challenge.expiresAt <= now) this.identityChallenges.delete(id);
+      else if (challenge.source === source) pending++;
+    }
+    if (pending >= maxIdentityChallengesPerSource || this.identityChallenges.size >= maxIdentityChallenges) fail("RATE_LIMITED");
     const id = randomToken();
     if (operation === "login") {
       origin = this.db.select({ origin: accountIdentities.origin }).from(accountIdentities)
         .where(eq(accountIdentities.publicKey, publicKey)).get()?.origin ?? origin;
     }
     const challenge = { serverId, operation, publicKey, deviceName, origin, expiresAt: now + 60_000 };
-    this.identityChallenges.set(id, challenge);
+    this.identityChallenges.set(id, { ...challenge, source });
     return { id, ...challenge, binding: "" };
   }
 
@@ -344,17 +355,28 @@ export class Auth {
     session.lastActive = now;
   }
 
-  refresh(token: string) {
+  refresh(token: string, limitInvalid: () => void) {
     const result = this.db.transaction((tx) => {
       const now = Date.now();
       const old = this.credentials.digest("refresh", token);
       const session = findSession(tx, eq(sessions.refreshDigest, old), now);
+      const previous = session ? undefined : tx.select().from(refreshHistory).where(eq(refreshHistory.digest, old)).get();
+      const active = session ?? (previous && findSession(tx, eq(sessions.id, previous.sessionId), now));
+      if (!active || isBanned(tx, active.accountId)) {
+        limitInvalid();
+        fail("AUTH_FAILED");
+      }
+      if (previous && now - previous.replacedAt > this.config.authentication.refresh_retry_seconds * 1000) {
+        const revoked = this.markRevoked(tx, eq(sessions.id, active.id));
+        audit(tx, active.accountId, "session.reuse_detected", active.id);
+        return { ok: false as const, revoked };
+      }
+      this.refreshRate.take(active.id);
       const credentials = {
         accessToken: this.credentials.successor("access", token),
         refreshToken: this.credentials.successor("refresh", token),
       };
       if (session) {
-        if (isBanned(tx, session.accountId)) fail("AUTH_FAILED");
         const accessExpiresAt = now + this.config.authentication.access_seconds * 1000;
         const refreshExpiresAt = now + this.config.authentication.refresh_seconds * 1000;
         const successorDigest = this.credentials.digest("refresh", credentials.refreshToken);
@@ -365,20 +387,11 @@ export class Auth {
         }).where(eq(sessions.id, session.id)).run();
         return { ok: true as const, credentials: { sessionId: session.id, ...credentials, accessExpiresAt, refreshExpiresAt } };
       }
-      const previous = tx.select().from(refreshHistory).where(eq(refreshHistory.digest, old)).get();
-      if (!previous) fail("AUTH_FAILED");
-      const active = findSession(tx, eq(sessions.id, previous.sessionId), now);
-      if (!active || isBanned(tx, active.accountId)) fail("AUTH_FAILED");
-      if (now - previous.replacedAt <= this.config.authentication.refresh_retry_seconds * 1000) {
-        if (!equalDigest(active.refreshDigest, previous.successorDigest)) fail("REFRESH_RETRY");
-        return { ok: true as const, credentials: {
-          sessionId: active.id, ...credentials, accessExpiresAt: active.accessExpires, refreshExpiresAt: active.expiresAt,
-        } };
-      }
-      const revoked = this.markRevoked(tx, eq(sessions.id, active.id));
-      audit(tx, active.accountId, "session.reuse_detected", active.id);
-      return { ok: false as const, revoked };
-    }, { behavior: "immediate" });
+      if (!previous || !equalDigest(active.refreshDigest, previous.successorDigest)) fail("REFRESH_RETRY");
+      return { ok: true as const, credentials: {
+        sessionId: active.id, ...credentials, accessExpiresAt: active.accessExpires, refreshExpiresAt: active.expiresAt,
+      } };
+    });
     if (!result.ok) { this.notifyRevoked(result.revoked); fail("AUTH_FAILED"); }
     return result.credentials;
   }
@@ -390,7 +403,7 @@ export class Auth {
   private notifyRevoked(rows: RevokedSession[]) {
     if (!rows.length) return;
     const ids = new Set(rows.map(({ id }) => id));
-    for (const [digest, ticket] of this.tickets) if (ids.has(ticket.sessionId)) this.tickets.delete(digest);
+    for (const [digest, ticket] of this.tickets) if (ids.has(ticket.sessionId)) this.deleteTicket(digest, ticket);
     this.onRevoked(ids);
   }
 
@@ -421,7 +434,7 @@ export class Auth {
   }
 
   sweep(now: number, persistent: boolean) {
-    for (const [digest, ticket] of this.tickets) if (ticket.expiresAt <= now) this.tickets.delete(digest);
+    for (const [digest, ticket] of this.tickets) if (ticket.expiresAt <= now) this.deleteTicket(digest, ticket);
     if (persistent) {
       const expired = this.db.select({ id: sessions.id }).from(sessions)
         .where(or(lte(sessions.expiresAt, now), isNotNull(sessions.revokedAt))).limit(1000);
@@ -430,19 +443,33 @@ export class Auth {
   }
 
   ticket(session: Session) {
+    const { accountId, id: sessionId } = session;
+    this.ticketRate.take(accountId);
     this.sweep(Date.now(), false);
-    if (this.tickets.size >= Math.max(64, this.config.server.max_users * 8)) fail("LIMIT");
+    const totalLimit = Math.max(64, this.config.server.max_users * 8);
+    const accountLimit = Math.min(totalLimit / 2, Math.max(8, this.config.limits.connections_per_account * 2));
+    const pending = this.ticketsByAccount.get(accountId) ?? 0;
+    if (this.tickets.size >= totalLimit || pending >= accountLimit) fail("LIMIT");
     const ticket = randomToken();
     const expiresAt = Date.now() + this.config.authentication.ticket_seconds * 1000;
-    this.tickets.set(this.credentials.digest("ticket", ticket), { sessionId: session.id, expiresAt });
+    this.tickets.set(this.credentials.digest("ticket", ticket), { sessionId, accountId, expiresAt });
+    this.ticketsByAccount.set(accountId, pending + 1);
     return { ticket, expiresAt };
+  }
+
+  private deleteTicket(digest: string, { accountId }: Ticket) {
+    this.tickets.delete(digest);
+    const remaining = this.ticketsByAccount.get(accountId)! - 1;
+    if (remaining) this.ticketsByAccount.set(accountId, remaining);
+    else this.ticketsByAccount.delete(accountId);
   }
 
   consumeTicket(token: string) {
     const digest = this.credentials.digest("ticket", token);
     const ticket = this.tickets.get(digest);
-    this.tickets.delete(digest);
-    if (!ticket || ticket.expiresAt <= Date.now()) fail("AUTH_FAILED");
+    if (!ticket) fail("AUTH_FAILED");
+    this.deleteTicket(digest, ticket);
+    if (ticket.expiresAt <= Date.now()) fail("AUTH_FAILED");
     const session = this.getSession(ticket.sessionId);
     if (!session || isBanned(this.db, session.accountId)) fail("AUTH_FAILED");
     return session;

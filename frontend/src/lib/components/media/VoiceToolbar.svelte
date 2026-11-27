@@ -6,37 +6,25 @@
   import IconButton from "#lib/components/IconButton.svelte";
   import Modal from "#lib/components/Modal.svelte";
   import { desktopApp } from "#lib/connection/client";
-  import { voiceApp } from "#lib/connection/platform";
   import { getAudioSettings } from "#lib/media/audio.svelte";
-  import { playUiSound } from "#lib/ui-sounds";
   import { getWorkspace } from "#lib/workspace";
   import QuickAudio from "./QuickAudio.svelte";
   import WhisperControls from "./WhisperControls.svelte";
 
   const workspace = getWorkspace();
   const audio = getAudioSettings();
-  const voiceAvailable = voiceApp();
   // A voice session keeps its own server even when another one is focused.
   const voice = $derived(workspace.activeVoice);
   const view = $derived(voice?.view ?? workspace.view);
   const origin = $derived(voice?.origin ?? workspace.serverOrigin);
   const snapshot = $derived(view.snapshot);
   const pending = $derived(workspace.pending);
-  const online = $derived(view.phase === "online");
   const ownMember = $derived(snapshot?.members.find((member) => member.connectionId === snapshot?.connectionId));
-  const activeChannel = $derived(snapshot?.channels.find((channel) => channel.id === snapshot?.channelId));
-  const canVoice = $derived(voiceAvailable && online && Boolean(activeChannel));
-  const canSetAfk = $derived(canVoice && ownMember?.afk !== undefined && !pending);
+  const canSetAfk = $derived(workspace.canSetVoicePresence("afk"));
 
   let afkFormOpen = $state(false);
   let afkMessage = $state("");
   let afkFormOrigin = $state("");
-
-  async function toggleAfk() {
-    if (!canSetAfk) return;
-    const markingAfk = !ownMember?.afk;
-    if (await workspace.runVoice("afk", "set_presence", { afk: markingAfk, afkMessage: "" })) playUiSound(markingAfk ? "afk" : "back");
-  }
 
   function showAfkForm() {
     workspace.actionError = "";
@@ -48,9 +36,7 @@
   async function saveAfkMessage(event: SubmitEvent) {
     event.preventDefault();
     if (!canSetAfk || afkFormOrigin !== origin) return;
-    const wasAfk = Boolean(ownMember?.afk);
-    if (await workspace.runVoice("afk", "set_presence", { afk: true, afkMessage: afkMessage.trim() })) {
-      if (!wasAfk) playUiSound("afk");
+    if (await workspace.setVoicePresence("afk", true, afkMessage.trim())) {
       afkFormOpen = false;
     }
   }
@@ -59,9 +45,9 @@
 <div class="voice-toolbar" role="group" aria-label="Voice controls">
   <div class="voice-split" role="group" aria-label="Microphone">
     <IconButton label={ownMember?.muted ? "Unmute microphone" : "Mute microphone"}
-      disabled={!canVoice || Boolean(pending) || ownMember?.adminMuted || ownMember?.afk}
+      disabled={!workspace.canSetVoicePresence("muted")}
       active={Boolean(ownMember?.muted || ownMember?.adminMuted)}
-      onclick={async () => { const muting = !ownMember?.muted; if (await workspace.runVoice("mute", "set_presence", { muted: muting, deafened: null })) playUiSound(muting ? "mute" : "unmute"); }}>
+      onclick={() => workspace.setVoicePresence("muted")}>
       {#if ownMember?.muted || ownMember?.adminMuted}<MicOff size={18} aria-hidden="true" />{:else}<Mic size={18} aria-hidden="true" />{/if}
     </IconButton>
     <QuickAudio direction="input" />
@@ -69,9 +55,9 @@
   {#if audio.talking}<span class="text-xs font-medium text-[var(--success)]" role="status">Transmitting</span>{/if}
   <div class="voice-split" role="group" aria-label="Playback">
     <IconButton label={ownMember?.adminDeafened ? "Server deafened" : ownMember?.deafened ? "Undeafen" : "Deafen"}
-      disabled={!canVoice || Boolean(pending) || ownMember?.afk || ownMember?.adminDeafened}
+      disabled={!workspace.canSetVoicePresence("deafened")}
       active={Boolean(ownMember?.deafened || ownMember?.adminDeafened)}
-      onclick={async () => { const deafening = !ownMember?.deafened; if (await workspace.runVoice("deafen", "set_presence", { muted: null, deafened: deafening })) playUiSound(deafening ? "deafen" : "undeafen"); }}>
+      onclick={() => workspace.setVoicePresence("deafened")}>
       {#if ownMember?.deafened || ownMember?.adminDeafened}<HeadphoneOff size={18} aria-hidden="true" />{:else}<Headphones size={18} aria-hidden="true" />{/if}
     </IconButton>
     <QuickAudio direction="output" />
@@ -79,7 +65,7 @@
   <div class="voice-afk" role="group" aria-label="AFK">
     <Button variant="outline" type="button" class="afk-main" disabled={!canSetAfk}
       aria-pressed={Boolean(ownMember?.afk)} title={ownMember?.afk ? "Return from AFK" : "Mark as AFK"}
-      onclick={toggleAfk}>
+      onclick={() => workspace.setVoicePresence("afk")}>
       {ownMember?.afk ? "AFK (away)" : "AFK"}
     </Button>
     <DropdownMenu.Root>

@@ -3,6 +3,44 @@ import { fixture, openSocket, testIdentity, type Device } from "../server";
 import { LOBBY } from "../../src/database";
 
 const base = "/api/v1/auth/";
+
+test("valid refresh and ticket issuance have capacity after the public authentication quota is used", async () => {
+  const server = await fixture({ environment: { VOICE_LIMITS_AUTH_PER_MINUTE: "4" } });
+  try {
+    const user = await server.register("Existing member");
+    let status = 0;
+    for (let index = 0; index < 4; index++) {
+      status = (await server.fail(base + "refresh", { refreshToken: "A".repeat(43) })).status;
+    }
+    expect(status).toBe(429);
+    const refreshed = await server.call<Device>(base + "refresh", { refreshToken: user.refreshToken });
+    expect(refreshed.response.status).toBe(200);
+    expect(await server.ws(refreshed.payload)).toHaveProperty("state.connectionId");
+  } finally { await server.cleanup(); }
+});
+
+test("pending identity challenges are limited per source and consumed proofs release capacity", async () => {
+  const server = await fixture({ environment: { VOICE_SERVER_TRUSTED_PROXIES: '["127.0.0.1"]' } });
+  try {
+    const key = testIdentity();
+    const user = await server.register("Existing member", key);
+    const proof = await server.proof("login", key);
+    const body = { operation: "login", publicKey: key.publicKey.export({ format: "jwk" }).x!,
+      deviceName: "Test", origin: server.origin };
+    for (let index = 0; index < 15; index++) {
+      expect((await server.fail(base + "identity/challenge", body)).status).toBe(200);
+    }
+    expect((await server.fail(base + "identity/challenge", body)).status).toBe(429);
+    const anotherSource = await fetch(server.origin + base + "identity/challenge", {
+      method: "POST", tls: server.tls, body: JSON.stringify(body),
+      headers: { "content-type": "application/json", "x-forwarded-for": "192.0.2.10" },
+    });
+    expect(anotherSource.status).toBe(200);
+    expect((await server.call<Device>(base + "identity/login", proof)).payload.account.id).toBe(user.account.id);
+    expect((await server.fail(base + "identity/challenge", body)).status).toBe(200);
+  } finally { await server.cleanup(); }
+});
+
 test("enrollment binds the key to the account and each sign-in requires a fresh proof", async () => {
   const server = await fixture();
   try {

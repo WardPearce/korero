@@ -621,8 +621,10 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
 .settings-nav {
   display: grid;
   align-content: start;
+  gap: 4px;
   padding: 12px 8px;
   border-inline-end: 1px solid var(--border);
+  overflow-y: auto;
 }
 /* Keep voice controls reachable while a server is connected and settings are open. */
 .settings-shell[data-connected] { grid-template-rows: auto minmax(0, 1fr); }
@@ -656,32 +658,56 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
   background: var(--control-selected);
   font-weight: 700;
 }
+.settings-nav .settings-back { color: var(--muted-foreground); }
+.settings-pane {
+  container-type: inline-size;
+  container-name: settings-pane;
+  --settings-gutter: max(.75rem, var(--ui-gap));
+  --settings-padding: max(.875rem, var(--ui-gap));
+}
+.settings-pane > .workspace-header { padding-inline: var(--settings-gutter); }
+.settings-pane > .workspace.settings-content {
+  padding-inline: var(--settings-gutter);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+.settings-content > * { flex: none; }
 .settings-card {
-  width: min(100%, 38rem);
-  padding: var(--ui-gap);
+  display: grid;
+  align-content: start;
+  gap: var(--settings-padding);
+  width: 100%;
+  min-width: 0;
+  padding: var(--settings-padding);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--card);
   box-shadow: var(--shadow-raised);
 }
+.settings-card h2 {
+  font-size: calc(1rem * var(--text-scale));
+  font-weight: 650;
+  line-height: 1.35;
+}
+.settings-card label:not(.check-control) { font-weight: 500; }
+.settings-heading { display: grid; min-width: 0; gap: .25rem; overflow-wrap: anywhere; }
+.settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem var(--settings-padding);
+}
+.settings-row > .settings-heading { flex: 1 1 16rem; }
+.settings-form-row { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem; }
+.settings-form-row label { flex: 1 1 15rem; }
+.settings-card [data-slot="button"] { max-width: 100%; height: auto; min-height: var(--control-height); white-space: normal; }
 .voice-split { display: inline-flex; flex: none; }
 .voice-split > .icon-button { border-start-end-radius: 0; border-end-end-radius: 0; }
 .quick-audio { display: inline-flex; margin-inline-start: -1px; }
 .audio-settings-link { display: flex; align-items: center; gap: 6px; }
-.audio-card, .audio-fields { display: grid; gap: 12px; }
-.audio-card h2, .audio-card-heading { display: flex; align-items: center; gap: 8px; }
-.audio-card h2 { font-size: 1rem; }
-.audio-card-heading { justify-content: space-between; flex-wrap: wrap; }
-.audio-device-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: 16px; }
-.audio-toggle {
-  display: grid;
-  justify-items: start;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
-.audio-toggle .check-control { font-weight: 600; }
-.audio-toggle small, .audio-fields small { color: var(--muted-foreground); font-size: var(--type-small); }
-.audio-card kbd { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 4px; }
+.audio-fields { display: grid; gap: .75rem; min-width: 0; }
+.audio-fields small { color: var(--muted-foreground); font-size: var(--type-small); }
 .mobile-nav { display: none; }
 
 @media (max-width: 760px) {
@@ -712,7 +738,7 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
   .settings-shell[data-connected] > .settings-voice { grid-column: 1; grid-row: 1; }
   .settings-shell[data-connected] > .settings-nav { grid-column: 1; grid-row: 2; }
   .settings-shell[data-connected] > .room-pane { grid-column: 1; grid-row: 3; }
-  .settings-nav { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 4px; padding-top: calc(4px + var(--safe-area-inset-top)); border: 0; border-bottom: 1px solid var(--border); }
+  .settings-nav { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px; padding: 4px; padding-top: calc(4px + var(--safe-area-inset-top)); border: 0; border-bottom: 1px solid var(--border); }
   .settings-nav .settings-back { display: none; }
   .settings-nav a { flex-direction: column; justify-content: center; gap: 2px; padding: 4px 2px; font-size: var(--type-caption); text-align: center; overflow-wrap: anywhere; }
   .mobile-nav {
@@ -725,6 +751,12 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
     background: var(--muted);
   }
   .mobile-nav :is(a, button) { flex-direction: column; min-width: 0; justify-content: center; gap: 2px; padding: 4px; font-size: var(--type-caption); }
+}
+
+@media (max-width: 420px) {
+  .settings-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .settings-nav a { flex-direction: row; gap: .3rem; }
+  .settings-nav a svg { flex: none; }
 }
 
 /* Desktop panes span the full height, so their bottom edges clear the navigation bar. */

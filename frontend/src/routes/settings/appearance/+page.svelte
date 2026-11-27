@@ -16,7 +16,7 @@
     ["success", "Success"], ["danger", "Danger"], ["warning", "Warning"], ["info", "Info"],
   ] as const;
   const themeFilters = [
-    ["all", "All themes"], ["dark", "Dark themes"], ["light", "Light themes"], ["playful", "Playful"],
+    ["all", "All"], ["dark", "Dark"], ["light", "Light"], ["playful", "Playful"],
   ] as const;
   const schemeOptions = [
     { value: "dark", label: "Dark" },
@@ -264,8 +264,8 @@
       <input type="file" accept=".json,application/json" hidden bind:this={fileInput} onchange={importTheme} />
     </div>
   </header>
-  <div class="workspace appearance-workspace" bind:this={workspace}>
-    <section class="current-theme" aria-labelledby="current-theme-heading">
+  <div class="workspace settings-content" bind:this={workspace}>
+    <section class="settings-card current-theme" aria-labelledby="current-theme-heading">
       <div class="current-theme-details">
         <h2 id="current-theme-heading">Current theme</h2>
         <p class="current-theme-name">{active.name}</p>
@@ -353,7 +353,7 @@
     {/if}
 
     {#if appearance.custom.length}
-      <section class="theme-gallery" aria-labelledby="custom-heading">
+      <section class="settings-card theme-gallery" aria-labelledby="custom-heading">
         <h2 id="custom-heading">My themes</h2>
         <div class="theme-grid">
           {#each appearance.custom as theme (theme.id)}
@@ -363,7 +363,7 @@
       </section>
     {/if}
 
-    <section class="theme-gallery" aria-labelledby="themes-heading">
+    <section class="settings-card theme-gallery" aria-labelledby="themes-heading">
       <div class="gallery-heading">
         <h2 id="themes-heading">Built-in themes</h2>
         <div class="theme-actions theme-filters" role="group" aria-label="Filter built-in themes">
@@ -391,27 +391,15 @@
 </Modal>
 
 <style>
-  .appearance-pane { container-type: inline-size; }
-  .appearance-pane > .workspace-header {
-    --gutter: clamp(.75rem, 2.4cqi, 2rem);
-    flex-wrap: wrap;
-    padding-inline: var(--gutter);
-  }
-  .workspace.appearance-workspace {
-    padding: clamp(.75rem, 2.4cqi, 2rem);
-    gap: clamp(1.5rem, 2.8cqi, 2.75rem);
-    scrollbar-gutter: stable;
-  }
+  .appearance-pane > .workspace-header { flex-wrap: wrap; }
   .theme-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
-  .page-actions { margin-inline-start: auto; }
+  .page-actions { flex: none; max-width: 100%; margin-inline-start: auto; }
   .current-theme {
     display: grid;
     grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
     align-items: center;
     gap: clamp(1.25rem, 3cqi, 3rem);
-    padding: clamp(1rem, 2.5cqi, 2.5rem);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xl);
+    padding: clamp(var(--settings-padding), 2.5cqi, 2rem);
     background: linear-gradient(115deg, color-mix(in srgb, var(--glass-card, var(--card)) 91%, var(--primary)), var(--glass-card, var(--card)) 65%);
     box-shadow: var(--glass-highlight, none);
   }
@@ -431,7 +419,6 @@
 
   .theme-gallery { display: grid; gap: .85rem; }
   .gallery-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; }
-  h2 { font-size: 1.15em; }
   h3, legend { font-weight: 600; }
   .theme-filters { gap: .2rem; padding: .2rem; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--muted); }
   .theme-filters button {
@@ -520,10 +507,7 @@
   }
   .appearance-card {
     container-type: inline-size;
-    display: grid;
-    width: 100%;
     gap: 1rem;
-    padding: clamp(1rem, 2.5cqi, 2.5rem);
   }
   .theme-footer { padding-top: .8rem; border-top: 1px solid var(--border); }
   .theme-editor, .editor-fields, .preview-column { display: grid; gap: 1rem; min-width: 0; align-content: start; }
@@ -618,7 +602,6 @@
     .current-theme { grid-template-columns: minmax(0, 1fr); gap: .8rem; }
   }
   @container (max-width: 28rem) {
-    .page-actions { width: 100%; }
     .theme-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 7.5rem), 1fr)); }
     .theme-filters button { padding-inline: .4rem; font-size: var(--type-caption); }
     .sample { grid-template-columns: minmax(5.25rem, 1fr) minmax(0, 2.5fr); }
@@ -626,6 +609,7 @@
     .sample-sidebar :global(svg) { display: none; }
   }
   @container (max-width: 22.5rem) {
+    .page-actions { margin-inline-start: 0; }
     .sample { grid-template-columns: minmax(0, 1fr); }
     .sample-sidebar {
       display: flex;

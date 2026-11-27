@@ -3,6 +3,9 @@ import { type AnySQLiteColumn, blob, check, index, integer, primaryKey, sqliteTa
 
 export const metadata = sqliteTable("metadata", { key: text().primaryKey(), value: text().notNull() });
 export const settings = sqliteTable("settings", { key: text().primaryKey(), value: text().notNull() });
+export const storedMessageUsage = sqliteTable("stored_message_usage", {
+  id: integer().primaryKey(), bytes: integer().notNull(),
+}, (table) => [check("stored_message_usage_singleton", sql`${table.id} = 1`)]);
 export const rolesTable = sqliteTable("roles", { name: text().primaryKey(), rank: integer().notNull().unique() });
 export const permissionsTable = sqliteTable("permissions", { name: text().primaryKey() });
 export const rolePermissions = sqliteTable("role_permissions", {
@@ -102,6 +105,7 @@ export const directMessages = sqliteTable("direct_messages", {
   index("direct_messages_recipient").on(table.recipientId, table.createdAt),
   index("direct_messages_pending").on(table.recipientId, table.deliveredAt, table.createdAt),
   index("direct_messages_retention").on(table.createdAt),
+  index("direct_messages_delivered").on(table.deliveredAt).where(sql`${table.deliveredAt} IS NOT NULL`),
 ]);
 export const auditEvents = sqliteTable("audit", {
   id: integer().primaryKey(), actorId: text("actor_id").references(() => accounts.id), action: text().notNull(),

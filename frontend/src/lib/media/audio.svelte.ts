@@ -38,7 +38,9 @@ export class AudioSettings {
       if (requested && !this.#unlisten) {
         this.#unlisten = await watchDesktop<{ shortcut: string; pressed: boolean }>("korero:talk-shortcut", (payload) => {
           if (payload.shortcut !== this.#globalKey) return;
-          if (payload.pressed) this.press();
+          if (payload.pressed) {
+            if (!document.activeElement?.hasAttribute("data-recording-shortcut")) this.press();
+          }
           else this.release();
         });
       }

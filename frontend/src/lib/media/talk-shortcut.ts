@@ -15,7 +15,11 @@ export function shortcutFromEvent(event: KeyboardEvent): TalkShortcut | undefine
 
 export function matchesTalkShortcut(event: KeyboardEvent, shortcut: TalkShortcut) {
   const candidate = shortcutFromEvent(event);
-  return candidate?.code === shortcut.code && candidate.alt === shortcut.alt && candidate.ctrl === shortcut.ctrl &&
+  return Boolean(candidate && sameShortcut(candidate, shortcut));
+}
+
+export function sameShortcut(candidate: TalkShortcut, shortcut: TalkShortcut) {
+  return candidate.code === shortcut.code && candidate.alt === shortcut.alt && candidate.ctrl === shortcut.ctrl &&
     candidate.shift === shortcut.shift && candidate.meta === shortcut.meta;
 }
 

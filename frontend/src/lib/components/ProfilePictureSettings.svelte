@@ -1,7 +1,7 @@
 <script lang="ts">
   import Avatar from "#lib/components/Avatar.svelte";
+  import { Upload } from "@lucide/svelte";
   import { Button } from "#lib/components/ui/button/index.js";
-  import { Input } from "#lib/components/ui/input/index.js";
   import { messageFrom, type Account } from "#lib/connection/client";
   import { encodeProfilePicture, updateProfilePicture } from "#lib/identity/profile-picture";
   import { getWorkspace } from "#lib/workspace";
@@ -40,19 +40,38 @@
   }
 </script>
 
-<section class="dialog-form settings-card" aria-label="Profile picture">
-  <div class="flex items-center gap-3">
-    <Avatar name={account.displayName} accountId={account.id} />
-    <strong>Profile picture</strong>
+<section class="settings-card" aria-labelledby="profile-picture-heading">
+  <div class="settings-row">
+    <div class="picture-heading">
+      <Avatar name={account.displayName} accountId={account.id} />
+      <div class="settings-heading">
+        <h2 id="profile-picture-heading">Profile picture</h2>
+        <p class="field-hint" id="profile-picture-hint">PNG, JPEG, or WebP up to 10 MiB. Pictures are cropped to a square.</p>
+      </div>
+    </div>
+    <div class="picture-actions">
+      <label class="file-control">
+        <Upload size={16} aria-hidden="true" /> {account.avatarId ? "Replace picture" : "Upload picture"}
+        <input type="file" accept="image/png,image/jpeg,image/webp" aria-describedby="profile-picture-hint" {disabled} onchange={choosePicture} />
+      </label>
+      {#if account.avatarId}
+        <Button variant="outline" {disabled} onclick={() => save()}>Remove picture</Button>
+      {/if}
+    </div>
   </div>
-  <label>
-    {account.avatarId ? "Replace picture" : "Upload picture"}
-    <Input type="file" accept="image/png,image/jpeg,image/webp" {disabled} onchange={choosePicture} />
-  </label>
-  <p class="field-hint">PNG, JPEG, or WebP up to 10 MiB. The picture is cropped to a square.</p>
-  {#if account.avatarId}
-    <Button type="button" variant="outline" class="fit-action" {disabled} onclick={() => save()}>Remove picture</Button>
-  {/if}
   {#if saving || status}<p class="form-status" role="status">{saving ? "Saving profile picture…" : status}</p>{/if}
   {#if error}<p class="form-error" role="alert">{error}</p>{/if}
 </section>
+
+<style>
+  .picture-heading { display: flex; flex: 1 1 16rem; align-items: center; min-width: 0; gap: .75rem; }
+  .picture-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+  .file-control {
+    gap: .375rem;
+    padding: .25rem .625rem;
+    border-color: var(--input);
+    border-radius: var(--radius-lg);
+    background: var(--background);
+    font-size: var(--type-small);
+  }
+</style>

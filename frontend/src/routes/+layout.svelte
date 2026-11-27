@@ -10,6 +10,8 @@
   import { AudioLines, BellRing, ListTree, Server, Settings2, X } from "@lucide/svelte";
   import { onMount } from "svelte";
   import { AudioSettings, setAudioSettings } from "#lib/media/audio.svelte";
+  import { ShortcutSettings, setShortcutSettings } from "#lib/media/shortcut-settings.svelte";
+  import type { VoicePresence } from "#lib/media/voice-shortcuts";
   import { DesktopVoice, type DesktopMediaEvent } from "#lib/media/desktop-voice";
   import PaneDivider from "#lib/components/PaneDivider.svelte";
   import { defaultMemberVolume, forgetPassword, getMemberVolumes, getSavedPassword, preferences, saveMemberVolumes, savePassword, type SavedServer } from "#lib/preferences";
@@ -28,7 +30,7 @@
     apiFor, call, directRequest, messageFrom, desktopApp, offline, requestError, shortHost, startSession, watchDesktopSession,
     type DesktopSessionState, type DirectMessageChange, type Member, type MemberRequest, type Poke, type ServerInfo, type VoiceState,
   } from "#lib/connection/client";
-  import { mobileApp, watchDesktop } from "#lib/connection/platform";
+  import { mobileApp, voiceApp, watchDesktop } from "#lib/connection/platform";
   import { authenticateIdentity, getIdentity, identityError, setIdentity } from "#lib/identity/identity";
   import { HostedAccount } from "#lib/identity/hosted-account";
   import { identityModeKey, readLocalIdentity, rememberIdentityMode, type LocalProfile } from "#lib/identity/local-identity";
@@ -42,6 +44,8 @@
   let { children } = $props();
   const desktopVoice = new DesktopVoice(updateDesktopVoice);
   const audio = setAudioSettings(new AudioSettings(desktopVoice));
+  const shortcuts = setShortcutSettings(new ShortcutSettings(audio));
+  const voiceAvailable = voiceApp();
   let chatDisplay = $state.raw(readChatDisplay());
   setChatDisplay({
     get value() { return chatDisplay; },
@@ -88,6 +92,8 @@
   const voiceConnection = $derived(focused?.view.phase === "online" && focused.view.snapshot?.channelId
     ? focused
     : [...connections.values()].find((entry) => entry.view.phase === "online" && entry.view.snapshot?.channelId));
+  const voiceSnapshot = $derived(voiceConnection?.view.snapshot);
+  const ownVoiceMember = $derived(voiceSnapshot?.members.find(({ connectionId }) => connectionId === voiceSnapshot?.connectionId));
   const serverInfo = $derived(focused?.info ?? null);
   const memberVolumes = $derived(focused?.memberVolumes ?? {});
   let resolveRestored = () => {};
@@ -253,7 +259,8 @@
     showConnect,
     showServerSettings,
     run,
-    runVoice(action, command, args) { return runFor(voiceConnection?.origin ?? serverOrigin, action, command, args); },
+    canSetVoicePresence,
+    setVoicePresence,
     runAction,
     memberAction,
     memberVolume(accountId) { return memberVolumes[accountId] ?? defaultMemberVolume; },
@@ -265,6 +272,7 @@
   onMount(() => {
     applyAppearance(readAppearance());
     void audio.load();
+    void shortcuts.load();
     void restoreIdentityMode();
     void preferences.local.bulkGet(["rail", "channel"])
       .then(([rail, channel]) => {
@@ -572,7 +580,7 @@
   }
 
   function resetConnect(address: string) {
-    discoverAddress = address || serverOrigin;
+    discoverAddress = address;
     discovery = null;
     trustPrompt = null;
     connectError = "";
@@ -861,6 +869,34 @@
     return runFor(serverOrigin, action, command, args);
   }
 
+  function canSetVoicePresence(field: VoicePresence) {
+    if (!voiceAvailable || pending || !voiceSnapshot?.channels.some(({ id }) => id === voiceSnapshot.channelId) || !ownVoiceMember) return false;
+    if (field === "afk") return ownVoiceMember.afk !== undefined;
+    return !ownVoiceMember.afk && (field === "muted" ? !ownVoiceMember.adminMuted : !ownVoiceMember.adminDeafened);
+  }
+
+  async function setVoicePresence(field: VoicePresence, value?: boolean, afkMessage?: string) {
+    if (!voiceConnection || !ownVoiceMember || !canSetVoicePresence(field)) return false;
+    const current = ownVoiceMember[field];
+    const next = value ?? !current;
+    if (next === current && afkMessage === undefined) return true;
+    const [action, sound] = field === "muted" ? ["mute", next ? "mute" : "unmute"] as const
+      : field === "deafened" ? ["deafen", next ? "deafen" : "undeafen"] as const
+      : ["afk", next ? "afk" : "back"] as const;
+    const args = field === "afk" ? { afk: next, afkMessage: afkMessage ?? "" } : { [field]: next };
+    const success = await runFor(voiceConnection.origin, action, "set_presence", args);
+    if (success && current !== next) playUiSound(sound);
+    return success;
+  }
+
+  function handleShortcut(event: KeyboardEvent) {
+    audio.talkKeyDown(event);
+    const action = shortcuts.matchVoiceAction(event);
+    if (!action || !canSetVoicePresence(action.field)) return;
+    event.preventDefault();
+    void setVoicePresence(action.field, action.value);
+  }
+
   /** Runs a session command on a specific server connection. */
   function runFor(origin: string, action: string, command: string, args?: Record<string, unknown>) {
     return runAction(action, () => {
@@ -1037,7 +1073,7 @@
   <title>Korero.chat</title>
 </svelte:head>
 
-<svelte:window bind:innerWidth={viewport} onkeydown={audio.talkKeyDown} onkeyup={audio.talkKeyUp} onblur={audio.talkWindowBlur} />
+<svelte:window bind:innerWidth={viewport} onkeydown={handleShortcut} onkeyup={audio.talkKeyUp} onblur={audio.talkWindowBlur} />
 
 <div class="shell" data-pane={onWorkspace ? mobilePane : "room"} data-workspace={onWorkspace} style:--rail-width={railWidth + "px"} style:--channel-width={channelWidth + "px"}>
   <ServerRail servers={railServers} {identityReady} {connectBusy} {pending} {username} {me} {online} {status}

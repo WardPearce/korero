@@ -36,50 +36,56 @@
     <div class="heading-icon"><MessageCircle size={19} aria-hidden="true" /></div>
     <h1>Chat</h1>
   </header>
-  <div class="workspace">
-    <section class="settings-card display-card" aria-labelledby="display-heading">
-      <div>
-        <h2 id="display-heading">Message display</h2>
-        <p class="field-hint">Applies to channel chats and direct messages on this device.</p>
-      </div>
-      <div class="display-controls">
-        <SelectField label="Message density" options={densities}
-          bind:value={() => display.value.density, (density) => update({ density })} />
-        <div>
-          <Checkbox label="Show avatars" bind:checked={() => display.value.showAvatars, (showAvatars) => update({ showAvatars })} />
-          <Checkbox label="Show timestamps" bind:checked={() => display.value.showTimestamps, (showTimestamps) => update({ showTimestamps })} />
-          <Checkbox label="Group consecutive messages" bind:checked={() => display.value.groupMessages, (groupMessages) => update({ groupMessages })} />
-          <p class="field-hint">Groups messages from the same person sent within five minutes of each other.</p>
+  <div class="workspace settings-content">
+    <section class="settings-card" aria-labelledby="display-heading">
+      <div class="settings-row">
+        <div class="settings-heading">
+          <h2 id="display-heading">Message display</h2>
+          <p class="field-hint">Applies to channel chats and direct messages on this device.</p>
         </div>
-      </div>
-      <div>
-        <h3 id="chat-preview-heading">Live preview</h3>
-        <div class="chat-preview" role="group" aria-labelledby="chat-preview-heading">
-          {#each sample as message, index (message.id)}
-            <ChatMessage {message} previous={sample[index - 1]} name={message.name} showProfilePicture={false}>
-              <p>{message.text}</p>
-            </ChatMessage>
-          {/each}
-        </div>
-      </div>
-      <div>
         <Button variant="outline" disabled={isDefault && !saveFailed} onclick={() => update(defaultChatDisplay)}>Reset to defaults</Button>
-        {#if saveFailed}
-          <p class="form-error mt-2" role="alert">Chat settings could not be saved. Changes apply until you reload the app.</p>
-        {/if}
       </div>
+      <div class="display-layout">
+        <div class="display-controls">
+          <SelectField label="Message density" options={densities}
+            bind:value={() => display.value.density, (density) => update({ density })} />
+          <div>
+            <Checkbox label="Show avatars" bind:checked={() => display.value.showAvatars, (showAvatars) => update({ showAvatars })} />
+            <Checkbox label="Show timestamps" bind:checked={() => display.value.showTimestamps, (showTimestamps) => update({ showTimestamps })} />
+            <Checkbox label="Group consecutive messages" bind:checked={() => display.value.groupMessages, (groupMessages) => update({ groupMessages })} />
+            <p class="field-hint">Groups messages from the same person sent within five minutes of each other.</p>
+          </div>
+        </div>
+        <div class="display-preview">
+          <h3 id="chat-preview-heading">Live preview</h3>
+          <div class="chat-preview" role="group" aria-labelledby="chat-preview-heading">
+            {#each sample as message, index (message.id)}
+              <ChatMessage {message} previous={sample[index - 1]} name={message.name} showProfilePicture={false}>
+                <p>{message.text}</p>
+              </ChatMessage>
+            {/each}
+          </div>
+        </div>
+      </div>
+      {#if saveFailed}
+        <p class="form-error" role="alert">Chat settings could not be saved. Changes apply until you reload the app.</p>
+      {/if}
     </section>
   </div>
 </main>
 
 <style>
-  .display-card { display: grid; gap: 1rem; }
+  .display-layout { display: grid; gap: var(--settings-padding); align-items: start; }
   .display-controls { display: grid; gap: .65rem; }
+  .display-preview h3 { font-size: var(--type-small); }
   .chat-preview {
     margin-block-start: .4rem;
     padding-block: .3rem;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--background);
+  }
+  @container settings-pane (min-width: 44rem) {
+    .display-layout { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
   }
 </style>

@@ -1,6 +1,7 @@
 import { createContext, type Snippet } from "svelte";
 import type { DirectMessageChange, Member, MemberRequest, VoiceState } from "./connection/client";
 import type { DeviceLink } from "./identity/device-link";
+import type { VoicePresence } from "./media/voice-shortcuts";
 
 export type MobilePane = "servers" | "channels" | "room";
 export type RoomView = "chat" | "directMessages" | "channelSettings" | "serverSettings";
@@ -51,8 +52,8 @@ interface Workspace {
   showConnect(address?: string): void;
   showServerSettings(): void;
   run(action: string, command: string, args?: Record<string, unknown>): Promise<boolean>;
-  /** Runs a voice command on the joined voice server, falling back to the focused server. */
-  runVoice(action: string, command: string, args?: Record<string, unknown>): Promise<boolean>;
+  canSetVoicePresence(field: VoicePresence): boolean;
+  setVoicePresence(field: VoicePresence, value?: boolean, afkMessage?: string): Promise<boolean>;
   runAction(action: string, work: () => Promise<unknown>): Promise<boolean>;
   memberAction(request: MemberRequest): Promise<boolean>;
   memberVolume(accountId: string): number;

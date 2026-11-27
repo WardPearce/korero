@@ -131,7 +131,7 @@ frontend over HTTPS or localhost and add its origin to `server.origins`.
 - **Files:** attach files up to 4 MiB by default; admins can set 1 to 32 MiB in **Server settings → Overview**.
 - **Direct messages:** compare safety codes with your contact before reading or sending. Without persistence, the server deletes each message once delivered, or after `messaging.offline_delivery_hours`.
 - **Screenshare and camera:** choose **Screenshare** or **Turn on camera**, adjust quality and start when ready. Available sources depend on your browser and OS.
-- **Talk shortcuts:** configure them in **Settings → Audio → Transmission**. Whisper defaults to **Alt+B**.
+- **Shortcuts:** use **Settings → Shortcuts** to set keys for microphone mute, deafen, AFK, talk, and whisper. Set the microphone input mode in **Settings → Audio**. Whisper defaults to **Alt+B**.
 
 # Develop
 

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Radio } from "@lucide/svelte";
-  import { onDestroy, onMount, untrack } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { BitsConfig } from "bits-ui";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
@@ -9,9 +9,9 @@
   import { messageFrom } from "#lib/connection/client";
   import IconButton from "#lib/components/IconButton.svelte";
   import Modal from "#lib/components/Modal.svelte";
-  import { preferences } from "#lib/preferences";
-  import TalkKey from "./TalkKey.svelte";
-  import { isTypingTalkShortcut, matchesTalkShortcut, releasesTalkShortcut, talkShortcutLabel, type TalkShortcut } from "#lib/media/talk-shortcut";
+  import ShortcutKey from "#lib/components/fields/ShortcutKey.svelte";
+  import { getShortcutSettings } from "#lib/media/shortcut-settings.svelte";
+  import { isTypingTalkShortcut, matchesTalkShortcut, releasesTalkShortcut, talkShortcutLabel } from "#lib/media/talk-shortcut";
   import { getWorkspace } from "#lib/workspace";
 
   interface Route {
@@ -23,14 +23,15 @@
 
   const workspace = getWorkspace();
   const audio = getAudioSettings();
-  const initialShortcut: TalkShortcut = { code: "KeyB", alt: true, shift: false, ctrl: false, meta: false };
-  let shortcut = $state.raw(initialShortcut);
-  let mode = $state<"hold" | "toggle">("hold");
+  const shortcuts = getShortcutSettings();
+  const shortcut = $derived(shortcuts.whisper.shortcut);
+  const mode = $derived(shortcuts.whisper.mode);
   let open = $state(false);
   let targetId = $state("");
   let password = $state("");
   let error = $state("");
   let wanted = $state.raw<Route | null>(null);
+  let wantedSettings: typeof shortcuts.whisper;
   let busy = $state(false);
   let routed: Route | null = null;
   let acknowledged = false;
@@ -59,27 +60,10 @@
     (!target.passwordRequired || password)));
   const incoming = $derived(snapshot?.whispers ?? []);
 
-  onMount(async () => {
-    const saved = await preferences.local.get("whisper").catch(() => undefined);
-    const setting = saved?.value as { mode?: "hold" | "toggle"; shortcut?: TalkShortcut } | undefined;
-    if (setting?.mode === "toggle") mode = setting.mode;
-    if (setting?.shortcut?.code) shortcut = setting.shortcut;
-  });
-
-  function saveSettings() {
-    void preferences.local.put({ key: "whisper", value: { mode, shortcut } })
-      .catch((failure) => { error = messageFrom(failure); });
-  }
-
   function setTarget(id: string) {
     targetId = id;
     password = "";
     error = "";
-  }
-
-  function setMode(next: "hold" | "toggle") {
-    mode = next;
-    saveSettings();
   }
 
   async function routeVoice() {
@@ -117,6 +101,7 @@
   function start() {
     if (wanted || busy || !canStart || !target || !snapshot?.channelId) return;
     error = "";
+    wantedSettings = shortcuts.whisper;
     wanted = { connectionId: snapshot.connectionId, channelId: snapshot.channelId, targetId: target.id,
       password: target.passwordRequired ? password : undefined };
     void routeVoice();
@@ -170,7 +155,8 @@
   $effect(() => {
     if (!wanted) return;
     if (activeTarget === wanted.targetId) acknowledged = true;
-    if (!canTalk || snapshot?.connectionId !== wanted.connectionId || snapshot.channelId !== wanted.channelId ||
+    if (wantedSettings !== shortcuts.whisper || !canTalk ||
+        snapshot?.connectionId !== wanted.connectionId || snapshot.channelId !== wanted.channelId ||
         (acknowledged && !busy && !activeTarget)) untrack(stop);
   });
 
@@ -206,13 +192,15 @@
           </label>
         {/if}
         <SelectField label="Activation" options={modeOptions}
-          disabled={busy || Boolean(wanted)} bind:value={() => mode, setMode} />
-        <TalkKey label="Whisper shortcut" {shortcut} disabled={busy || Boolean(wanted)}
-          onchange={(value) => { shortcut = value; saveSettings(); }} />
+          disabled={!shortcuts.ready || shortcuts.saving || busy || Boolean(wanted)}
+          bind:value={() => mode, (value) => { void shortcuts.setWhisper({ mode: value }); }} />
+        <ShortcutKey label="Whisper shortcut" {shortcut} disabled={!shortcuts.ready || shortcuts.saving || busy || Boolean(wanted)}
+          onchange={(value) => { void shortcuts.setWhisper({ shortcut: value }); }} />
         <p class="field-hint">
           {mode === "hold" ? "Hold" : "Press"} <kbd>{talkShortcutLabel(shortcut)}</kbd> while Korero.chat is focused.
         </p>
         {#if error}<p class="notice" role="alert">{error}</p>{/if}
+        {#if shortcuts.error}<p class="notice" role="alert">{shortcuts.error}</p>{/if}
         <div class="dialog-actions">
           <Button variant={wanted ? "destructive" : "default"} disabled={!wanted && (busy || !canStart)}
             onpointerdown={pointerDown} onpointerup={endHold} onpointercancel={endHold} onlostpointercapture={endHold}
