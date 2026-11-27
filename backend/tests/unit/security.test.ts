@@ -82,7 +82,8 @@ test("realtime and attachment rate limits have relaxed defaults and accept host 
       attachment_downloads_per_minute: 240, attachment_download_bytes_per_minute: 134217728,
       attachment_uploads_concurrent: 32 });
     expect(defaults.messaging.per_minute).toBe(120);
-    expect(defaults.limits.auth_per_minute).toBe(30);
+    expect(defaults.limits).toMatchObject({ auth_per_minute: 60, connections_per_account: 8, pending_connections: 64,
+      stored_attachment_bytes: 2147483648, stored_attachment_bytes_per_account: 268435456 });
     const file = join(directory, "server.toml");
     await Bun.write(file, `[limits]
 channel_joins_per_minute = 90
@@ -96,6 +97,8 @@ per_minute = 150
     expect(configured.messaging.per_minute).toBe(150);
     await Bun.write(file, "[limits]\nchannel_joins_per_minute = 0");
     await expect(loadConfig({ file, directory })).rejects.toThrow("Invalid configuration");
+    await Bun.write(file, "[limits]\nstored_attachment_bytes = 67108864\nstored_attachment_bytes_per_account = 134217728");
+    await expect(loadConfig({ file, directory })).rejects.toThrow("stored_attachment_bytes_per_account");
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

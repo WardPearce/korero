@@ -74,7 +74,7 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
   const upgrades = new RateLimit(config.limits.upgrades_per_minute);
   const authentication = new RateLimit(config.limits.auth_per_minute);
   const registration = new RateLimit(config.limits.registration_per_minute);
-  const globalAuth = new RateLimit(Math.max(240, config.limits.auth_per_minute * 8), 1);
+  const globalAuth = new RateLimit(Math.max(240, config.limits.auth_per_minute * 8, config.server.max_users * 4), 1);
   const attachmentRequests = new RateLimit(config.limits.attachment_uploads_per_minute);
   const attachmentDownloads = new RateLimit(config.limits.attachment_downloads_per_minute);
   const connectionInfoRequests = new RateLimit(30);

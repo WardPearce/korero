@@ -31,9 +31,7 @@ const replyWindow = 16;
 const probeIntervalSeconds = 10;
 const replayByteLimit = 262144;
 const liveAttachmentLimit = 32 * bytesPerMiB;
-const storedAttachmentLimit = 256 * bytesPerMiB;
 const liveAttachmentLimitPerAccount = 8 * bytesPerMiB;
-const storedAttachmentLimitPerAccount = maxSupportedAttachmentMiB * bytesPerMiB;
 const registrationGrants = new Set<Permission>(memberPermissions);
 const configurableRoles = new Set<Role>(editableBuiltInRoles);
 const videoPermissions = { screen: "shareScreen", camera: "useCamera" } satisfies Record<VideoSource, Permission>;
@@ -989,10 +987,10 @@ export class Realtime {
       if (!file) this.db.insert(messages).values(message).run();
       else this.db.transaction((tx) => {
         const used = Number(tx.select({ size: sum(attachments.size) }).from(attachments).get()?.size ?? 0);
-        if (used + file.size > storedAttachmentLimit) fail("LIMIT");
+        if (used + file.size > this.config.limits.stored_attachment_bytes) fail("LIMIT");
         const usedByAccount = Number(tx.select({ size: sum(attachments.size) }).from(messages)
           .innerJoin(attachments, eq(attachments.messageId, messages.id)).where(eq(messages.senderId, senderId)).get()?.size ?? 0);
-        if (usedByAccount + file.size > storedAttachmentLimitPerAccount) fail("LIMIT");
+        if (usedByAccount + file.size > this.config.limits.stored_attachment_bytes_per_account) fail("LIMIT");
         tx.insert(messages).values(message).run();
         tx.insert(attachments).values({ messageId: message.id, ...file }).run();
       }, { behavior: "immediate" });

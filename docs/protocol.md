@@ -307,7 +307,8 @@ Persistent attachments expire and are deleted with their message. In-memory
 attachments are available for up to one hour. The in-memory quotas are 8 MiB per
 sender and 32 MiB per server by default. A higher file limit raises those caps to
 at least one file per sender and four files per server. Persistent storage is
-limited to 32 MiB per sender and 256 MiB per server. By default each account has a
+limited to 256 MiB per sender and 2 GiB per server by default (hosts can change
+`limits.stored_attachment_bytes_per_account` and `limits.stored_attachment_bytes`). By default each account has a
 download budget of 240 requests and 128 MiB of decoded file data, refilled over one
 minute, and uploads are capped at 120 requests per minute. Hosts can adjust these
 with `limits.attachment_downloads_per_minute`,

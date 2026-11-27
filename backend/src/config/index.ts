@@ -26,6 +26,7 @@ const configuration = object({
     media_per_minute: integer(1, 20000), ice_restarts_per_minute: integer(1, 1000), channel_joins_per_minute: integer(1, 1000),
     attachment_uploads_per_minute: integer(1, 10000), attachment_downloads_per_minute: integer(1, 10000),
     attachment_download_bytes_per_minute: integer(1048576, 1073741824), attachment_uploads_concurrent: integer(1, 256),
+    stored_attachment_bytes: integer(33554432, 1099511627776), stored_attachment_bytes_per_account: integer(33554432, 1099511627776),
     auth_per_minute: integer(1, 1000), registration_per_minute: integer(1, 1000), upgrades_per_minute: integer(1, 1000), max_channels: integer(1, 10000),
     hosted_accounts: integer(1, 10000000) }),
   messaging: object({ persistence: t.Boolean(), retention_hours: integer(1, 8760), offline_delivery_hours: integer(1, 8760),
@@ -38,11 +39,12 @@ const defaults: Settings = {
   media: { listen: [], listen_ips: [], listen_ip: "", announced_address: "", announced_ipv6: "", port: 8444, workers: 1,
     target_audio_bitrate: 64000, enable_udp: true, enable_tcp: true, ice_servers: [] },
   authentication: { access_seconds: 900, refresh_seconds: 7776000, setup_seconds: 900, ticket_seconds: 20, refresh_retry_seconds: 10, max_sessions: 32 },
-  limits: { connections_per_account: 4, pending_connections: 32, pending_connections_per_ip: 4, transports: 2, producers: 1, consumers: 128, users_per_channel: 32,
+  limits: { connections_per_account: 8, pending_connections: 64, pending_connections_per_ip: 4, transports: 2, producers: 1, consumers: 128, users_per_channel: 32,
     websocket_bytes: 65536, websocket_pending: 16, websocket_requests_per_minute: 3600, media_per_minute: 1800, ice_restarts_per_minute: 30,
     channel_joins_per_minute: 60, attachment_uploads_per_minute: 120, attachment_downloads_per_minute: 240,
     attachment_download_bytes_per_minute: 134217728, attachment_uploads_concurrent: 32,
-    auth_per_minute: 30, registration_per_minute: 12, upgrades_per_minute: 60, max_channels: 1024, hosted_accounts: 10000 },
+    stored_attachment_bytes: 2147483648, stored_attachment_bytes_per_account: 268435456,
+    auth_per_minute: 60, registration_per_minute: 12, upgrades_per_minute: 60, max_channels: 1024, hosted_accounts: 10000 },
   messaging: { persistence: true, retention_hours: 168, offline_delivery_hours: 168, offline_delivery_queue: 1000, offline_delivery_per_sender: 100, max_length: 2000, per_minute: 120 },
 };
 export const localAddresses = () => [...new Set(Object.values(networkInterfaces()).flatMap((entries) =>
@@ -99,7 +101,7 @@ export async function loadConfig(options: { file?: string; directory?: string } 
     throw new Error(`Invalid configuration at ${error?.path || "/"}: ${error?.message ?? "invalid value"}`);
   }
   const settings = merged as Settings;
-  const { server, tls, media, authentication } = settings;
+  const { server, tls, media, authentication, limits } = settings;
   if (!isIP(server.host)) throw new Error("server.host must be an IPv4 or IPv6 literal");
   if (tls.mode === "proxy" && !server.trusted_proxies.length) {
     throw new Error("Proxy TLS requires the exact IP addresses of explicitly trusted proxies");
@@ -115,6 +117,9 @@ export async function loadConfig(options: { file?: string; directory?: string } 
   }
   if (authentication.refresh_seconds <= Math.max(authentication.access_seconds, authentication.refresh_retry_seconds)) {
     throw new Error("Refresh lifetime must exceed access lifetime and retry window");
+  }
+  if (limits.stored_attachment_bytes_per_account > limits.stored_attachment_bytes) {
+    throw new Error("limits.stored_attachment_bytes_per_account must not exceed limits.stored_attachment_bytes");
   }
   if (!media.enable_udp && !media.enable_tcp) throw new Error("Enable at least one media transport protocol");
   if (media.port + media.workers - 1 > 65535 || (media.enable_tcp && server.port >= media.port && server.port < media.port + media.workers)) {

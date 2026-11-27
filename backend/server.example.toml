@@ -133,9 +133,9 @@ max_sessions = 32
 # ---------------------------------------------------------------------------
 [limits]
 # Maximum simultaneous WebSocket connections per account. Valid: 1-32.
-connections_per_account = 4
+connections_per_account = 8
 # Maximum unauthenticated WebSocket connections across the server. Valid: 1-2048.
-pending_connections = 32
+pending_connections = 64
 # Maximum unauthenticated WebSocket connections per client IP. Valid: 1-2048; also capped
 # at half of pending_connections when that pool has two or more slots.
 pending_connections_per_ip = 4
@@ -171,8 +171,16 @@ attachment_downloads_per_minute = 240
 attachment_download_bytes_per_minute = 134217728
 # Concurrent attachment uploads across the server. Valid: 1-256.
 attachment_uploads_concurrent = 32
+# Persistent attachment storage across the server. Valid: 33554432-1099511627776 bytes
+# (32 MiB-1 TiB). Applies only when messaging.persistence is true.
+stored_attachment_bytes = 2147483648
+# Persistent attachment storage per sender. Valid: 33554432-1099511627776 bytes
+# (32 MiB-1 TiB), and no more than stored_attachment_bytes.
+stored_attachment_bytes_per_account = 268435456
 # HTTP sign-in/authentication requests per client IP per minute. Valid: 1-1000.
-auth_per_minute = 30
+# Server-wide, these requests are also capped at the largest of 240,
+# auth_per_minute * 8 and server.max_users * 4 per minute.
+auth_per_minute = 60
 # HTTP registration requests per client IP per minute. Valid: 1-1000.
 registration_per_minute = 12
 # WebSocket upgrade attempts per client IP per minute. Valid: 1-1000.

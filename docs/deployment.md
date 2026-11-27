@@ -73,7 +73,7 @@ and restart to apply it. Set `VOICE_SERVER_PASSWORD` to
 manage the shared password on the host. An explicitly empty value disables the shared
 password for that run. Unset the variable to use the TOML or the saved app password again.
 
-Pending WebSocket connections are limited to 32 globally and four per client IP
+Pending WebSocket connections are limited to 64 globally and four per client IP
 by default. Configure `limits.pending_connections` and
 `limits.pending_connections_per_ip` on the host. For pools with two or more
 slots, one source can use at most half the pool.
@@ -88,8 +88,14 @@ concurrently. The matching settings are `limits.websocket_requests_per_minute`,
 `limits.channel_joins_per_minute`, `messaging.per_minute`,
 `limits.attachment_uploads_per_minute`, `limits.attachment_downloads_per_minute`,
 `limits.attachment_download_bytes_per_minute` and
-`limits.attachment_uploads_concurrent`. HTTP authentication and registration
-limits are unchanged.
+`limits.attachment_uploads_concurrent`. With persistence enabled, stored
+attachments are limited to 2 GiB per server and 256 MiB per sender by default
+(`limits.stored_attachment_bytes` and
+`limits.stored_attachment_bytes_per_account`). HTTP sign-in requests are limited
+to 60 per client IP per minute (`limits.auth_per_minute`). Server-wide, they are
+also capped at the largest of 240, eight times that value and four per allowed
+user (`server.max_users`). Each account can hold up to eight simultaneous
+WebSocket connections (`limits.connections_per_account`).
 
 - `self-signed` is the default. Clients verify a public-key pin.
 - `manual` loads `tls.certificate` and an owner-only `tls.private_key`. Use PEM,
