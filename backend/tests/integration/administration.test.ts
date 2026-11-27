@@ -79,6 +79,42 @@ test("role administration requires a lower rank and control of current and propo
   } finally { await server.cleanup(); }
 });
 
+test("bans are audited and accounts that can ban others cannot be banned", async () => {
+  const server = await fixture();
+  try {
+    const owner = await server.owner();
+    const admin = await server.register("Administrator");
+    await server.call("/api/v1/admin/roles", { accountId: admin.account.id, role: "Administrator" }, owner.accessToken, "PATCH");
+    const member = await server.register("Member");
+
+    const ownerWs = await server.ws(owner);
+    const adminWs = await server.ws(admin);
+    try {
+      // Accounts that can themselves ban others cannot be banned, even by the owner.
+      await expect(ownerWs.rpc("moderation.ban", { accountId: admin.account.id })).rejects.toThrow("FORBIDDEN");
+      await expect(adminWs.rpc("moderation.ban", { accountId: owner.account.id })).rejects.toThrow("FORBIDDEN");
+
+      // A regular member can be banned, and the ban is recorded in the audit log.
+      await adminWs.rpc("moderation.ban", { accountId: member.account.id });
+      type EventPage = { events: { action: string; targetId: string | null }[] };
+      const moderation = async () => (await server.call<EventPage>("/api/v1/admin/audit?prefix=moderation", undefined, owner.accessToken)).payload.events;
+      expect(await moderation()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ action: "moderation.ban", targetId: member.account.id }),
+      ]));
+
+      // Unbanning is audited too.
+      await adminWs.rpc("moderation.unban", { accountId: member.account.id });
+      expect(await moderation()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ action: "moderation.unban", targetId: member.account.id }),
+      ]));
+    } finally {
+      ownerWs.close();
+      adminWs.close();
+      await Promise.all([ownerWs.closed, adminWs.closed]);
+    }
+  } finally { await server.cleanup(); }
+});
+
 test("built-in role permissions apply to connected accounts and protect the registration role", async () => {
   const server = await fixture();
   try {
