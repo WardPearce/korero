@@ -6,7 +6,11 @@ directories:
 files:
   - dist/**/*
   - electron/**/*
-  - "!node_modules/!(ws|x11){,/**/*}"
+  - "!node_modules/!(ws|x11|electron-updater|builder-util-runtime|fs-extra|graceful-fs|jsonfile|universalify|js-yaml|argparse|lazy-val|lodash.escaperegexp|lodash.isequal|semver|tiny-typed-emitter|debug|ms|sax){,/**/*}"
+publish:
+  provider: github
+  owner: WardPearce
+  repo: korero
 toolsets:
   appimage: "1.0.3"
 linux:

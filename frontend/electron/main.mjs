@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Desktop } from "./desktop.mjs";
+import { startUpdater } from "./updater.mjs";
 
 const directory = fileURLToPath(new URL(".", import.meta.url));
 const dist = resolve(directory, "../dist");
@@ -137,6 +138,7 @@ else {
       finally { pendingCommands--; }
     });
     openWindow();
+    startUpdater();
   }).catch((error) => { console.error(error); app.quit(); });
   app.on("window-all-closed", () => app.quit());
   app.on("before-quit", (event) => {
