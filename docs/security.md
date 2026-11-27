@@ -28,7 +28,7 @@ expiration, revocation, or detected refresh-token reuse.
 
 Standard WebRTC encrypts media on each link to the SFU using DTLS-SRTP. The SFU and
 server operator can access voice in transit and channel chat. The server never records
-voice packets, has no telemetry, and offers optional chat persistence, disabled by default. Attachments
+voice packets, has no telemetry, and offers chat persistence, enabled by default. Attachments
 require an active session with matching channel membership and text permission.
 Uploading also requires the attachment permission.
 With persistence enabled, attachments are stored in SQLite and expire with their

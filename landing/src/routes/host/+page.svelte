@@ -237,7 +237,7 @@ journalctl -u korero`} />
 				</tr>
 				<tr>
 					<td><code>messaging.persistence</code></td>
-					<td>Keep message history. Off by default.</td>
+					<td>Keep message history for one week. On by default.</td>
 				</tr>
 				<tr>
 					<td><code>media.target_audio_bitrate</code></td>

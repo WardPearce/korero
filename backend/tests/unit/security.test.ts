@@ -64,6 +64,15 @@ per_minute = 150
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test("message history is kept for one week by default", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "voice-persistence-"));
+  try {
+    const defaults = await loadConfig({ directory });
+    expect(defaults.messaging.persistence).toBe(true);
+    expect(defaults.messaging.retention_hours).toBe(168);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("worker extraction checks the embedded digest, persisted digest and symlinks", async () => {
   const directory = await mkdtemp(join(tmpdir(), "voice-worker-"));
   const originalWorker = process.env.MEDIASOUP_WORKER_BIN;

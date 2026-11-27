@@ -183,9 +183,9 @@ hosted_accounts = 10000
 [messaging]
 # Store messages on the server for later history. Valid: true or false; false delivers
 # messages only to currently connected members (no history).
-persistence = false
-# How long stored messages are retained. Valid: 1-8760 hours (up to 365 days).
-retention_hours = 24
+persistence = true
+# How long stored messages are retained (one week). Valid: 1-8760 hours (up to 365 days).
+retention_hours = 168
 # How long the server holds an encrypted direct message for an offline recipient
 # when persistence is false. Delivered packets are deleted once a recipient device
 # acknowledges them. With persistence enabled, retention_hours applies instead.

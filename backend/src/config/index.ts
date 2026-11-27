@@ -43,7 +43,7 @@ const defaults: Settings = {
     channel_joins_per_minute: 60, attachment_uploads_per_minute: 120, attachment_downloads_per_minute: 240,
     attachment_download_bytes_per_minute: 134217728, attachment_uploads_concurrent: 32,
     auth_per_minute: 30, registration_per_minute: 12, upgrades_per_minute: 60, max_channels: 1024, hosted_accounts: 10000 },
-  messaging: { persistence: false, retention_hours: 24, offline_delivery_hours: 168, offline_delivery_queue: 1000, offline_delivery_per_sender: 100, max_length: 2000, per_minute: 120 },
+  messaging: { persistence: true, retention_hours: 168, offline_delivery_hours: 168, offline_delivery_queue: 1000, offline_delivery_per_sender: 100, max_length: 2000, per_minute: 120 },
 };
 export const localAddresses = () => [...new Set(Object.values(networkInterfaces()).flatMap((entries) =>
   (entries ?? []).filter(({ address }) => !address.toLowerCase().startsWith("fe80:")).map(({ address }) => address)))];
