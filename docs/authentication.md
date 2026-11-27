@@ -5,8 +5,9 @@
 Hosted accounts are optional. The app defaults to `voice.korero.chat` in
 production and `localhost` on the configured backend port in development. The
 provider address is editable. A provider accepts new hosted accounts only when
-`server.registration` is `open`. Existing hosted accounts can sign in after
-registration closes. Account providers use HTTPS in production.
+`server.registration` is `open`, up to `limits.hosted_accounts`. When the provider
+has a server password, registration must include it as `password`. Existing hosted
+accounts can sign in after registration closes. Account providers use HTTPS in production.
 
 The client derives a key from the password using Argon2id. HKDF produces separate
 keys for authentication and AES-256-GCM encryption. The client encrypts the
@@ -21,6 +22,32 @@ saved sign-in on that device.
 
 With local setup, the device stores the private key and saved servers. Voice
 server sign-in continues to use Ed25519 challenges in both modes.
+
+## Device links
+
+You can sign another device, such as a phone, in to your identity by QR code.
+Choose **Link a phone** in Identity settings on a device that is signed in.
+On the new device, choose **Link from another device** at first launch, scan the
+code, and type the 16-character link code shown beside it.
+
+For a local identity, the QR code carries the private key, username, and saved
+servers. The transfer is offline. For a hosted account, it carries the provider
+address, username, sign-in credential, and encryption key, but not the password.
+The new device signs in to the provider and decrypts the identity and saved
+servers there, so both devices share the same saved servers. Hosted sessions
+started before device links were added cannot be shared. Sign out and sign in
+again on that device first.
+
+The QR payload is encrypted with AES-256-GCM under a key derived from the link
+code using PBKDF2-SHA-256 with 600,000 iterations. The link code is 80 random
+bits and is not part of the QR code, so a photo of the QR code alone is not
+enough. Anyone who has both can sign in as you. Each time the dialog opens it
+creates a new link and code, and closing it discards them. The new device signs
+in to voice servers with the same Ed25519 challenges.
+
+To let hosted sessions be linked, the device stores the account encryption key
+as extractable. Script running in the app could read this key, so it relies on
+the app's content security protections.
 
 Use **Identity** settings to convert a local identity to a hosted account or to
 transfer a hosted identity to another provider. Choose a username and password

@@ -27,7 +27,10 @@ inherit the server default.
 At launch, you can create or sign in to an optional hosted account. Use
 `voice.korero.chat` or enter your own provider. Signing in restores your encrypted
 identity and saved servers on any device. You can also continue with a local
-identity and manage your own encrypted backup in Identity settings.
+identity and manage your own encrypted backup in Identity settings. To sign in
+on your phone without a password, choose **Link a phone** in Identity settings,
+then **Link from another device** on the phone and scan the QR code. See
+[Device links](docs/authentication.md#device-links).
 
 Start the server with `--config ./server.toml` from `backend/` to use that
 file. Host-side TOML changes apply after a restart. Environment overrides take
@@ -52,8 +55,11 @@ disabled, the server keeps attachments in memory for up to one hour.
 Open **Direct messages** from the channel sidebar or a member’s menu. Before
 you can read or send messages in a conversation on this device, compare safety
 codes with your contact in person or over a trusted channel. Both accounts use
-the same server. The server relays encrypted messages and holds them for offline
-delivery only when message persistence is enabled.
+the same server. Korero.chat connects to all your saved servers when it starts,
+so direct messages arrive whichever server you are viewing. When your contact is
+offline, the server holds the encrypted message and delivers it when they next
+connect. Without message persistence, the server deletes each message once it is
+delivered, or after `messaging.offline_delivery_hours`.
 
 Choose **Screenshare**, set resolution, frame rate, video bitrate and optional source
 audio, then choose a window, browser tab or full display in the system picker.

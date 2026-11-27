@@ -25,7 +25,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Korero.chat uses the microphone to transmit your voice in channels.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Korero.chat uses the camera when you choose to share video.</string>
+	<string>Korero.chat uses the camera when you choose to share video or scan a device link.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Korero.chat connects to voice servers on your local network.</string>
 	<key>LSRequiresIPhoneOS</key>

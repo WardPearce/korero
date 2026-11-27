@@ -5,6 +5,16 @@ Linux x86_64. Capacitor copies the same build into the Android and iOS projects.
 The client connects to a separately deployed Bun/Elysia and mediasoup server
 using the [v1 protocol](protocol.md).
 
+## Server connections
+
+At launch the client signs in to every saved server and keeps those sessions
+open. The rail selects which server the workspace shows. Background servers
+still deliver direct messages, pokes and unread counts. A server that needs a
+certificate decision, server password or enrollment waits until you select it
+and finish the connect dialog. Voice uses one channel at a time. Joining a
+channel leaves any channel on another server, and push-to-talk follows the
+server you are talking on.
+
 ## Electron desktop
 
 Electron serves the local app from a secure custom origin with a sandboxed

@@ -1,4 +1,4 @@
-interface Playback {
+export interface ScreenPlayback {
   muted: boolean;
   volume: number;
 }
@@ -6,8 +6,7 @@ interface Playback {
 export function openScreenPopout(
   stream: MediaStream,
   title: string,
-  playback: Playback,
-  onPlayback: (playback: Playback) => void,
+  playback: ScreenPlayback,
   onClose: () => void,
   onStop?: () => void,
 ) {
@@ -65,12 +64,10 @@ export function openScreenPopout(
     video.setAttribute("aria-label", title);
     video.autoplay = true;
     video.playsInline = true;
-    video.controls = true;
     video.defaultMuted = playback.muted;
     video.muted = playback.muted;
     video.volume = playback.volume;
     video.srcObject = stream;
-    video.addEventListener("volumechange", () => onPlayback({ muted: video.muted, volume: video.volume }));
     doc.body.replaceChildren(header, video);
 
     const themeObserver = new MutationObserver(syncTheme);
@@ -104,7 +101,15 @@ export function openScreenPopout(
       };
       actions.append(stop);
     }
-    return { close, focus: () => popup.focus() };
+    return {
+      close,
+      focus: () => popup.focus(),
+      setPlayback: (next: ScreenPlayback) => {
+        if (finished || popup.closed) return;
+        video.muted = next.muted;
+        video.volume = next.volume;
+      },
+    };
   } catch {
     popup.close();
   }

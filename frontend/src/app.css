@@ -223,6 +223,21 @@ body {
 .active-server :is(.rail-server, .disconnect-server):hover:not(:disabled) { background: var(--control-hover); }
 .active-server:has(.rail-server:hover) { border-color: var(--input); box-shadow: var(--shadow-sm); }
 .disconnect-server:disabled { opacity: .55; }
+.active-server[data-focused="true"] { border-color: var(--ring); }
+.rail-server[aria-current="true"] strong { color: var(--foreground); }
+.rail-unread {
+  flex: none;
+  min-width: 20px;
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: var(--type-caption);
+  font-weight: 600;
+  text-align: center;
+}
+.rail-server .rail-unread + .connection-dot { margin-left: 0; }
 .rail-tile, .server-tile, .heading-icon, .dialog-icon {
   display: grid;
   flex: none;

@@ -7,6 +7,8 @@ import { audit, channelPermissions, defaultPermissions, DEFAULT_ROLE_KEY, editab
 import { accounts, accountRoles, attachments, auditEvents, bans, channelOverrides, channels, hearingRestrictions, messages, rolePermissions, rolesTable, settings, speakingRestrictions } from "../database/schema";
 import { attachmentDataLength, bytesPerMiB, decode, defaultAttachmentMiB, maxSupportedAttachmentMiB, pokeMaxLength, type httpBodies, type Request } from "../protocol";
 import { errorResponse, fail, ProtocolError, RateLimit } from "../security/errors";
+import { sanitizeChatHtml } from "../security/html";
+import { PasswordWork } from "../security/work";
 import { Auth, isBanned, type Account, type Session } from "./auth";
 import { DirectMessages } from "./direct-messages";
 import { Media, type VideoSource, type WhisperRoute } from "./media";
@@ -35,12 +37,7 @@ const configurableRoles = new Set<Role>(editableBuiltInRoles);
 const videoPermissions = { screen: "shareScreen", camera: "useCamera" } satisfies Record<VideoSource, Permission>;
 const auditActor = alias(accounts, "audit_actor_account");
 const auditTarget = alias(accounts, "audit_target_account");
-
-function imageUrl(value: string) {
-  const url = URL.parse(value);
-  if (!url || url.protocol !== "https:" || url.username || url.password || url.href.length > 512) fail("INVALID_REQUEST");
-  return url.href;
-}
+const kickSeconds = 60;
 
 export class Realtime {
   private readonly peers = new Map<string, Peer>();
@@ -67,16 +64,17 @@ export class Realtime {
   private pending = 0;
   private readonly pendingByIp = new Map<string, number>();
   private readonly pendingLimitPerIp: number;
-  private passwordWork = 0;
+  private readonly passwordWork = new PasswordWork();
+  private readonly kicked = new Map<string, number>();
   private motd: string;
   private defaultRole: Role;
   private defaultAudioBitrate: number | null;
   private maxAttachmentMiB: number;
-  bannerImageUrl: string | null;
+  private banner: string | null;
 
   constructor(private readonly db: Store, private readonly auth: Auth, private readonly media: Media, private readonly config: Config) {
     this.directMessages = new DirectMessages(db, config);
-    this.bannerImageUrl = db.select().from(settings).where(eq(settings.key, "bannerImageUrl")).get()?.value ?? null;
+    this.banner = db.select().from(settings).where(eq(settings.key, "bannerImageUrl")).get()?.value ?? null;
     this.motd = db.select().from(settings).where(eq(settings.key, "motd")).get()?.value ?? "";
     this.defaultRole = db.select().from(settings).where(eq(settings.key, DEFAULT_ROLE_KEY)).get()?.value ?? INITIAL_ROLE;
     const bitrate = db.select().from(settings).where(eq(settings.key, "defaultAudioBitrate")).get()?.value;
@@ -213,6 +211,7 @@ export class Realtime {
       for (const [id, entry] of this.liveAttachments) {
         if (entry.expiresAt <= now) this.removeLiveAttachment(id);
       }
+      for (const [accountId, until] of this.kicked) if (until <= now) this.kicked.delete(accountId);
     }
   }
   async close() {
@@ -464,6 +463,24 @@ export class Realtime {
       [...this.overrides.values()].every((overrides) =>
         channelPermissions.every((permission) => registrationGrants.has(permission) || overrides.get(`${role}/${permission}`) !== true)));
   }
+  get bannerImageUrl() { return this.visibleImage(this.banner); }
+  private imageHostAllowed(host: string) {
+    const hosts = this.config.server.image_hosts;
+    return !hosts.length || hosts.includes(host.toLowerCase());
+  }
+  private imageUrl(value: string) {
+    const url = URL.parse(value);
+    if (!url || url.protocol !== "https:" || url.username || url.password || url.href.length > 512) fail("INVALID_REQUEST");
+    if (!this.imageHostAllowed(url.hostname)) {
+      throw new ProtocolError("FORBIDDEN", "Images must come from a host this server allows.");
+    }
+    return url.href;
+  }
+  // Stored URLs are rechecked so tightening server.image_hosts takes effect immediately.
+  private visibleImage(value: string | null) {
+    const url = value ? URL.parse(value) : null;
+    return url && this.imageHostAllowed(url.hostname) ? value : null;
+  }
   get targetAudioBitrate() {
     return process.env.VOICE_MEDIA_TARGET_AUDIO_BITRATE !== undefined ? this.config.media.target_audio_bitrate :
       this.defaultAudioBitrate ?? this.config.media.target_audio_bitrate;
@@ -544,7 +561,7 @@ export class Realtime {
   }
   setBanner(accountId: string, url: string | null) {
     const actor = this.authorize(accountId, "manageSettings");
-    const bannerImageUrl = url === null ? null : imageUrl(url);
+    const bannerImageUrl = url === null ? null : this.imageUrl(url);
     this.db.transaction((tx) => {
       const key = "bannerImageUrl";
       if (bannerImageUrl === null) tx.delete(settings).where(eq(settings.key, key)).run();
@@ -552,7 +569,7 @@ export class Realtime {
         .onConflictDoUpdate({ target: settings.key, set: { value: bannerImageUrl } }).run();
       audit(tx, actor.id, "server.banner_changed", null);
     }, { behavior: "immediate" });
-    this.bannerImageUrl = bannerImageUrl;
+    this.banner = bannerImageUrl;
     this.broadcastAll("state.invalidated", {});
     return { bannerImageUrl };
   }
@@ -597,7 +614,7 @@ export class Realtime {
       canSendText,
       canAttachFiles: canSendText && this.allowed(account, "attachFiles", joinedChannel),
       directMessages: { maxBytes: this.directMessages.maxBytes, persistent: this.config.messaging.persistence,
-        canSend: this.allowed(account, "sendDirectMessages") },
+        offlineDelivery: true, canSend: this.allowed(account, "sendDirectMessages") },
       pokeMaxLength,
       canShareScreen: canSpeak && this.allowed(account, "shareScreen", joinedChannel),
       canUseCamera: canSpeak && this.allowed(account, "useCamera", joinedChannel),
@@ -606,7 +623,7 @@ export class Realtime {
           const { id, name, parentId, description, position, capacity, temporary, passwordHash, backgroundImageUrl } = channel;
           const canEdit = this.allowed(account, "editChannels", channel);
           return { id, name, parentId: parentId && visibleIds.has(parentId) ? parentId : null, description, position, capacity,
-            temporary, passwordRequired: !!passwordHash, backgroundImageUrl, audioBitrate: channel.audioBitrate,
+            temporary, passwordRequired: !!passwordHash, backgroundImageUrl: this.visibleImage(backgroundImageUrl), audioBitrate: channel.audioBitrate,
             canWhisperTo: id !== peer.channelId && canWhisper && this.allowed(account, "speak", channel) &&
               this.allowed(account, "whisper", channel),
             canSetAudioBitrate: this.allowed(account, "manageSettings") && canEdit,
@@ -708,11 +725,7 @@ export class Realtime {
     this.broadcastAll("state.invalidated", {});
   }
 
-  private async password<T>(run: () => Promise<T>) {
-    if (this.passwordWork >= 2) fail("RATE_LIMITED");
-    this.passwordWork++;
-    try { return await run(); } finally { this.passwordWork--; }
-  }
+  private password<T>(accountId: string, run: () => Promise<T>) { return this.passwordWork.run(accountId, run); }
   reorderChannel(accountId: string, { channelId, targetId, placement, parentId: expectedParentId }: typeof httpBodies.channelOrder.static) {
     const actor = this.authorize(accountId, "editChannels");
     const source = this.channel(channelId);
@@ -800,9 +813,9 @@ export class Realtime {
     };
     authorize();
     const image = payload.backgroundImageUrl;
-    const backgroundImageUrl = image === undefined ? current?.backgroundImageUrl ?? null : image === null ? null : imageUrl(image);
+    const backgroundImageUrl = image === undefined ? current?.backgroundImageUrl ?? null : image === null ? null : this.imageUrl(image);
     const passwordHash = payload.password === undefined ? current?.passwordHash ?? null : payload.password === null ? null :
-      await this.password(() => Bun.password.hash(payload.password!, { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 }));
+      await this.password(peer.account!.id, () => Bun.password.hash(payload.password!, { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 }));
     const { actor, parentId } = authorize();
     if (payload.audioBitrate !== undefined) this.require(actor, "manageSettings");
     const channel = {
@@ -850,7 +863,7 @@ export class Realtime {
     if (payload.text.length > this.config.messaging.max_length || (!file && !payload.text.trim())) fail("INVALID_REQUEST");
     const channel = this.textChannel(peer, payload.channelId);
     const message = { id: randomUUID(), channelId: channel.id, recipientId: null, senderId, createdAt: Date.now(), text: payload.text,
-      html: payload.text.trim() ? payload.html ?? null : null };
+      html: payload.text.trim() && payload.html ? sanitizeChatHtml(payload.html) : null };
     if (this.config.messaging.persistence) {
       if (!file) this.db.insert(messages).values(message).run();
       else this.db.transaction((tx) => {
@@ -934,6 +947,9 @@ export class Realtime {
       if (peer.account || peer.deadline <= Date.now()) fail("AUTH_FAILED");
       if (!request.payload.versions.includes(1)) fail("VERSION_UNSUPPORTED");
       const session = this.auth.consumeTicket(request.payload.ticket);
+      if ((this.kicked.get(session.accountId) ?? 0) > Date.now()) {
+        throw new ProtocolError("FORBIDDEN", "You were kicked from this server. Try again in a minute.");
+      }
       const group = this.online.get(session.accountId) ?? new Set<Peer>();
       if (group.size >= this.config.limits.connections_per_account || !group.size && this.online.size >= this.config.server.max_users) fail("LIMIT");
       peer.session = session;
@@ -967,7 +983,7 @@ export class Realtime {
           whisper = { channelId: channel.id, passwordHash: channel.passwordHash };
           if (!this.canWhisper(peer, whisper)) fail("FORBIDDEN");
           const { passwordHash } = whisper;
-          if (passwordHash && (!whisperPassword || !await this.password(() => Bun.password.verify(whisperPassword, passwordHash)))) {
+          if (passwordHash && (!whisperPassword || !await this.password(actor.id, () => Bun.password.verify(whisperPassword, passwordHash)))) {
             fail("FORBIDDEN");
           }
         }
@@ -1008,7 +1024,7 @@ export class Realtime {
         const channel = this.channel(channelId);
         this.require(actor, "join", channel);
         if (channel.passwordHash && peer.channelId !== channelId &&
-            (!password || !await this.password(() => Bun.password.verify(password, channel.passwordHash!)))) {
+            (!password || !await this.password(actor.id, () => Bun.password.verify(password, channel.passwordHash!)))) {
           throw new ProtocolError("FORBIDDEN", "Incorrect channel password.");
         }
         const current = this.verify(peer);
@@ -1119,6 +1135,8 @@ export class Realtime {
             audit(tx, actor.id, request.type, accountId);
           }, { behavior: "immediate" });
           if (request.type === "moderation.kick") {
+            // A short cooldown stops the client from reconnecting straight away.
+            this.kicked.set(accountId, Date.now() + kickSeconds * 1000);
             for (const target of [...(this.online.get(accountId) ?? [])]) this.disconnect(target, 4403, "Kicked");
           }
         }
@@ -1176,12 +1194,14 @@ export class Realtime {
         this.directMessages.peer(actor.id, accountId);
         if (isBanned(this.db, accountId)) fail("NOT_FOUND");
         const recipients = this.activeDevices(accountId);
-        if (!recipients.length && !this.config.messaging.persistence) {
-          throw new ProtocolError("CONFLICT", "The recipient is offline and this server does not retain direct messages.");
-        }
-        const message = this.directMessages.send(actor.id, request.payload);
+        const message = this.directMessages.send(actor.id, request.payload, recipients.length > 0);
         if (message) this.broadcast([...this.activeDevices(actor.id), ...recipients], "direct.created", message);
-        return { messageId: id };
+        return { messageId: id, queued: !recipients.length };
+      }
+      case "direct.pending": return this.directMessages.pending(actor.id);
+      case "direct.ack": {
+        this.directMessages.acknowledge(actor.id, request.payload.ids);
+        break;
       }
       case "direct.poke": {
         const { accountId, message } = request.payload;

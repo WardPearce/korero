@@ -1,0 +1,81 @@
+@import 'tailwindcss';
+
+:root {
+	color-scheme: dark;
+	--background: #0c1218;
+	--foreground: #f2f6fa;
+	--card: #18232d;
+	--muted: #111a22;
+	--muted-foreground: #aabac8;
+	--primary: #5ce0cc;
+	--primary-foreground: #0c1218;
+	--accent: #b7acf3;
+	--success: #6fd5a0;
+	--secondary: #8ea5bc;
+	--info: #83d3ee;
+	--border: #2b3a48;
+	--input: #627c90;
+	--radius: 10px;
+}
+
+@theme inline {
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-accent: var(--accent);
+	--color-success: var(--success);
+	--color-secondary: var(--secondary);
+	--color-info: var(--info);
+	--color-border: var(--border);
+	--color-input: var(--input);
+}
+
+html {
+	scroll-behavior: smooth;
+}
+body {
+	margin: 0;
+	background: var(--background);
+	color: var(--foreground);
+	font-size: 1rem;
+	line-height: 1.6;
+	accent-color: var(--primary);
+}
+h1,
+h2,
+h3 {
+	font-weight: 600;
+	letter-spacing: -0.02em;
+}
+a:focus-visible,
+button:focus-visible {
+	outline: 2px solid var(--foreground);
+	outline-offset: 2px;
+}
+
+@keyframes speak {
+	0%,
+	100% {
+		box-shadow: 0 0 0 2px var(--success);
+	}
+	50% {
+		box-shadow:
+			0 0 0 2px var(--success),
+			0 0 0 7px color-mix(in srgb, var(--success) 25%, transparent);
+	}
+}
+.speaking {
+	animation: speak 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	html {
+		scroll-behavior: auto;
+	}
+	.speaking {
+		animation: none;
+	}
+}

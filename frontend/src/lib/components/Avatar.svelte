@@ -9,20 +9,25 @@
   } = $props();
   const workspace = getWorkspace();
   const origin = $derived(workspace.serverOrigin);
-  const connectionId = $derived(workspace.view.snapshot?.connectionId);
+  const online = $derived(workspace.view.phase === "online");
   const avatarId = $derived(accountId ? workspace.avatarId(accountId) : undefined);
   let source = $state<string>();
+  let shownFor = "";
 
+  // Keeps the current picture on screen while a new revision loads, and drops it only when the avatar
+  // now belongs to someone else (another account or server) or pictures are unavailable.
   function loadPicture() {
-    if (!workspace.profilePictures || !accountId || !origin || !connectionId) return;
+    const owner = workspace.profilePictures && accountId && origin ? origin + "/" + accountId : "";
+    if (owner !== shownFor) {
+      source = undefined;
+      shownFor = owner;
+    }
+    if (!owner || !accountId || !online) return;
     let active = true;
-    void workspace.profilePicture(origin, connectionId, accountId, avatarId).then((value) => {
+    void workspace.profilePicture(origin, accountId, avatarId).then((value) => {
       if (active) source = value;
     });
-    return () => {
-      active = false;
-      source = undefined;
-    };
+    return () => { active = false; };
   }
 </script>
 

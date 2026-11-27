@@ -38,7 +38,8 @@
       const accountId = message.senderId === snapshot.account.id ? message.recipientId : message.senderId;
       const contact = entries.get(accountId);
       if (!contact || contact.lastMessageAt < message.createdAt) {
-        entries.set(accountId, { accountId, displayName: contact?.displayName ?? "Unknown member", lastMessageAt: message.createdAt });
+        const senderName = message.senderId === accountId ? message.senderName : undefined;
+        entries.set(accountId, { accountId, displayName: contact?.displayName ?? senderName ?? "Unknown member", lastMessageAt: message.createdAt });
       }
     }
     return [...entries.values()]

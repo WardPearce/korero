@@ -16,19 +16,22 @@ export function browserServerOrigin(address: string) {
   return url.origin;
 }
 
+/** Direct messages kept in the view while connected. Older ones remain in server history. */
+const directMessageLimit = 200;
+// Voice uses one call at a time, so the sessions share the platform call audio route.
+const callAudio = new MobileCallAudio();
+
 class BrowserSession {
-  private origin = "";
   private credentials?: Credentials;
   private refresh?: Promise<void>;
   private socket?: WebSocket;
   private heartbeat?: ReturnType<typeof setInterval>;
   private nextId = 0;
-  private readonly callAudio = new MobileCallAudio();
+  private readonly callAudio = callAudio;
   private voice?: WebVoice;
   private audio?: AudioContext;
   private volumes: Record<string, number> = {};
   private pending = new Map<number, (reply: Reply | null) => void>();
-  private update: (view: VoiceState) => void = () => {};
   private snapshot: Snapshot | null = null;
   private messages: Message[] = [];
   private directMessages: DirectMessage[] = [];
@@ -36,29 +39,23 @@ class BrowserSession {
   private historyRequest = 0;
   private deletedDuringHistory?: Set<string>;
 
-  watch(update: (view: VoiceState) => void) {
-    this.update = update;
-    const visibility = () => {
-      if (!document.hidden && this.voice) void this.audio?.resume().catch(() => {});
-    };
-    if (mobileApp()) document.addEventListener("visibilitychange", visibility);
-    return () => {
-      this.update = () => {};
-      if (mobileApp()) document.removeEventListener("visibilitychange", visibility);
-    };
+  private closed = false;
+
+  constructor(readonly origin: string, private readonly update: (view: VoiceState) => void) {}
+
+  get connectionId() { return this.snapshot?.connectionId; }
+  get channelId() { return this.snapshot?.channelId ?? null; }
+
+  resumeAudio() {
+    if (this.voice) void this.audio?.resume().catch(() => {});
   }
 
-  async select(origin: string) {
-    await this.disconnect();
-    this.origin = origin;
-  }
-
-  async request(origin: string, path: string, body: unknown): Promise<RelayResponse> {
-    if (origin !== this.origin) throw new Error("The selected server changed.");
+  async request(path: string, body: unknown): Promise<RelayResponse> {
+    if (this.closed) throw new Error("The selected server changed.");
     const response = await this.post(path, body);
     const result = await response.json();
     if (response.ok && path !== "/api/v1/auth/identity/challenge") {
-      if (origin !== this.origin) throw new Error("The selected server changed.");
+      if (this.closed) throw new Error("The selected server changed.");
       const { accessToken, refreshToken, accessExpiresAt, account } = result;
       if (!accessToken || !refreshToken || !accessExpiresAt) throw new Error("The server did not create a session.");
       this.credentials = { accessToken, refreshToken, accessExpiresAt };
@@ -93,13 +90,11 @@ class BrowserSession {
   }
 
   async fetch(request: Request) {
-    const origin = new URL(request.url).origin;
-    if (origin !== this.origin) throw new Error("The selected server changed.");
     const headers = new Headers(request.headers);
     const path = new URL(request.url).pathname;
     if (path !== "/api/v1/server/info" && path !== "/api/v1/server/capabilities") {
       const token = await this.accessToken();
-      if (origin !== this.origin) throw new Error("The selected server changed.");
+      if (this.closed) throw new Error("The selected server changed.");
       headers.set("authorization", `Bearer ${token}`);
     }
     const attachment = path === "/api/v1/chat/attachments" || path.startsWith("/api/v1/chat/attachments/");
@@ -142,6 +137,7 @@ class BrowserSession {
       const state = await this.rpc<Snapshot>("connection.authenticate", { ticket, versions: [1] });
       authorized = true;
       this.showSnapshot(state);
+      void this.receiveQueued(socket);
       this.heartbeat = setInterval(async () => {
         try {
           const token = await this.accessToken();
@@ -162,6 +158,31 @@ class BrowserSession {
       this.update({ ...offline, phase: "error", error: messageFrom(error) });
       throw error;
     }
+  }
+
+  /** Fetches direct messages queued while offline, then acknowledges them. */
+  private async receiveQueued(socket: WebSocket) {
+    try {
+      for (let page = 0; page < directMessageLimit / 100; page++) {
+        const queued = await this.rpc<DirectMessage[]>("direct.pending");
+        if (socket !== this.socket) return;
+        const account = this.snapshot?.account.id;
+        const mine = queued.filter(({ recipientId }) => recipientId === account);
+        for (const message of mine) this.addDirectMessage(message);
+        if (mine.length) this.show();
+        if (!mine.length) return;
+        await this.rpc("direct.ack", { ids: mine.map(({ id }) => id) });
+        if (queued.length < 100) return;
+      }
+    } catch {
+      // Older servers do not queue direct messages.
+    }
+  }
+
+  private addDirectMessage(message: DirectMessage) {
+    if (this.directMessages.some(({ id }) => id === message.id)) return false;
+    this.directMessages = [...this.directMessages, message].slice(-directMessageLimit);
+    return true;
   }
 
   private rpc<T>(type: string, payload: unknown = {}): Promise<T> {
@@ -254,9 +275,7 @@ class BrowserSession {
     } else if (type === "direct.created") {
       const message = payload as DirectMessage;
       if (message.senderId !== snapshot.account.id && message.recipientId !== snapshot.account.id) return;
-      if (this.directMessages.some(({ id }) => id === message.id)) return;
-      this.directMessages = [...this.directMessages, message].slice(-50);
-      this.show();
+      if (this.addDirectMessage(message)) this.show();
     } else if (type === "direct.poked") {
       const poke = payload as Poke;
       if (poke.recipientId !== snapshot.account.id) return;
@@ -362,6 +381,7 @@ class BrowserSession {
   }
 
   async disconnect() {
+    this.closed = true;
     this.closeSocket();
     const token = this.credentials?.accessToken;
     this.credentials = undefined;
@@ -370,4 +390,86 @@ class BrowserSession {
   }
 }
 
-export const browserSession = new BrowserSession();
+/**
+ * Holds a session for each signed-in server. Requests that name a connection go to
+ * the session that owns it. Others name the server origin.
+ */
+class BrowserSessions {
+  private readonly sessions = new Map<string, BrowserSession>();
+  private update: (origin: string, view: VoiceState) => void = () => {};
+
+  watch(update: (origin: string, view: VoiceState) => void) {
+    this.update = update;
+    const visibility = () => {
+      if (!document.hidden) for (const session of this.sessions.values()) session.resumeAudio();
+    };
+    if (mobileApp()) document.addEventListener("visibilitychange", visibility);
+    return () => {
+      this.update = () => {};
+      if (mobileApp()) document.removeEventListener("visibilitychange", visibility);
+    };
+  }
+
+  /** Replaces any session for this origin with a fresh, signed-out one. */
+  async select(origin: string) {
+    await this.disconnect(origin);
+    const session: BrowserSession = new BrowserSession(origin, (view) => {
+      if (this.sessions.get(origin) === session) this.update(origin, view);
+    });
+    this.sessions.set(origin, session);
+    return session;
+  }
+
+  session(origin: string) {
+    const session = this.sessions.get(origin);
+    if (!session) throw new Error("Connect to a server first.");
+    return session;
+  }
+
+  private connection(connectionId: string) {
+    for (const session of this.sessions.values()) if (session.connectionId === connectionId) return session;
+    throw new Error("The server connection changed.");
+  }
+
+  request(origin: string, path: string, body: unknown) {
+    return this.session(origin).request(path, body);
+  }
+
+  fetch(request: Request) {
+    const origin = new URL(request.url).origin;
+    const session = this.sessions.get(origin);
+    if (session) return session.fetch(request);
+    const path = new URL(request.url).pathname;
+    if (path === "/api/v1/server/info" || path === "/api/v1/server/capabilities") {
+      return fetch(request, { signal: AbortSignal.timeout(8000), redirect: "error" });
+    }
+    throw new Error("The selected server changed.");
+  }
+
+  directRequest<T>(connectionId: string, kind: DirectOperation, payload: unknown) {
+    try { return this.connection(connectionId).directRequest<T>(connectionId, kind, payload); }
+    catch (error) { return Promise.reject(error); }
+  }
+
+  screenRequest<T>(connectionId: string, channelId: string, kind: string, payload: unknown) {
+    try { return this.connection(connectionId).screenRequest<T>(connectionId, channelId, kind, payload); }
+    catch (error) { return Promise.reject(error); }
+  }
+
+  /** Voice uses one call at a time, so joining a channel leaves any channel on another server. */
+  async joinChannel(origin: string, channelId: string, password?: string) {
+    const session = this.session(origin);
+    for (const other of this.sessions.values()) {
+      if (other !== session && other.channelId) await other.leaveChannel();
+    }
+    await session.joinChannel(channelId, password);
+  }
+
+  async disconnect(origin: string) {
+    const session = this.sessions.get(origin);
+    this.sessions.delete(origin);
+    await session?.disconnect();
+  }
+}
+
+export const browserSessions = new BrowserSessions();

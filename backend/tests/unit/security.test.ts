@@ -91,3 +91,45 @@ test("protocol rejects extra identities, invalid media and unknown negotiation v
   expect(() => decode({ version: 1, id: 1, type: "media.producer.create", payload: { kind: "video" } })).toThrow("Invalid request");
   expect(decode({ version: 1, id: 1, type: "heartbeat", payload: {} }).type).toBe("heartbeat");
 });
+
+test("rate limits group IPv6 clients by /64 and evict the oldest bucket when full", async () => {
+  const { clientKey } = await import("../../src/app");
+  const { RateLimit } = await import("../../src/security/errors");
+  expect(clientKey("2001:db8:1:2:aaaa::1")).toBe("2001:db8:1:2::/64");
+  expect(clientKey("2001:db8:1:2:ffff:ffff:ffff:ffff")).toBe("2001:db8:1:2::/64");
+  expect(clientKey("2001:db8::1")).toBe("2001:db8:0:0::/64");
+  expect(clientKey("::1")).toBe("0:0:0:0::/64");
+  expect(clientKey("64:ff9b::1.2.3.4")).toBe("64:ff9b:0:0::/64");
+  expect(clientKey("192.0.2.7")).toBe("192.0.2.7");
+  const limit = new RateLimit(1, 2);
+  limit.take("a");
+  limit.take("b");
+  expect(() => limit.take("a")).toThrow();
+  limit.take("c");
+  limit.take("d");
+  limit.take("a");
+});
+
+test("server-side chat markup keeps only the client allowlist", async () => {
+  const { sanitizeChatHtml } = await import("../../src/security/html");
+  expect(sanitizeChatHtml('<p onclick="x()">Hi <a href="https://example.com" style="x">there</a></p>'))
+    .toBe('<p>Hi <a href="https://example.com">there</a></p>');
+  expect(sanitizeChatHtml('<a href="javascript:alert(1)">x</a><img src=x onerror=alert(1)>')).toBe("<a>x</a>");
+  expect(sanitizeChatHtml("<script>alert(1)</script><style>p{}</style>")).toBeNull();
+  expect(sanitizeChatHtml("<<x>script>alert(1)<</x>/script>")).toBe("&lt;script&gt;alert(1)&lt;/script&gt;");
+  expect(sanitizeChatHtml("<!-- hidden --><b>&amp;</b>")).toBe("<b>&amp;</b>");
+  expect(sanitizeChatHtml('<ol start="3" type="a"><li>x</li></ol>')).toBe('<ol start="3"><li>x</li></ol>');
+});
+
+test("password work queues fairly and limits each client", async () => {
+  const { PasswordWork } = await import("../../src/security/work");
+  const work = new PasswordWork(1, 1, 1);
+  let release!: () => void;
+  const first = work.run("a", () => new Promise<number>((resolve) => { release = () => resolve(1); }));
+  await expect(work.run("a", async () => 2)).rejects.toThrow();
+  const second = work.run("b", async () => 2);
+  await expect(work.run("c", async () => 3)).rejects.toThrow();
+  release();
+  expect(await Promise.all([first, second])).toEqual([1, 2]);
+  expect(await work.run("a", async () => 4)).toBe(4);
+});

@@ -154,6 +154,8 @@ export const payloads = {
   "direct.inbox": empty,
   "direct.history": object({ ...directAccount, before: optional(directCursor) }),
   "direct.send": object({ ...directAccount, id, nonce: base64url(16), ciphertext: base64url(23, 10944), signature: base64url(86) }),
+  "direct.pending": empty,
+  "direct.ack": object({ ids: list(id, 100, 1) }),
   "direct.poke": object({ ...directAccount, message: optional(t.String({ maxLength: pokeMaxLength, pattern: "^[^\\u0000-\\u001f\\u007f]*$" })) }),
   "media.capabilities": object({ kind: optional(t.Literal("video")) }),
   "media.transport.create": object({ direction: t.UnionEnum(["send", "receive"]), forceTcp: optional(t.Boolean()),

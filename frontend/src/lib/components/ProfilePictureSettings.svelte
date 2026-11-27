@@ -23,7 +23,8 @@
     try {
       const data = file ? await encodeProfilePicture(file) : null;
       if (workspace.serverOrigin !== origin || workspace.view.snapshot?.connectionId !== connectionId) return;
-      await updateProfilePicture(origin, data);
+      const avatarId = await updateProfilePicture(origin, data);
+      workspace.cacheProfilePicture(origin, account.id, avatarId, data);
       status = file ? "Profile picture updated." : "Profile picture removed.";
     } catch (cause) {
       error = messageFrom(cause);

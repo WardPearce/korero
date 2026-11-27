@@ -1,6 +1,6 @@
 import { call, desktopApp, requestError, type RelayResponse } from "../connection/client";
 import { exportBrowserIdentity, signIdentity } from "./browser-identity";
-import { browserSession } from "../connection/browser-session";
+import { browserSessions } from "../connection/browser-session";
 import type { DeviceIdentity } from "../preferences";
 
 let activeIdentity: DeviceIdentity | undefined;
@@ -35,7 +35,7 @@ export async function authenticateIdentity(origin: string, serverId: string, dev
   }
   const { operation, ...fields } = action;
   const { publicKey } = identity;
-  const challenge = await browserSession.request(origin, "/api/v1/auth/identity/challenge", { origin, operation, deviceName, publicKey });
+  const challenge = await browserSessions.request(origin, "/api/v1/auth/identity/challenge", { origin, operation, deviceName, publicKey });
   if (challenge.status !== 200) throw identityError(challenge);
   const details = challenge.body as { id: string; origin: string; serverId: string; operation: string;
     publicKey: string; deviceName: string; binding: string; expiresAt: number };
@@ -46,9 +46,9 @@ export async function authenticateIdentity(origin: string, serverId: string, dev
   const id = details.id;
   const signature = await signIdentity(identity, ["korero-identity-v1", serverId, origin, operation, id, publicKey, "", deviceName, details.expiresAt]);
   switch (operation) {
-    case "login": return browserSession.request(origin, "/api/v1/auth/identity/login", { id, signature, ...fields });
-    case "register": return browserSession.request(origin, "/api/v1/auth/register", { identity: { id, signature }, deviceName, ...fields });
-    case "bootstrap": return browserSession.request(origin, "/api/v1/admin/bootstrap", { identity: { id, signature }, deviceName, ...fields });
+    case "login": return browserSessions.request(origin, "/api/v1/auth/identity/login", { id, signature, ...fields });
+    case "register": return browserSessions.request(origin, "/api/v1/auth/register", { identity: { id, signature }, deviceName, ...fields });
+    case "bootstrap": return browserSessions.request(origin, "/api/v1/admin/bootstrap", { identity: { id, signature }, deviceName, ...fields });
   }
 }
 

@@ -10,10 +10,11 @@
   import Modal from "./Modal.svelte";
 
   type AccountResult = Awaited<ReturnType<typeof HostedAccount.open>>;
-  let { open, migration, onlocal, oncomplete }: {
+  let { open, migration, onlocal, onlink, oncomplete }: {
     open: boolean;
     migration?: { username: string; origin?: string; submit: (provider: string, username: string, password: string) => Promise<AccountResult> };
     onlocal: () => Promise<void>;
+    onlink?: () => void;
     oncomplete: (result: AccountResult) => void;
   } = $props();
   let provider = $state(defaultAccountProvider);
@@ -112,6 +113,9 @@
       <Button variant="outline" class="w-full" type="button" disabled={busy} onclick={continueLocally}
         aria-describedby="local-identity-hint">Continue without an account</Button>
       <p id="local-identity-hint" class="field-hint">Your private key is stored on this device.</p>
+      {#if onlink}
+        <Button variant="outline" class="w-full" type="button" disabled={busy} onclick={onlink}>Link from another device</Button>
+      {/if}
     </div>
   {/if}
 </Modal>

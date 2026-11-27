@@ -1,5 +1,5 @@
 import type { Consumer, ConsumerOptions, Device, Producer, RtpCapabilities, Transport, TransportOptions } from "mediasoup-client/types";
-import { browserSession } from "../connection/browser-session";
+import { browserSessions } from "../connection/browser-session";
 import { call, desktopApp, type ScreenShare } from "../connection/client";
 
 type ScreenCapabilities = RtpCapabilities & { iceServers: RTCIceServer[] };
@@ -46,7 +46,7 @@ export class ScreenMedia {
     const { connectionId, channelId } = this;
     return desktopApp()
       ? call<T>("screen_request", { connectionId, channelId, kind, payload })
-      : browserSession.screenRequest<T>(connectionId, channelId, kind, payload);
+      : browserSessions.screenRequest<T>(connectionId, channelId, kind, payload);
   }
 
   private checkOpen() {

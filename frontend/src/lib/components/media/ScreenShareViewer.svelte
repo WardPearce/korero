@@ -1,10 +1,12 @@
 <script lang="ts">
   import { Portal } from "bits-ui";
-  import { ExternalLink, Maximize, Minimize, PanelTop, Pencil, Play, Square, X } from "@lucide/svelte";
+  import { ExternalLink, Maximize, Minimize, PanelTop, Pencil, Play, Square, Volume2, VolumeX, X } from "@lucide/svelte";
   import { onDestroy, tick } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
   import { Button } from "#lib/components/ui/button/index.js";
-  import { openScreenPopout } from "#lib/media/screen-popout";
+  import * as ContextMenu from "#lib/components/ui/context-menu/index.js";
+  import { Root as Slider } from "#lib/components/ui/slider/index.js";
+  import { openScreenPopout, type ScreenPlayback } from "#lib/media/screen-popout";
 
   interface Share {
     id: string;
@@ -46,10 +48,14 @@
   } = $props();
 
   let fullscreen = $state<string | true>();
+  let fullscreenDialog = $state<HTMLDialogElement>();
   let inlineViewer = $state<HTMLElement>();
   let popoutError = $state("");
+  let volumeSlider = $state<HTMLElement | null>(null);
   const popouts = new SvelteMap<string, NonNullable<ReturnType<typeof openScreenPopout>> & { stream: MediaStream }>();
-  const playback = new Map<string, { muted: boolean; volume: number }>();
+  const playback = new SvelteMap<string, ScreenPlayback>();
+  const videos = new Map<string, HTMLVideoElement>();
+  const defaultPlayback: ScreenPlayback = { muted: true, volume: 1 };
   const tiles: Tile[] = $derived([
     ...own.map((entry) => ({ id: entry.id, title: entry.title, live: entry.live, stream: entry.stream, own: entry })),
     ...entries.map((share) => ({ id: share.id, title: share.title, live: true, stream: share.stream, share })),
@@ -72,19 +78,46 @@
     for (const popup of popouts.values()) popup.close();
   });
 
+  function playbackFor(id: string): ScreenPlayback {
+    return playback.get(id) ?? defaultPlayback;
+  }
+
+  function updatePlayback(id: string, patch: Partial<ScreenPlayback>) {
+    const next = { ...playbackFor(id), ...patch };
+    playback.set(id, next);
+    const video = videos.get(id);
+    if (video) {
+      video.muted = next.muted;
+      video.volume = next.volume;
+    }
+    popouts.get(id)?.setPlayback(next);
+  }
+
+  function toggleMute(id: string) {
+    const { muted, volume } = playbackFor(id);
+    updatePlayback(id, muted ? { muted: false, volume: volume || 1 } : { muted: true });
+  }
+
+  function changeVolume(id: string, percent: number) {
+    updatePlayback(id, { volume: percent / 100, muted: percent === 0 });
+  }
+
   function attachStream(video: HTMLVideoElement, id: string, stream: MediaStream) {
-    const settings = playback.get(id);
-    video.muted = settings?.muted ?? true;
-    video.volume = settings?.volume ?? 1;
+    const settings = playbackFor(id);
+    video.muted = settings.muted;
+    video.volume = settings.volume;
     video.srcObject = stream;
-    return () => { video.srcObject = null; };
+    videos.set(id, video);
+    return () => {
+      video.srcObject = null;
+      if (videos.get(id) === video) videos.delete(id);
+    };
   }
 
   function popOut(tile: Tile) {
     if (!tile.stream || popouts.has(tile.id)) return;
     popoutError = "";
-    const popup = openScreenPopout(tile.stream, tile.title, playback.get(tile.id) ?? { muted: true, volume: 1 },
-      (settings) => playback.set(tile.id, settings),
+    const popup = openScreenPopout(tile.stream, tile.title, playbackFor(tile.id),
       () => popouts.delete(tile.id),
       tile.share?.stop);
     if (popup) popouts.set(tile.id, { ...popup, stream: tile.stream });
@@ -92,8 +125,12 @@
   }
 
   function showFullscreen(dialog: HTMLDialogElement) {
+    fullscreenDialog = dialog;
     dialog.showModal();
-    return () => dialog.close();
+    return () => {
+      dialog.close();
+      fullscreenDialog = undefined;
+    };
   }
 
   async function exitFullscreen() {
@@ -114,66 +151,96 @@
   {@const id = tile.id}
   {@const stream = tile.stream}
   {@const popup = popouts.get(id)}
-  <article class="share-tile" aria-label={tile.title}>
-    <header class="tile-header">
-      {#if tile.live}<span class="live-dot" aria-label="Live" role="img"></span>{/if}
-      <span class="tile-name truncate" title={tile.title}>{tile.title}</span>
-      {#if tile.stream && !popup}
-        {#if !expanded || fullscreen === true}
-          <Button size="icon-sm" variant="ghost" data-fullscreen={tile.id}
-            aria-label={`Fullscreen ${tile.title}`} title="Fullscreen in app" onclick={() => { fullscreen = tile.id; }}>
-            <Maximize aria-hidden="true" />
-          </Button>
-        {/if}
-        <Button size="icon-sm" variant="ghost" aria-label={`Pop out ${tile.title}`} title="Open in separate window"
-          onclick={() => popOut(tile)}>
-          <ExternalLink aria-hidden="true" />
-        </Button>
-      {/if}
-      {#if tile.own}
-        <Button size="icon-sm" variant="ghost" aria-label={`Edit ${tile.title}`} title="Edit screen share" onclick={tile.own.edit}>
-          <Pencil aria-hidden="true" />
-        </Button>
-        <Button size="icon-sm" variant="ghost" aria-label={`Stop sharing ${tile.title}`} title="Stop sharing" onclick={tile.own.stop}>
-          <Square aria-hidden="true" />
-        </Button>
-      {:else if tile.share && (tile.stream || tile.share.loading)}
-        <Button size="sm" variant="ghost" aria-label={`Stop watching ${tile.title}`}
-          onclick={tile.share.stop}>
-          <X aria-hidden="true" /> Stop watching
-        </Button>
-      {/if}
-    </header>
+  {@const volumeLabelId = `${id}-volume`}
+  <ContextMenu.Root>
+    <ContextMenu.Trigger class="block min-w-0">
+      <article class="share-tile" aria-label={tile.title}>
+        <header class="tile-header">
+          {#if tile.live}<span class="live-dot" aria-label="Live" role="img"></span>{/if}
+          <span class="tile-name truncate" title={tile.title}>{tile.title}</span>
+          {#if tile.stream && !popup}
+            {#if !expanded || fullscreen === true}
+              <Button size="icon-sm" variant="ghost" data-fullscreen={tile.id}
+                aria-label={`Fullscreen ${tile.title}`} title="Fullscreen in app" onclick={() => { fullscreen = tile.id; }}>
+                <Maximize aria-hidden="true" />
+              </Button>
+            {/if}
+            <Button size="icon-sm" variant="ghost" aria-label={`Pop out ${tile.title}`} title="Open in separate window"
+              onclick={() => popOut(tile)}>
+              <ExternalLink aria-hidden="true" />
+            </Button>
+          {/if}
+          {#if tile.own}
+            <Button size="icon-sm" variant="ghost" aria-label={`Edit ${tile.title}`} title="Edit screen share" onclick={tile.own.edit}>
+              <Pencil aria-hidden="true" />
+            </Button>
+            <Button size="icon-sm" variant="ghost" aria-label={`Stop sharing ${tile.title}`} title="Stop sharing" onclick={tile.own.stop}>
+              <Square aria-hidden="true" />
+            </Button>
+          {:else if tile.share && (tile.stream || tile.share.loading)}
+            <Button size="sm" variant="ghost" aria-label={`Stop watching ${tile.title}`}
+              onclick={tile.share.stop}>
+              <X aria-hidden="true" /> Stop watching
+            </Button>
+          {/if}
+        </header>
 
-    {#if popup}
-      <div class="tile-placeholder">
-        <Button size="sm" variant="outline" onclick={popup.focus}>Show window</Button>
-        <Button size="sm" variant="ghost" onclick={popup.close}><PanelTop aria-hidden="true" /> Return to app</Button>
-      </div>
-    {:else if stream}
-      <video autoplay muted playsinline controls={Boolean(tile.share)} aria-label={tile.title}
-        {@attach (node) => attachStream(node, id, stream)}
-        onvolumechange={(event) => {
-          const video = event.currentTarget;
-          playback.set(tile.id, { muted: video.muted, volume: video.volume });
-        }}></video>
-    {:else if tile.share?.loading}
-      <div class="tile-placeholder" role="status">Opening screen share…</div>
-    {:else if tile.share}
-      <div class="tile-placeholder">
-        <Button size="sm" variant="outline" disabled={tile.share.disabled}
-          aria-label={`Join screenshare from ${tile.title}`} onclick={tile.share.watch}>
-          <Play aria-hidden="true" /> Join screenshare
-        </Button>
-      </div>
-    {/if}
-    {#if tile.own?.status}
-      <div class="tile-status">
-        <span class={tile.own.error ? "form-error" : undefined} role={tile.own.error ? "alert" : "status"}>{tile.own.status}</span>
-        {#if tile.own.resume}<Button size="sm" variant="outline" onclick={tile.own.resume}>Resume sharing</Button>{/if}
-      </div>
-    {/if}
-  </article>
+        {#if popup}
+          <div class="tile-placeholder">
+            <Button size="sm" variant="outline" onclick={popup.focus}>Show window</Button>
+            <Button size="sm" variant="ghost" onclick={popup.close}><PanelTop aria-hidden="true" /> Return to app</Button>
+          </div>
+        {:else if stream}
+          <video autoplay playsinline aria-label={tile.title}
+            {@attach (node) => attachStream(node, id, stream)}></video>
+        {:else if tile.share?.loading}
+          <div class="tile-placeholder" role="status">Opening screen share…</div>
+        {:else if tile.share}
+          <button type="button" class="join-share" disabled={tile.share.disabled}
+            aria-label={`Join screenshare from ${tile.title}`} onclick={tile.share.watch}>
+            <span class="join-share-icon"><Play size={18} aria-hidden="true" /></span>
+            <span class="join-share-copy">
+              <span class="join-share-title">Join screenshare</span>
+              <span class="join-share-hint">Watch {tile.title} live</span>
+            </span>
+          </button>
+        {/if}
+        {#if tile.own?.status}
+          <div class="tile-status">
+            <span class={tile.own.error ? "form-error" : undefined} role={tile.own.error ? "alert" : "status"}>{tile.own.status}</span>
+            {#if tile.own.resume}<Button size="sm" variant="outline" onclick={tile.own.resume}>Resume sharing</Button>{/if}
+          </div>
+        {/if}
+      </article>
+    </ContextMenu.Trigger>
+    <ContextMenu.Content class="max-w-[calc(100vw-1rem)]" portalProps={{ to: fullscreenDialog ?? "body" }}>
+      <ContextMenu.Item closeOnSelect={false} onSelect={() => toggleMute(id)}>
+        {#if playbackFor(id).muted}
+          <Volume2 aria-hidden="true" /> Unmute screen
+        {:else}
+          <VolumeX aria-hidden="true" /> Mute screen
+        {/if}
+      </ContextMenu.Item>
+      <ContextMenu.Separator />
+      <ContextMenu.Item closeOnSelect={false} aria-labelledby={volumeLabelId} class="min-w-44 flex-col items-stretch gap-0"
+        onSelect={() => volumeSlider?.querySelector<HTMLElement>('[role="slider"]')?.focus()}>
+        <div class="flex items-center gap-1.5">
+          <Volume2 aria-hidden="true" />
+          <span id={volumeLabelId}>Volume</span>
+          <span class="ml-auto tabular-nums">{Math.round(playbackFor(id).volume * 100)}%</span>
+        </div>
+        <Slider type="single" min={0} max={100} class="min-h-6" thumbLabelledBy={volumeLabelId}
+          bind:ref={volumeSlider} value={Math.round(playbackFor(id).volume * 100)}
+          onValueChange={(level) => changeVolume(id, level)} />
+      </ContextMenu.Item>
+      {#if tile.share && (stream || tile.share.loading || popup)}
+        <ContextMenu.Separator />
+        <ContextMenu.Item onSelect={() => tile.share?.stop()}>
+          <X aria-hidden="true" /> Stop watching
+        </ContextMenu.Item>
+      {/if}
+    </ContextMenu.Content>
+  </ContextMenu.Root>
 {/snippet}
 
 {#snippet errors()}
@@ -257,6 +324,7 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    height: 100%;
     overflow: hidden;
     background: var(--card);
     border: 1px solid var(--border);
@@ -275,6 +343,40 @@
     padding: 4px 6px;
     font-size: var(--type-small);
   }
+  .join-share {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 8rem;
+    padding: 12px;
+    border: 0;
+    background: var(--muted);
+    color: var(--foreground);
+    cursor: pointer;
+    font: inherit;
+    text-align: center;
+    transition: background-color 120ms ease-out;
+  }
+  .join-share:hover:not(:disabled) { background: var(--control-hover); }
+  .join-share:focus-visible { outline: var(--focus-ring); outline-offset: -4px; }
+  .join-share:disabled { cursor: not-allowed; opacity: .55; }
+  .join-share-icon {
+    display: grid;
+    place-items: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    border: 1px solid var(--input);
+    border-radius: 50%;
+    color: var(--primary);
+  }
+  .join-share:hover:not(:disabled) .join-share-icon { border-color: var(--primary); }
+  .join-share-copy { display: grid; gap: 2px; max-width: 22rem; min-width: 0; }
+  .join-share-title { font-size: var(--type-small); font-weight: 650; }
+  .join-share-hint { font-size: var(--type-caption); color: var(--muted-foreground); overflow-wrap: anywhere; }
   .tile-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; font-size: var(--type-small); }
   video { display: block; width: 100%; aspect-ratio: 16 / 9; max-height: 32dvh; background: #111; object-fit: contain; }
   .share-viewer p, .share-fullscreen p { padding: 6px var(--ui-gap); }

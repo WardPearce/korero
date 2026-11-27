@@ -12,7 +12,7 @@ const envelope = (accountId: string) => ({
 type Cursor = { id: string; createdAt: number };
 type Packet = Omit<ReturnType<typeof envelope>, "accountId"> & Cursor & { senderId: string; recipientId: string };
 type Page = { messages: Packet[]; next: Cursor | null };
-type Receipt = { messageId: string };
+type Receipt = { messageId: string; queued?: boolean };
 type Inbox = { accountId: string; displayName: string; lastMessageAt: number }[];
 
 test("direct messages reach only the two accounts and survive an offline recipient", async () => {
@@ -39,13 +39,13 @@ test("direct messages reach only the two accounts and survive an offline recipie
     const packet = envelope(accountId);
     const expected = { id: packet.id, nonce: packet.nonce, ciphertext: packet.ciphertext, signature: packet.signature,
       senderId: alice.account.id, recipientId: accountId };
-    expect(await sender.rpc<Receipt>("direct.send", packet)).toEqual({ messageId: packet.id });
+    expect(await sender.rpc<Receipt>("direct.send", packet)).toEqual({ messageId: packet.id, queued: false });
     for (const socket of [sender, recipient, secondDevice]) {
       const event = await until(() => socket.received.find(({ type }) => type === "direct.created"), Boolean);
       expect(event?.payload).toMatchObject(expected);
       expect(event?.payload).not.toHaveProperty("text");
     }
-    expect(await sender.rpc<Receipt>("direct.send", packet)).toEqual({ messageId: packet.id });
+    expect(await sender.rpc<Receipt>("direct.send", packet)).toEqual({ messageId: packet.id, queued: false });
     expect(sender.received.filter(({ type }) => type === "direct.created")).toHaveLength(1);
     await expect(sender.rpc("direct.send", { ...envelope(accountId), id: packet.id })).rejects.toThrow("CONFLICT");
     expect(await bystander.rpc<Page>("direct.history", { accountId })).toEqual({ messages: [], next: null });
@@ -58,6 +58,10 @@ test("direct messages reach only the two accounts and survive an offline recipie
     const offline = envelope(accountId);
     await sender.rpc("direct.send", offline);
     const returned = await server.ws(bob);
+    const queued = await returned.rpc<Packet[]>("direct.pending");
+    expect(queued.map(({ id }) => id)).toEqual([offline.id]);
+    await returned.rpc("direct.ack", { ids: [offline.id] });
+    expect(await returned.rpc<Packet[]>("direct.pending")).toEqual([]);
     expect(await returned.rpc<Inbox>("direct.inbox")).toMatchObject([{ accountId: alice.account.id, displayName: "Owner" }]);
     const conversation = { accountId: alice.account.id };
     const history = await returned.rpc<Page>("direct.history", conversation);
@@ -82,19 +86,70 @@ test("direct messages reach only the two accounts and survive an offline recipie
   } finally { await server.cleanup(); }
 });
 
-test("live-only servers reject offline sends and return no direct message history", async () => {
+test("live-only servers queue offline sends until a recipient device acknowledges them", async () => {
   const server = await fixture();
   try {
     const alice = await server.owner();
     const bob = await server.register("Bobby");
     const sender = await server.ws(alice);
-    const packet = envelope(bob.account.id);
-    await expect(sender.rpc("direct.send", packet)).rejects.toThrow("CONFLICT");
+    const queued = envelope(bob.account.id);
+    expect(await sender.rpc<Receipt>("direct.send", queued)).toEqual({ messageId: queued.id, queued: true });
+    expect(await sender.rpc<Receipt>("direct.send", queued)).toEqual({ messageId: queued.id, queued: true });
+    await expect(sender.rpc("direct.send", { ...envelope(bob.account.id), id: queued.id })).rejects.toThrow("CONFLICT");
+
     const recipient = await server.ws(bob);
-    await sender.rpc("direct.send", packet);
+    expect((recipient.state as { directMessages?: unknown }).directMessages).toMatchObject({ persistent: false, offlineDelivery: true });
+    const pending = await recipient.rpc<Packet[]>("direct.pending");
+    expect(pending).toEqual([expect.objectContaining({ id: queued.id, ciphertext: queued.ciphertext,
+      senderId: alice.account.id, recipientId: bob.account.id })]);
+    expect(pending[0]).not.toHaveProperty("deliveredAt");
+    expect(await sender.rpc<Packet[]>("direct.pending")).toEqual([]);
+    await expect(recipient.rpc("direct.ack", { ids: [] })).rejects.toThrow("INVALID_REQUEST");
+    await sender.rpc("direct.ack", { ids: [queued.id] });
+    expect(await recipient.rpc<Packet[]>("direct.pending")).toHaveLength(1);
+    await recipient.rpc("direct.ack", { ids: [queued.id] });
+    expect(await recipient.rpc<Packet[]>("direct.pending")).toEqual([]);
+
+    const live = envelope(bob.account.id);
+    expect(await sender.rpc<Receipt>("direct.send", live)).toEqual({ messageId: live.id, queued: false });
     const event = await until(() => recipient.received.find(({ type }) => type === "direct.created"), Boolean);
-    expect(event?.payload.id).toBe(packet.id);
+    expect(event?.payload.id).toBe(live.id);
+    expect(await recipient.rpc<Packet[]>("direct.pending")).toEqual([]);
     expect(await recipient.rpc<Inbox>("direct.inbox")).toEqual([]);
     expect(await recipient.rpc<Page>("direct.history", { accountId: alice.account.id })).toEqual({ messages: [], next: null });
+  } finally { await server.cleanup(); }
+});
+
+test("offline delivery limits the queue for each recipient", async () => {
+  const server = await fixture({ environment: { VOICE_MESSAGING_OFFLINE_DELIVERY_QUEUE: "2" } });
+  try {
+    const alice = await server.owner();
+    const bob = await server.register("Bobby");
+    const sender = await server.ws(alice);
+    await sender.rpc("direct.send", envelope(bob.account.id));
+    await sender.rpc("direct.send", envelope(bob.account.id));
+    await expect(sender.rpc("direct.send", envelope(bob.account.id))).rejects.toThrow("LIMIT");
+    const recipient = await server.ws(bob);
+    const pending = await recipient.rpc<Packet[]>("direct.pending");
+    expect(pending).toHaveLength(2);
+    await recipient.rpc("direct.ack", { ids: pending.map(({ id }) => id) });
+    recipient.close();
+    await recipient.closed;
+    await until(() => sender.received.some(({ type, payload }) => type === "presence.offline" && payload.accountId === bob.account.id), Boolean);
+    await sender.rpc("direct.send", envelope(bob.account.id));
+  } finally { await server.cleanup(); }
+});
+
+test("offline delivery limits how much one sender can queue for a recipient", async () => {
+  const server = await fixture({ environment: { VOICE_MESSAGING_OFFLINE_DELIVERY_PER_SENDER: "1" } });
+  try {
+    const alice = await server.owner();
+    const bob = await server.register("Bobby");
+    const carol = await server.register("Carol");
+    const fromAlice = await server.ws(alice);
+    const fromCarol = await server.ws(carol);
+    await fromAlice.rpc("direct.send", envelope(bob.account.id));
+    await expect(fromAlice.rpc("direct.send", envelope(bob.account.id))).rejects.toThrow("LIMIT");
+    expect(await fromCarol.rpc<Receipt>("direct.send", envelope(bob.account.id))).toMatchObject({ queued: true });
   } finally { await server.cleanup(); }
 });

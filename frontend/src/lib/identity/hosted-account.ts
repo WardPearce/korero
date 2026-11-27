@@ -31,8 +31,9 @@ async function accountKeys(password: string, origin: string, username: string) {
   const derivation = { name: "HKDF", hash: "SHA-256", salt };
   const [credential, encryption] = await Promise.all([
     crypto.subtle.deriveBits({ ...derivation, info: encoder.encode("authentication") }, key, 256),
+    // Extractable so a signed-in device can pass the account to a phone with a device link.
     crypto.subtle.deriveKey({ ...derivation, info: encoder.encode("encryption") }, key,
-      { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]),
+      { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]),
   ]);
   return { credential: encodeBase64Url(credential), encryption };
 }
@@ -43,6 +44,8 @@ interface Profile {
 }
 
 interface Envelope { encryptedData: string; revision: number }
+
+export interface HostedLink { origin: string; username: string; credential: string; key: string }
 
 interface StoredSession {
   id: string;
@@ -69,7 +72,7 @@ async function decrypt(key: CryptoKey, ciphertext: string, additionalData: Uint8
   return new TextDecoder().decode(plain);
 }
 
-function isSavedServer(value: unknown): value is SavedServer {
+export function isSavedServer(value: unknown): value is SavedServer {
   if (!value || typeof value !== "object") return false;
   const server = value as Partial<SavedServer>;
   const url = typeof server.origin === "string" ? parseUrl(server.origin) : null;
@@ -107,11 +110,45 @@ export class HostedAccount {
     } else {
       ({ profile, envelope } = await account.read());
     }
-    const result = account.identityResult(profile);
-    const sealedCredential = await encrypt(encryption, encoder.encode(credential), account.additionalData(account.sessionId));
-    const value: StoredSession = { id: account.sessionId, origin, username, credential: sealedCredential, encryption, envelope };
+    return account.persist(profile, envelope);
+  }
+
+  // Sign in with the provider, username, credential, and encryption key from a device link.
+  static async fromLink(link: HostedLink) {
+    const origin = providerOrigin(link.origin);
+    const username = link.username;
+    if (origin !== link.origin || !/^[a-z0-9][a-z0-9_.-]{3,31}$/.test(username) ||
+        typeof link.credential !== "string" || typeof link.key !== "string") {
+      throw new Error("The device link is damaged.");
+    }
+    const raw = decodeBase64Url(link.key);
+    if (raw.length !== 32) throw new Error("The device link is damaged.");
+    const encryption = await crypto.subtle.importKey("raw", raw, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"])
+      .finally(() => raw.fill(0));
+    const account = new HostedAccount(origin, username, link.credential, encryption, crypto.randomUUID());
+    const { profile, envelope } = await account.read();
+    return account.persist(profile, envelope);
+  }
+
+  private async persist(profile: Profile, envelope: Envelope) {
+    const result = this.identityResult(profile);
+    const sealedCredential = await encrypt(this.encryption, encoder.encode(this.credential), this.additionalData(this.sessionId));
+    const value: StoredSession = { id: this.sessionId, origin: this.origin, username: this.username,
+      credential: sealedCredential, encryption: this.encryption, envelope };
     await preferences.local.put({ key: sessionKey, value });
     return result;
+  }
+
+  async linkData(): Promise<HostedLink> {
+    if (!this.encryption.extractable) {
+      throw new Error("Sign out and sign in again on this device to link a phone. Sessions from before device links cannot be shared.");
+    }
+    const key = new Uint8Array(await crypto.subtle.exportKey("raw", this.encryption));
+    try {
+      return { origin: this.origin, username: this.username, credential: this.credential, key: encodeBase64Url(key) };
+    } finally {
+      key.fill(0);
+    }
   }
 
   static async restore() {

@@ -28,13 +28,9 @@ export class RateLimit {
     const now = performance.now();
     let bucket = this.buckets.get(key);
     if (!bucket) {
-      if (this.buckets.size >= this.maxBuckets) {
-        for (const [name, entry] of this.buckets) {
-          if (now - entry.updated >= 60000) this.buckets.delete(name);
-          else break;
-        }
-        if (this.buckets.size >= this.maxBuckets) fail("RATE_LIMITED");
-      }
+      // Buckets are kept in least-recently-used order. Evicting the oldest bounds memory
+      // without letting a flood of new keys lock out every other client.
+      while (this.buckets.size >= this.maxBuckets) this.buckets.delete(this.buckets.keys().next().value!);
       bucket = { available: this.capacity, updated: now };
     }
     bucket.available = Math.min(this.capacity, bucket.available + (now - bucket.updated) * this.capacity / 60000);

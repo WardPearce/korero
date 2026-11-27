@@ -181,9 +181,7 @@ test("channels, inheritance, password membership, moderation and text are permis
     expect((await adminWs.rpc<Snapshot>("state.get")).channels.map(({ id }) => id)).not.toContain(temporary.channelId);
     await adminWs.rpc("moderation.kick", { accountId: bob.account.id });
     expect((await bobWs.closed).code).toBe(4403);
-    const reconnected = await server.ws(bob);
-    expect(reconnected.state.channelId).toBeNull();
-    reconnected.close();
+    await expect(server.ws(bob)).rejects.toThrow("FORBIDDEN");
   } finally { await server.cleanup(); }
 });
 

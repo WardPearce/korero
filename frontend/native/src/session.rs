@@ -13,6 +13,9 @@ use std::{
 };
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 
+/// Direct messages kept in the view while connected. Older ones remain in server history.
+const DIRECT_MESSAGE_LIMIT: usize = 200;
+
 #[derive(Clone)]
 pub struct Session {
     credentials: Arc<Mutex<Credentials>>,
@@ -233,6 +236,7 @@ async fn run(
                         desired = None;
                     }
                 }
+                active.receive_queued().await;
                 attempt = 0;
                 let result = active
                     .process(
@@ -637,6 +641,34 @@ impl Active {
         }
     }
 
+    fn add_direct_message(&mut self, message: Value) {
+        if self.view.direct_messages.iter().any(|entry| entry["id"] == message["id"]) {
+            return;
+        }
+        self.view.direct_messages.push(message);
+        if self.view.direct_messages.len() > DIRECT_MESSAGE_LIMIT {
+            self.view.direct_messages.remove(0);
+        }
+    }
+
+    /// Fetches direct messages the server queued while this account was offline,
+    /// then acknowledges them so the server stops holding them.
+    async fn receive_queued(&mut self) {
+        let account = self.view.snapshot["account"]["id"].clone();
+        for _ in 0..DIRECT_MESSAGE_LIMIT.div_ceil(100) {
+            let Ok(Value::Array(queued)) = self.connection.wire.rpc("direct.pending", json!({})).await else { return };
+            let ids: Vec<Value> = queued.iter().filter(|message| message["recipientId"] == account)
+                .map(|message| message["id"].clone()).collect();
+            let complete = queued.len() < 100;
+            for message in queued.into_iter().filter(|message| message["recipientId"] == account) {
+                self.add_direct_message(message);
+            }
+            if ids.is_empty() || self.connection.wire.rpc("direct.ack", json!({ "ids": ids })).await.is_err() || complete {
+                return;
+            }
+        }
+    }
+
     fn update_member(&mut self, member: Value) {
         if let Some(members) = self.view.snapshot["members"].as_array_mut() {
             members.retain(|entry| entry["connectionId"] != member["connectionId"]);
@@ -710,12 +742,7 @@ impl Active {
             "direct.created" if payload["senderId"] == self.view.snapshot["account"]["id"] ||
                 payload["recipientId"] == self.view.snapshot["account"]["id"] =>
             {
-                if !self.view.direct_messages.iter().any(|message| message["id"] == payload["id"]) {
-                    self.view.direct_messages.push(payload.clone());
-                    if self.view.direct_messages.len() > 50 {
-                        self.view.direct_messages.remove(0);
-                    }
-                }
+                self.add_direct_message(payload.clone());
             }
             "direct.poked" if payload["recipientId"] == self.view.snapshot["account"]["id"] => {
                 self.view.last_poke = Some(payload.clone());

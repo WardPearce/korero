@@ -33,12 +33,19 @@ origins = []
 # Valid: up to 32 IP literals or DNS names, without a scheme or port (e.g. "voice.example.com").
 public_addresses = []
 # Exact IP addresses of reverse proxies allowed to set X-Forwarded-For for rate limiting.
+# The client is the rightmost X-Forwarded-For entry that is not one of these proxies, so
+# proxies may append to the header. IPv6 clients are rate limited per /64.
 # Valid: up to 32 IP literals; wildcard addresses ("::", "0.0.0.0") are rejected.
 # Required to be non-empty when tls.mode = "proxy".
 trusted_proxies = []
 # Optional shared password required for new sign-ins/registrations. Valid: string up to 128
 # characters; "" disables it. Stored as an Argon2id hash.
 password = ""
+# Hosts allowed in the server banner and channel background image URLs. Clients load
+# these images directly, so the image host learns their IP addresses. Valid: up to 256
+# DNS host names without a scheme or port (e.g. "images.example.com"); [] allows any
+# HTTPS host. Stored URLs from other hosts are hidden.
+image_hosts = []
 
 # ---------------------------------------------------------------------------
 # TLS: HTTPS is always used. Self-signed/manual certificates are pinned by clients.
@@ -167,6 +174,8 @@ auth_per_minute = 30
 registration_per_minute = 12
 # WebSocket upgrade attempts per client IP per minute. Valid: 1-1000.
 upgrades_per_minute = 60
+# Maximum hosted accounts this server stores as an account provider. Valid: 1-10000000.
+hosted_accounts = 10000
 
 # ---------------------------------------------------------------------------
 # Chat messaging.
@@ -177,6 +186,15 @@ upgrades_per_minute = 60
 persistence = false
 # How long stored messages are retained. Valid: 1-8760 hours (up to 365 days).
 retention_hours = 24
+# How long the server holds an encrypted direct message for an offline recipient
+# when persistence is false. Delivered packets are deleted once a recipient device
+# acknowledges them. With persistence enabled, retention_hours applies instead.
+# Valid: 1-8760 hours.
+offline_delivery_hours = 168
+# Undelivered direct messages held per recipient. Valid: 1-100000.
+offline_delivery_queue = 1000
+# Undelivered direct messages one sender may hold for one recipient. Valid: 1-100000.
+offline_delivery_per_sender = 100
 # Maximum length of a message. Valid: 1-8192 characters.
 max_length = 2000
 # Chat messages per account per minute. Valid: 1-10000.

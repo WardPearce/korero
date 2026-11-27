@@ -14,12 +14,32 @@ const normalizeIp = (address: string) => {
   return SocketAddress.parse(isIP(unwrapped) === 6 ? `[${unwrapped}]:0` : `${unwrapped}:0`)?.address ?? "unknown";
 };
 
+// IPv6 hosts usually control a whole /64, so rate limits treat one as a single client.
+export function clientKey(address: string) {
+  if (isIP(address) !== 6) return address;
+  let text = address;
+  const embedded = text.match(/(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (embedded) {
+    const [a, b, c, d] = embedded.slice(1).map(Number) as [number, number, number, number];
+    text = text.slice(0, -embedded[0].length) + `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head = "", tail] = text.split("::");
+  const left = head ? head.split(":") : [];
+  const right = tail ? tail.split(":") : [];
+  const groups = tail === undefined ? left : [...left, ...Array<string>(8 - left.length - right.length).fill("0"), ...right];
+  return groups.slice(0, 4).map((group) => parseInt(group, 16).toString(16)).join(":") + "::/64";
+}
+
+// Request bodies other than attachments and profile pictures.
+const requestBodyLimit = 393728;
+
 // Allow worst-case JSON escaping of the caption, formatting and filename.
 const attachmentBodyLimit = (bytes: number) => attachmentDataLength(bytes) + 262144;
 const pictureBodyLimit = attachmentDataLength(maxProfilePictureBytes) + 256;
 
-async function readBoundedJson(request: Request, limit: number, tooLarge: () => never) {
+async function readBoundedJson(request: Request, limit: number, tooLarge: () => never, allowEmpty = false) {
   if (Number(request.headers.get("content-length")) > limit) tooLarge();
+  if (!request.body && allowEmpty) return {};
   const reader = request.body?.getReader() ?? fail("INVALID_REQUEST");
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let length = 0;
@@ -35,7 +55,8 @@ async function readBoundedJson(request: Request, limit: number, tooLarge: () => 
       }
       body += decoder.decode(value, { stream: true });
     }
-    return JSON.parse(body + decoder.decode());
+    body += decoder.decode();
+    return allowEmpty && !body.trim() ? {} : JSON.parse(body);
   } finally {
     reader.releaseLock();
   }
@@ -61,12 +82,21 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
   const profilePictureDownloads = new RateLimit(300);
   const attachmentUploadsInProgress = new Set<string>();
   const attachmentPath = "/api/v1/chat/attachments";
+  const picturePath = "/api/v1/account/picture";
   const proxyIps = new Set(config.server.trusted_proxies.map(normalizeIp));
   const origins = new Set(config.server.origins);
+  // The client is the rightmost forwarded address that is not a trusted proxy. Entries to its
+  // left were supplied by the client and are ignored.
   function source(request: Request, direct: string) {
-    const forwarded = request.headers.get("x-forwarded-for");
-    if (proxyIps.has(direct) && forwarded && isIP(forwarded.trim())) return normalizeIp(forwarded.trim());
-    return direct;
+    if (!proxyIps.has(direct)) return clientKey(direct);
+    const hops = (request.headers.get("x-forwarded-for") ?? "").split(",").map((hop) => hop.trim()).filter(Boolean);
+    for (let index = hops.length - 1; index >= 0; index--) {
+      const hop = hops[index]!;
+      if (!isIP(hop)) break;
+      const address = normalizeIp(hop);
+      if (!proxyIps.has(address)) return clientKey(address);
+    }
+    return clientKey(direct);
   }
   const app = new Elysia({
     name: "voice-api",
@@ -122,7 +152,14 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
           return new Response(null, { status: 204, headers: set.headers as HeadersInit });
         }
       }
-      if ((path !== attachmentPath || request.method !== "POST") && Number(request.headers.get("content-length")) > 393728) fail("LIMIT");
+      if ((path !== attachmentPath || request.method !== "POST") && Number(request.headers.get("content-length")) > requestBodyLimit) fail("LIMIT");
+    })
+    // Bound every body by bytes read, not by the client's content-length, before it is parsed.
+    // Attachment and profile picture routes authenticate first and apply their own limits.
+    .onParse(({ request }) => {
+      const path = new URL(request.url).pathname.replace(/\/$/, "");
+      if ((path === attachmentPath && request.method === "POST") || (path === picturePath && request.method === "PATCH")) return;
+      return readBoundedJson(request, requestBodyLimit, () => fail("LIMIT"), true);
     })
     .onError(({ code, error, set }) => {
       const parseCause = code === "PARSE" && error.cause instanceof ProtocolError ? error.cause : undefined;
@@ -152,12 +189,17 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
         udp: config.media.enable_udp, tcp: config.media.enable_tcp, textPersistence: config.messaging.persistence,
         ...(access ? { iceServers: config.media.ice_servers } : {}) };
     })
-    .post(hostedAccountPath + "register", ({ request, body, set }) => {
+    .post(hostedAccountPath + "register", async ({ request, body, set }) => {
       limit(request, true);
+      if (auth.passwordRequired() && !body.password) {
+        throw new ProtocolError("FORBIDDEN", "This provider requires its server password to create accounts.");
+      }
+      await auth.verifyPassword(clientIp(request), body.password);
       const account = hostedAccounts.register(body.username, body.credential, body.encryptedData);
       set.status = 201;
       return account;
-    }, { body: t.Object({ ...hostedCredentials, encryptedData }, { additionalProperties: false }) })
+    }, { body: t.Object({ ...hostedCredentials, encryptedData, password: t.Optional(t.String({ minLength: 1, maxLength: 128 })) },
+      { additionalProperties: false }) })
     .post(hostedAccountPath + "login", ({ request, body }) => {
       limit(request);
       return hostedAccounts.read(body.username, body.credential);
@@ -173,12 +215,12 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
     }, { body: httpBodies.identityChallenge })
     .post("/api/v1/auth/identity/login", ({ request, body }) => {
       limit(request);
-      return auth.loginIdentity(info.serverId, body.id, body.signature, body.password);
+      return auth.loginIdentity(clientIp(request), info.serverId, body.id, body.signature, body.password);
     }, { body: httpBodies.identityProof })
     .post("/api/v1/auth/register", async ({ request, body, set }) => {
       limit(request, true);
       const identity = auth.proveEnrollment(info.serverId, "register", body.deviceName, body.identity);
-      const result = await auth.register(body.displayName.trim(), body.deviceName.trim(), identity, body.invitation, body.password);
+      const result = await auth.register(clientIp(request), body.displayName.trim(), body.deviceName.trim(), identity, body.invitation, body.password);
       set.status = 201;
       return result;
     }, { body: httpBodies.register })
@@ -222,7 +264,7 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
       return realtime.downloadAttachment(session, query.connectionId, params.messageId);
     }, { params: t.Object({ messageId: id }), query: t.Object({ connectionId: id }) })
     .patch("/api/v1/account", ({ request, body }) => auth.updateAccount(bearer(request).accountId, body.displayName.trim()), { body: httpBodies.account })
-    .patch("/api/v1/account/picture", ({ request, body }) => auth.updateProfilePicture(bearer(request).accountId, body.data), {
+    .patch(picturePath, ({ request, body }) => auth.updateProfilePicture(bearer(request).accountId, body.data), {
       body: httpBodies.profilePicture,
       parse: ({ request }) => {
         profilePictureUpdates.take(bearer(request).accountId);
@@ -241,7 +283,7 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
     .post("/api/v1/admin/bootstrap", async ({ request, body, set }) => {
       limit(request);
       const identity = auth.proveEnrollment(info.serverId, "bootstrap", body.deviceName, body.identity);
-      const result = await auth.bootstrap(body.token, body.displayName.trim(), body.deviceName.trim(), identity, body.password);
+      const result = await auth.bootstrap(clientIp(request), body.token, body.displayName.trim(), body.deviceName.trim(), identity, body.password);
       set.status = 201;
       return result;
     }, { body: httpBodies.bootstrap })

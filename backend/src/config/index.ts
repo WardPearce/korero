@@ -12,7 +12,8 @@ const object = <P extends Parameters<typeof t.Object>[0]>(properties: P) => t.Ob
 const configuration = object({
   server: object({ name: t.String({ minLength: 1, maxLength: 100, pattern: "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$" }), host: string, port,
     max_users: integer(1, 10000), registration: t.UnionEnum(["open", "invitation", "admin", "disabled"]),
-    origins: list, public_addresses: list, trusted_proxies: list, password: t.String({ maxLength: 128 }) }),
+    origins: list, public_addresses: list, trusted_proxies: list, password: t.String({ maxLength: 128 }),
+    image_hosts: t.Array(string, { maxItems: 256 }) }),
   tls: object({ mode: t.UnionEnum(["self-signed", "manual", "proxy"]), certificate: string, private_key: string, names: list }),
   media: object({ listen: t.Array(object({ ip: string, announced_address: t.Optional(string) }), { maxItems: 32 }), listen_ips: list, listen_ip: string, announced_address: string, announced_ipv6: string,
     port, workers: integer(1, 32), target_audio_bitrate: integer(32000, 128000), enable_udp: t.Boolean(), enable_tcp: t.Boolean(),
@@ -25,12 +26,14 @@ const configuration = object({
     media_per_minute: integer(1, 20000), ice_restarts_per_minute: integer(1, 1000), channel_joins_per_minute: integer(1, 1000),
     attachment_uploads_per_minute: integer(1, 10000), attachment_downloads_per_minute: integer(1, 10000),
     attachment_download_bytes_per_minute: integer(1048576, 1073741824), attachment_uploads_concurrent: integer(1, 256),
-    auth_per_minute: integer(1, 1000), registration_per_minute: integer(1, 1000), upgrades_per_minute: integer(1, 1000), max_channels: integer(1, 10000) }),
-  messaging: object({ persistence: t.Boolean(), retention_hours: integer(1, 8760), max_length: integer(1, 8192), per_minute: integer(1, 10000) }),
+    auth_per_minute: integer(1, 1000), registration_per_minute: integer(1, 1000), upgrades_per_minute: integer(1, 1000), max_channels: integer(1, 10000),
+    hosted_accounts: integer(1, 10000000) }),
+  messaging: object({ persistence: t.Boolean(), retention_hours: integer(1, 8760), offline_delivery_hours: integer(1, 8760),
+    offline_delivery_queue: integer(1, 100000), offline_delivery_per_sender: integer(1, 100000), max_length: integer(1, 8192), per_minute: integer(1, 10000) }),
 });
 type Settings = typeof configuration.static;
 const defaults: Settings = {
-  server: { name: "Voice Server", host: "::", port: 8443, max_users: 128, registration: "open", origins: [], public_addresses: [], trusted_proxies: [], password: "" },
+  server: { name: "Voice Server", host: "::", port: 8443, max_users: 128, registration: "open", origins: [], public_addresses: [], trusted_proxies: [], password: "", image_hosts: [] },
   tls: { mode: "self-signed", certificate: "", private_key: "", names: [] },
   media: { listen: [], listen_ips: [], listen_ip: "", announced_address: "", announced_ipv6: "", port: 8444, workers: 1,
     target_audio_bitrate: 64000, enable_udp: true, enable_tcp: true, ice_servers: [] },
@@ -39,8 +42,8 @@ const defaults: Settings = {
     websocket_bytes: 65536, websocket_pending: 16, websocket_requests_per_minute: 3600, media_per_minute: 1800, ice_restarts_per_minute: 30,
     channel_joins_per_minute: 60, attachment_uploads_per_minute: 120, attachment_downloads_per_minute: 240,
     attachment_download_bytes_per_minute: 134217728, attachment_uploads_concurrent: 32,
-    auth_per_minute: 30, registration_per_minute: 12, upgrades_per_minute: 60, max_channels: 1024 },
-  messaging: { persistence: false, retention_hours: 24, max_length: 2000, per_minute: 120 },
+    auth_per_minute: 30, registration_per_minute: 12, upgrades_per_minute: 60, max_channels: 1024, hosted_accounts: 10000 },
+  messaging: { persistence: false, retention_hours: 24, offline_delivery_hours: 168, offline_delivery_queue: 1000, offline_delivery_per_sender: 100, max_length: 2000, per_minute: 120 },
 };
 export const localAddresses = () => [...new Set(Object.values(networkInterfaces()).flatMap((entries) =>
   (entries ?? []).filter(({ address }) => !address.toLowerCase().startsWith("fe80:")).map(({ address }) => address)))];
@@ -127,6 +130,10 @@ export async function loadConfig(options: { file?: string; directory?: string } 
   if (names.some((name) => !isIP(name) && !hostName(name))) {
     throw new Error("Configured public addresses and TLS names must be IP literals or DNS names without a port");
   }
+  if (server.image_hosts.some((name) => !hostName(name) || isIP(name))) {
+    throw new Error("server.image_hosts must contain DNS host names without a scheme or port");
+  }
+  server.image_hosts = server.image_hosts.map((name) => name.toLowerCase());
   const defaultBinds = () => {
     const wildcard = [...(media.announced_address && isIP(media.announced_address) !== 6 ? ["0.0.0.0"] : []),
       ...(media.announced_ipv6 || isIP(media.announced_address) === 6 ? ["::"] : [])];

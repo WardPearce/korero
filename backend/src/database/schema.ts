@@ -88,6 +88,8 @@ export const directMessages = sqliteTable("direct_messages", {
   senderId: text("sender_id").notNull().references(() => accounts.id),
   recipientId: text("recipient_id").notNull().references(() => accounts.id),
   createdAt: integer("created_at").notNull(),
+  // Null until a recipient device acknowledges the packet.
+  deliveredAt: integer("delivered_at"),
   nonce: text().notNull(),
   ciphertext: text().notNull(),
   signature: text().notNull(),
@@ -95,6 +97,7 @@ export const directMessages = sqliteTable("direct_messages", {
   check("direct_message_participants", sql`${table.senderId} != ${table.recipientId}`),
   index("direct_messages_sender").on(table.senderId, table.recipientId, table.createdAt, table.id),
   index("direct_messages_recipient").on(table.recipientId, table.createdAt),
+  index("direct_messages_pending").on(table.recipientId, table.deliveredAt, table.createdAt),
   index("direct_messages_retention").on(table.createdAt),
 ]);
 export const auditEvents = sqliteTable("audit", {

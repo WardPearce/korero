@@ -39,8 +39,9 @@ identity independently of network reachability.
 DNS is optional. Hostname candidates require DNS resolution by clients. The server
 never queries an external IP service. Ordinary HTTPS proxies forward signalling only.
 For proxy TLS, configure exact `server.trusted_proxies`, keep the backend on a private
-interface, forward WebSocket upgrades, and have the proxy overwrite
-`X-Forwarded-For` with one client IP. The backend ignores that header from other peers.
+interface, and forward WebSocket upgrades. The proxy may overwrite or append to
+`X-Forwarded-For`. The backend takes the rightmost entry that is not a trusted proxy as
+the client and ignores the header from other peers. IPv6 clients are rate limited per /64.
 The client must separately reach the SFU's UDP or TCP media port. Optional external
 STUN/TURN URLs and credentials are configured as `media.ice_servers` and exposed only to
 an authenticated caller. The client implements ICE server use.

@@ -19,13 +19,42 @@ use tokio::{
 
 const MAX_MEMBER_VOLUME: u16 = 400;
 
-#[derive(Default)]
-struct Client {
-    server: Option<Server>,
-    contact: Option<ServerContact>,
+/// One signed-in server. The client keeps a connection to each saved server so that
+/// direct messages and presence work regardless of the server being viewed.
+struct Connection {
+    server: Server,
     session: Option<Session>,
     controller: Option<Controller>,
     generation: u64,
+}
+
+#[derive(Default)]
+struct Client {
+    contacts: HashMap<String, ServerContact>,
+    servers: HashMap<String, Connection>,
+    generation: u64,
+}
+
+impl Client {
+    fn connection(&self, origin: &str) -> std::result::Result<&Connection, String> {
+        self.servers.get(origin).ok_or_else(|| "Select a server first".into())
+    }
+
+    fn controller(&self, origin: &str) -> std::result::Result<Controller, String> {
+        self.servers.get(origin).and_then(|entry| entry.controller.clone()).ok_or_else(|| "Connect to a server first".into())
+    }
+
+    fn controller_for_connection(&self, connection_id: &str) -> std::result::Result<Controller, String> {
+        self.servers.values().filter_map(|entry| entry.controller.clone())
+            .find(|controller| controller.state.borrow().snapshot["connectionId"] == connection_id)
+            .ok_or_else(|| "The server connection changed".into())
+    }
+
+    fn in_voice(&self) -> impl Iterator<Item = (&str, Controller)> + '_ {
+        self.servers.iter().filter_map(|(origin, entry)| entry.controller.clone()
+            .filter(|controller| controller.state.borrow().snapshot["channelId"].is_string())
+            .map(|controller| (origin.as_str(), controller)))
+    }
 }
 
 struct AppState {
@@ -47,7 +76,7 @@ struct HttpReply {
 struct VoiceStateResponse {
     #[serde(flatten)]
     view: View,
-    server_origin: Option<String>,
+    origin: String,
 }
 
 type CommandResult<T> = std::result::Result<T, String>;
@@ -63,7 +92,11 @@ async fn inspect_server(address: String, state: &AppState) -> CommandResult<Cert
         fingerprint: contact.info.fingerprint.clone(),
         publicly_trusted: contact.info.publicly_trusted,
     };
-    state.client.lock().await.contact = Some(contact);
+    let mut client = state.client.lock().await;
+    if client.contacts.len() >= 64 {
+        client.contacts.clear();
+    }
+    client.contacts.insert(info.origin.clone(), contact);
     Ok(info)
 }
 
@@ -72,22 +105,18 @@ async fn prepare_server(
     fingerprint: Option<String>,
     state: &AppState,
 ) -> CommandResult<String> {
-    let (previous, session) = {
+    let previous = {
         let mut client = state.client.lock().await;
-        let contact = client.contact.take().ok_or("Check the server certificate first")?;
-        if contact.info.origin != origin {
-            return Err("The selected server changed".into());
-        }
+        let contact = client.contacts.remove(&origin).ok_or("Check the server certificate first")?;
         let server = contact.approve(fingerprint.as_deref()).map_err(display)?;
         client.generation += 1;
-        client.server = Some(server);
-        emit(state, View::offline());
-        (client.controller.take(), client.session.take())
+        let generation = client.generation;
+        emit(state, &origin, View::offline());
+        client.servers.insert(origin.clone(), Connection { server, session: None, controller: None, generation })
     };
     if let Some(previous) = previous {
-        let _ = previous.request(Action::Disconnect).await;
+        close(previous).await;
     }
-    logout(session).await;
     Ok(origin)
 }
 
@@ -112,9 +141,8 @@ async fn fetch(
 ) -> Result<HttpReply> {
     let (server, session) = {
         let client = state.client.lock().await;
-        let server = client.server.clone().context("Select a server first")?;
-        ensure!(server.origin() == origin, "The selected server changed");
-        (server, client.session.clone())
+        let entry = client.servers.get(&origin).context("Select a server first")?;
+        (entry.server.clone(), entry.session.clone())
     };
     let is_public = matches!(
         (method.as_str(), path.as_str()),
@@ -169,19 +197,23 @@ fn strip_credentials(body: &mut Value) {
 }
 
 async fn start_session(
+    origin: String,
     member_volumes: Option<HashMap<String, u16>>,
     state: &Arc<AppState>,
 ) -> CommandResult<()> {
     let (mut updates, generation) = {
         let mut client = state.client.lock().await;
-        if client
+        client.generation += 1;
+        let generation = client.generation;
+        let entry = client.servers.get_mut(&origin).ok_or("Select a server first")?;
+        if entry
             .controller
             .as_ref()
             .is_some_and(|existing| existing.state.has_changed().is_ok())
         {
             return Ok(());
         }
-        let session = client
+        let session = entry
             .session
             .clone()
             .ok_or("Sign in with an identity first")?;
@@ -189,19 +221,19 @@ async fn start_session(
         member_volumes.retain(|_, level| *level != 100 && *level <= MAX_MEMBER_VOLUME);
         let controller = Controller::start(session, member_volumes);
         let updates = controller.state.clone();
-        client.generation += 1;
-        client.controller = Some(controller);
-        (updates, client.generation)
+        entry.generation = generation;
+        entry.controller = Some(controller);
+        (updates, generation)
     };
     let state = state.clone();
     tokio::spawn(async move {
         loop {
             let view = updates.borrow_and_update().clone();
             let current = state.client.lock().await;
-            if current.generation != generation {
+            if current.servers.get(&origin).map(|entry| entry.generation) != Some(generation) {
                 break;
             }
-            emit(&state, view);
+            emit(&state, &origin, view);
             drop(current);
             if updates.changed().await.is_err() {
                 break;
@@ -211,18 +243,30 @@ async fn start_session(
     Ok(())
 }
 
-async fn disconnect(state: &AppState) -> CommandResult<()> {
-    let (controller, session) = {
-        let mut client = state.client.lock().await;
-        client.generation += 1;
-        emit(state, View::offline());
-        (client.controller.take(), client.session.take())
-    };
-    if let Some(controller) = controller {
+async fn disconnect(origin: String, state: &AppState) -> CommandResult<()> {
+    let previous = state.client.lock().await.servers.remove(&origin);
+    emit(state, &origin, View::offline());
+    if let Some(previous) = previous {
+        close(previous).await;
+    }
+    Ok(())
+}
+
+async fn disconnect_all(state: &AppState) {
+    let previous: Vec<_> = state.client.lock().await.servers.drain().collect();
+    let mut closing = JoinSet::new();
+    for (origin, connection) in previous {
+        emit(state, &origin, View::offline());
+        closing.spawn(close(connection));
+    }
+    while closing.join_next().await.is_some() {}
+}
+
+async fn close(connection: Connection) {
+    if let Some(controller) = connection.controller {
         let _ = controller.request(Action::Disconnect).await;
     }
-    logout(session).await;
-    Ok(())
+    logout(connection.session).await;
 }
 
 async fn logout(session: Option<Session>) {
@@ -234,63 +278,58 @@ async fn logout(session: Option<Session>) {
     }
 }
 
-async fn voice_state(state: &AppState) -> CommandResult<VoiceStateResponse> {
+async fn voice_state(state: &AppState) -> CommandResult<Vec<VoiceStateResponse>> {
     let client = state.client.lock().await;
-    let view = client
-        .controller
-        .as_ref()
-        .map(|controller| controller.state.borrow().clone())
-        .unwrap_or_else(View::offline);
-    let server_origin = client
-        .session
-        .as_ref()
-        .filter(|_| client.controller.is_some())
-        .map(|session| session.server.origin().to_owned());
-    Ok(VoiceStateResponse { view, server_origin })
+    Ok(client.servers.iter().filter_map(|(origin, entry)| entry.controller.as_ref().map(|controller| VoiceStateResponse {
+        view: controller.state.borrow().clone(),
+        origin: origin.clone(),
+    })).collect())
 }
 
-async fn dispatch(state: &AppState, action: Action) -> CommandResult<()> {
-    let controller = state
-        .client
-        .lock()
-        .await
-        .controller
-        .clone()
-        .ok_or("Connect to a server first")?;
+async fn dispatch(state: &AppState, origin: &str, action: Action) -> CommandResult<()> {
+    let controller = state.client.lock().await.controller(origin)?;
     controller.request(action).await.map_err(display)
 }
 
 async fn join_channel(
+    origin: String,
     channel_id: String,
     password: Option<String>,
     state: &AppState,
 ) -> CommandResult<()> {
-    dispatch(state, Action::Join { id: channel_id, password }).await
+    // Voice uses one native call at a time, so joining here leaves a channel elsewhere.
+    let others: Vec<_> = state.client.lock().await.in_voice()
+        .filter(|(other, _)| *other != origin).map(|(_, controller)| controller).collect();
+    for controller in others {
+        controller.request(Action::Leave).await.map_err(display)?;
+    }
+    dispatch(state, &origin, Action::Join { id: channel_id, password }).await
 }
 
-async fn leave_channel(state: &AppState) -> CommandResult<()> {
-    dispatch(state, Action::Leave).await
+async fn leave_channel(origin: String, state: &AppState) -> CommandResult<()> {
+    dispatch(state, &origin, Action::Leave).await
 }
 
 async fn set_presence(
+    origin: String,
     muted: Option<bool>,
     deafened: Option<bool>,
     afk: Option<bool>,
     afk_message: Option<String>,
     state: &AppState,
 ) -> CommandResult<()> {
-    dispatch(state, Action::Presence(Presence { muted, deafened, afk, afk_message })).await
+    dispatch(state, &origin, Action::Presence(Presence { muted, deafened, afk, afk_message })).await
 }
 
-async fn send_message(text: String, html: Option<String>, channel_id: Option<String>, state: &AppState) -> CommandResult<()> {
-    dispatch(state, Action::SendMessage { channel_id, text, html }).await
+async fn send_message(origin: String, text: String, html: Option<String>, channel_id: Option<String>, state: &AppState) -> CommandResult<()> {
+    dispatch(state, &origin, Action::SendMessage { channel_id, text, html }).await
 }
 
 async fn direct_request(connection_id: String, kind: String, payload: Value, state: &AppState) -> CommandResult<Value> {
     if !matches!(kind.as_str(), "direct.peer" | "direct.inbox" | "direct.history" | "direct.send" | "direct.poke") {
         return Err("Unsupported direct message operation".into());
     }
-    let controller = state.client.lock().await.controller.clone().ok_or("Connect to a server first")?;
+    let controller = state.client.lock().await.controller_for_connection(&connection_id)?;
     controller.direct_request(connection_id, kind, payload).await.map_err(display)
 }
 
@@ -300,19 +339,19 @@ async fn screen_request(connection_id: String, channel_id: String, kind: String,
         | "media.consumer.create" | "media.consumer.resume" | "media.consumer.close") {
         return Err("Unsupported screen sharing operation".into());
     }
-    let controller = state.client.lock().await.controller.clone().ok_or("Connect to a server first")?;
+    let controller = state.client.lock().await.controller_for_connection(&connection_id)?;
     controller.screen_request(connection_id, channel_id, kind, payload).await.map_err(display)
 }
 
-async fn save_channel(payload: Value, state: &AppState) -> CommandResult<()> {
-    dispatch(state, Action::SaveChannel(payload)).await
+async fn save_channel(origin: String, payload: Value, state: &AppState) -> CommandResult<()> {
+    dispatch(state, &origin, Action::SaveChannel(payload)).await
 }
 
-async fn delete_channel(channel_id: String, state: &AppState) -> CommandResult<()> {
-    dispatch(state, Action::DeleteChannel(channel_id)).await
+async fn delete_channel(origin: String, channel_id: String, state: &AppState) -> CommandResult<()> {
+    dispatch(state, &origin, Action::DeleteChannel(channel_id)).await
 }
 
-async fn member_action(kind: String, payload: Value, state: &AppState) -> CommandResult<()> {
+async fn member_action(origin: String, kind: String, payload: Value, state: &AppState) -> CommandResult<()> {
     let kind = match kind.as_str() {
         "moderation.mute" => "moderation.mute",
         "moderation.deafen" => "moderation.deafen",
@@ -321,14 +360,14 @@ async fn member_action(kind: String, payload: Value, state: &AppState) -> Comman
         "role.set" => "role.set",
         _ => return Err("Unsupported member action".into()),
     };
-    dispatch(state, Action::MemberAction { kind, payload }).await
+    dispatch(state, &origin, Action::MemberAction { kind, payload }).await
 }
 
-async fn set_member_volume(account_id: String, level: u16, state: &AppState) -> CommandResult<()> {
+async fn set_member_volume(origin: String, account_id: String, level: u16, state: &AppState) -> CommandResult<()> {
     if level > MAX_MEMBER_VOLUME {
         return Err(format!("Volume needs to be between 0 and {MAX_MEMBER_VOLUME}").into());
     }
-    dispatch(state, Action::MemberVolume { account_id, level }).await
+    dispatch(state, &origin, Action::MemberVolume { account_id, level }).await
 }
 
 async fn get_audio_devices() -> CommandResult<Value> {
@@ -340,7 +379,7 @@ async fn configure_audio(profile: AudioProfile, state: &AppState) -> CommandResu
     let mut current = state.audio.lock().await;
     if current.as_ref() == Some(&profile) { return Ok(()); }
     media::set_audio_profile(&profile).map_err(display)?;
-    let controller = state.client.lock().await.controller.clone();
+    let controller = state.client.lock().await.in_voice().map(|(_, controller)| controller).next();
     if let Some(controller) = controller {
         if controller.state.borrow().phase == "online" {
             if let Err(error) = controller.request(Action::ReloadAudio).await {
@@ -364,7 +403,8 @@ async fn push_to_talk(pressed: bool, connection_id: Option<String>, channel_id: 
     let (Some(connection_id), Some(channel_id)) = (connection_id, channel_id) else {
         return Err("Join a voice channel first".into());
     };
-    dispatch(state, Action::Talk { connection_id, channel_id }).await
+    let controller = state.client.lock().await.controller_for_connection(&connection_id)?;
+    controller.request(Action::Talk { connection_id, channel_id }).await.map_err(display)
 }
 
 fn whisper_to_talk(pressed: bool) {
@@ -378,12 +418,13 @@ async fn set_whisper(
     password: Option<String>,
     state: &AppState,
 ) -> CommandResult<()> {
-    dispatch(state, Action::Whisper { connection_id, channel_id, target_id, password }).await
+    let controller = state.client.lock().await.controller_for_connection(&connection_id)?;
+    controller.request(Action::Whisper { connection_id, channel_id, target_id, password }).await.map_err(display)
 }
 
 async fn microphone_test(state: &AppState) -> CommandResult<Value> {
     let _profile = state.audio.lock().await;
-    if voice_state(state).await?.view.snapshot["channelId"].is_string() {
+    if state.client.lock().await.in_voice().next().is_some() {
         return Err("Leave the voice channel before testing the microphone".into());
     }
     tokio::task::spawn_blocking(|| {
@@ -483,10 +524,9 @@ async fn prove_identity(
 
     let (server, generation) = {
         let client = state.client.lock().await;
-        let server = client.server.clone().context("Select a server first")?;
-        ensure!(server.origin() == origin, "The selected server changed");
-        ensure!(client.controller.is_none(), "Disconnect before signing in again");
-        (server, client.generation)
+        let entry = client.connection(&origin).map_err(anyhow::Error::msg)?;
+        ensure!(entry.controller.is_none(), "Disconnect before signing in again");
+        (entry.server.clone(), entry.generation)
     };
     let key = identity::load(private_key)?;
     let public_key = identity::public_key(&key);
@@ -536,9 +576,9 @@ async fn prove_identity(
     if (200..300).contains(&status) {
         let credentials: Credentials = serde_json::from_value(body.clone())?;
         let mut client = state.client.lock().await;
-        ensure!(client.generation == generation && client.controller.is_none(), "The selected session changed");
-        client.generation += 1;
-        client.session = Some(Session::new(server, credentials));
+        let entry = client.servers.get_mut(&origin).filter(|entry| entry.generation == generation && entry.controller.is_none())
+            .context("The selected session changed")?;
+        entry.session = Some(Session::new(server, credentials));
         strip_credentials(&mut body);
     }
     Ok(HttpReply { status, body })
@@ -605,8 +645,10 @@ async fn configure_talk_shortcut(shortcut: Option<String>, state: &AppState) -> 
     }
 }
 
-fn emit(state: &AppState, view: View) {
-    let _ = state.outgoing.send(serde_json::json!({ "event": "korero:state", "payload": view }));
+fn emit(state: &AppState, origin: &str, view: View) {
+    let mut payload = serde_json::to_value(view).unwrap_or_default();
+    payload["origin"] = Value::String(origin.to_owned());
+    let _ = state.outgoing.send(serde_json::json!({ "event": "korero:state", "payload": payload }));
 }
 
 #[derive(Deserialize)]
@@ -633,19 +675,19 @@ async fn handle(state: &Arc<AppState>, command: &str, args: Value) -> CommandRes
         "inspect_server" => run!(inspect_server(address: String), state),
         "prepare_server" => run!(prepare_server(origin: String, fingerprint: Option<String>), state),
         "api_fetch" => run!(api_fetch(origin: String, method: String, path: String, body: Option<Value>), state),
-        "start_session" => run!(start_session(member_volumes: Option<HashMap<String, u16>>), state),
-        "disconnect" => run!(disconnect(), state),
+        "start_session" => run!(start_session(origin: String, member_volumes: Option<HashMap<String, u16>>), state),
+        "disconnect" => run!(disconnect(origin: String), state),
         "voice_state" => run!(voice_state(), state),
-        "join_channel" => run!(join_channel(channel_id: String, password: Option<String>), state),
-        "leave_channel" => run!(leave_channel(), state),
-        "set_presence" => run!(set_presence(muted: Option<bool>, deafened: Option<bool>, afk: Option<bool>, afk_message: Option<String>), state),
-        "send_message" => run!(send_message(text: String, html: Option<String>, channel_id: Option<String>), state),
+        "join_channel" => run!(join_channel(origin: String, channel_id: String, password: Option<String>), state),
+        "leave_channel" => run!(leave_channel(origin: String), state),
+        "set_presence" => run!(set_presence(origin: String, muted: Option<bool>, deafened: Option<bool>, afk: Option<bool>, afk_message: Option<String>), state),
+        "send_message" => run!(send_message(origin: String, text: String, html: Option<String>, channel_id: Option<String>), state),
         "direct_request" => run!(direct_request(connection_id: String, kind: String, payload: Value), state),
         "screen_request" => run!(screen_request(connection_id: String, channel_id: String, kind: String, payload: Value), state),
-        "save_channel" => run!(save_channel(payload: Value), state),
-        "delete_channel" => run!(delete_channel(channel_id: String), state),
-        "member_action" => run!(member_action(kind: String, payload: Value), state),
-        "set_member_volume" => run!(set_member_volume(account_id: String, level: u16), state),
+        "save_channel" => run!(save_channel(origin: String, payload: Value), state),
+        "delete_channel" => run!(delete_channel(origin: String, channel_id: String), state),
+        "member_action" => run!(member_action(origin: String, kind: String, payload: Value), state),
+        "set_member_volume" => run!(set_member_volume(origin: String, account_id: String, level: u16), state),
         "get_audio_devices" => run!(get_audio_devices()),
         "configure_audio" => run!(configure_audio(profile: AudioProfile), state),
         "push_to_talk" => run!(push_to_talk(pressed: bool, connection_id: Option<String>, channel_id: Option<String>), state),
@@ -708,7 +750,7 @@ async fn main() -> Result<()> {
         }
     }
     commands.shutdown().await;
-    let _ = disconnect(&state).await;
+    disconnect_all(&state).await;
     output.abort();
     Ok(())
 }
@@ -723,7 +765,9 @@ mod tests {
         let (outgoing, _messages) = mpsc::unbounded_channel();
         let state = Arc::new(AppState {
             client: Mutex::new(Client {
-                server: Some(Server::new(origin, None)?),
+                servers: HashMap::from([(origin.to_owned(), Connection {
+                    server: Server::new(origin, None)?, session: None, controller: None, generation: 0,
+                })]),
                 ..Client::default()
             }),
             audio: Mutex::default(),

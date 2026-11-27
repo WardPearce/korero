@@ -20,7 +20,7 @@
   const policy = $derived(snapshot.directMessages!);
   const online = $derived(snapshot.presence.some((peer) => peer.accountId === accountId));
   const canSendDirectMessages = $derived(policy.canSend ?? snapshot.serverPermissions.includes("text"));
-  const canSend = $derived(canSendDirectMessages && (online || policy.persistent));
+  const canSend = $derived(canSendDirectMessages && (online || policy.persistent || policy.offlineDelivery === true));
   let peer = $state.raw<DirectPeer>();
   let conversation = $state.raw<Awaited<ReturnType<typeof directConversation>>>();
   let mode = $state<"loading" | "unverified" | "verified" | "error">("loading");
@@ -239,10 +239,12 @@
       {/each}
     </div>
     {#if error}<p class="form-error px-3" role="alert">{error}</p>{/if}
-    {#if !online && !policy.persistent}
-      <p class="px-3 text-sm text-muted-foreground">This contact is offline. The server does not retain direct messages.</p>
-    {:else if !canSendDirectMessages}
+    {#if !canSendDirectMessages}
       <p class="px-3 text-sm text-muted-foreground">Your role cannot send direct messages on this server.</p>
+    {:else if !online && !policy.persistent && !policy.offlineDelivery}
+      <p class="px-3 text-sm text-muted-foreground">This contact is offline. The server does not retain direct messages.</p>
+    {:else if !online}
+      <p class="px-3 text-sm text-muted-foreground">This contact is offline. The server delivers your messages when they next connect.</p>
     {/if}
     <ChatComposer enabled={canSend} direct={{ busy: pending, maxBytes: policy.maxBytes, send }} />
   </section>

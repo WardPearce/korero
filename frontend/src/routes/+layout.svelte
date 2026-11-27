@@ -17,20 +17,22 @@
   import ContextActions from "#lib/components/ContextActions.svelte";
   import AccountSetup from "#lib/components/AccountSetup.svelte";
   import LocalIdentitySetup from "#lib/components/LocalIdentitySetup.svelte";
+  import DeviceLinkImport from "#lib/components/DeviceLinkImport.svelte";
+  import { createHostedDeviceLink, createLocalDeviceLink } from "#lib/identity/device-link";
   import IconButton from "#lib/components/IconButton.svelte";
   import Modal from "#lib/components/Modal.svelte";
   import ConnectionInfo from "#lib/components/server/ConnectionInfo.svelte";
   import ScreenSharing from "#lib/components/media/ScreenSharing.svelte";
   import ServerAdministration from "#lib/components/server/ServerAdministration.svelte";
   import {
-    apiFor, call, directRequest, messageFrom, desktopApp, offline, requestError, shortHost, watchVoice,
+    apiFor, call, directRequest, messageFrom, desktopApp, offline, requestError, shortHost, startSession, watchVoice,
     type Member, type MemberRequest, type Poke, type ServerInfo, type VoiceState,
   } from "#lib/connection/client";
   import { authenticateIdentity, getIdentity, identityError, setIdentity } from "#lib/identity/identity";
   import { HostedAccount } from "#lib/identity/hosted-account";
   import { identityModeKey, readLocalIdentity, rememberIdentityMode, type LocalProfile } from "#lib/identity/local-identity";
   import { createProfilePictureCache } from "#lib/identity/profile-picture";
-  import { browserServerOrigin, browserSession } from "#lib/connection/browser-session";
+  import { browserServerOrigin, browserSessions } from "#lib/connection/browser-session";
   import { applyAppearance, readAppearance } from "#lib/theme";
   import { readChatDisplay, saveChatDisplay, setChatDisplay, type ChatDisplay } from "#lib/chat/chat-display";
   import { setWorkspace, type ChannelPlacement, type MobilePane, type RoomView } from "#lib/workspace";
@@ -63,14 +65,32 @@
     if (commit) void preferences.local.put({ key: pane, value }).catch((error) => { actionError = messageFrom(error); });
   }
 
-  let view = $state.raw<VoiceState>(offline);
-  let serverInfo = $state.raw<ServerInfo | null>(null);
+  /** A signed-in server. The client stays connected to every saved server at once. */
+  interface ServerConnection {
+    origin: string;
+    info: ServerInfo | null;
+    view: VoiceState;
+    unread: ReadonlyMap<string, number>;
+    memberVolumes: Record<string, number>;
+    /** Why automatic sign-in stopped. Selecting the server runs the interactive connect flow. */
+    attention: string;
+  }
+  const focusKey = "focusedServer";
+  let connections = $state.raw<ReadonlyMap<string, ServerConnection>>(new Map());
+  // The server shown in the workspace. Other connections keep running in the background.
   let serverOrigin = $state("");
+  const focused = $derived(connections.get(serverOrigin));
+  const view = $derived(focused?.view ?? offline);
+  const serverInfo = $derived(focused?.info ?? null);
+  const memberVolumes = $derived(focused?.memberVolumes ?? {});
+  let resolveRestored = () => {};
+  // Desktop sessions survive a renderer reload. Wait for them before connecting saved servers.
+  const restored = new Promise<void>((resolve) => { resolveRestored = resolve; });
   let savedServers = $state.raw<SavedServer[]>([]);
   let hostedAccount = $state.raw<HostedAccount>();
   let username = $state("");
   let identityReady = $derived(Boolean(username));
-  let setup = $state<"hosted" | "local" | "transfer" | null>(null);
+  let setup = $state<"hosted" | "local" | "link" | "transfer" | null>(null);
   let bookmarkUpdate = Promise.resolve();
   let connectOpen = $state(false);
   let connectBusy = $state(false);
@@ -92,7 +112,6 @@
   let removeError = $state("");
   let remembered = $state(true);
   let pending = $state("");
-  let memberVolumes = $state.raw<Record<string, number>>({});
   let memberVolumeUpdate = Promise.resolve(true);
   let actionError = $state("");
   let selectedChannelId = $state<string | null>(null);
@@ -102,9 +121,9 @@
   let screenShareControlsTarget = $state<HTMLElement>();
   let directAccountId = $state<string | null>(null);
   let connectionInfo = $state.raw<{ origin: string; viewerId: string; connectionId: string } | null>(null);
-  let unreadDirectCounts = $state.raw<ReadonlyMap<string, number>>(new Map());
+  const unreadDirectCounts = $derived(focused?.unread ?? new Map<string, number>());
   const unreadDirectCount = $derived([...unreadDirectCounts.values()].reduce((total, count) => total + count, 0));
-  let poke = $state.raw<Poke | null>(null);
+  let poke = $state.raw<(Poke & { origin: string }) | null>(null);
   let pokeTarget = $state.raw<(Pick<Member, "accountId" | "displayName"> & { viewerId: string }) | null>(null);
   let pokeDraft = $state("");
   let pokeError = $state("");
@@ -119,6 +138,12 @@
     (["manageRoles", "manageSettings", "manageInvitations"].some((permission) => serverPermissions.includes(permission)) ||
       Boolean(serverInfo?.extendedServerAdministration && serverPermissions.includes("viewAdmin"))));
   let onWorkspace = $derived(page.route.id === "/");
+  // Saved servers, plus connections the user chose not to save.
+  const railServers = $derived([
+    ...[...connections.keys()].filter((origin) => !savedServers.some((entry) => entry.origin === origin))
+      .map((origin) => ({ origin, name: serverName(origin) })),
+    ...savedServers.map((entry) => ({ ...entry, name: connections.get(entry.origin)?.info?.name ?? entry.name })),
+  ]);
   let serverTitle = $derived(serverInfo?.name ?? (serverOrigin ? shortHost(serverOrigin) : online ? "Connected server" : "No server connected"));
   let bannerImageUrl = $derived(view.snapshot?.bannerImageUrl === undefined ? serverInfo?.bannerImageUrl ?? null : view.snapshot.bannerImageUrl);
   let claimOwnership = $derived(Boolean(discovery?.info.setupRequired && setupToken.trim()));
@@ -135,6 +160,12 @@
       if (username && identity) return { provider: hostedAccount?.origin, username, publicKey: identity.publicKey };
     },
     showAccountSetup() { if (identityReady && !connectBusy && !pending && !removing) setup = "transfer"; },
+    async createDeviceLink() {
+      if (hostedAccount) return createHostedDeviceLink(hostedAccount);
+      const profile = await readLocalIdentity();
+      if (!profile) throw new Error("This device has no identity to link.");
+      return createLocalDeviceLink(profile);
+    },
     signOut,
     get view() { return view; },
     get serverOrigin() { return serverOrigin; },
@@ -146,7 +177,8 @@
     get channelBackgrounds() { return Boolean(serverInfo?.channelBackgrounds); },
     get profilePictures() { return serverInfo?.profilePictures === true; },
     avatarId(accountId) { return accountId === me?.id ? me.avatarId : avatarIds.get(accountId); },
-    profilePicture: profilePictureCache,
+    profilePicture: profilePictureCache.get,
+    cacheProfilePicture: profilePictureCache.set,
     get maxAttachmentBytes() { return view.snapshot?.maxAttachmentBytes ?? serverInfo?.maxAttachmentBytes ?? 0; },
     get richChat() { return serverInfo?.richChat === true; },
     get maxWebSocketBytes() { return serverInfo?.maxWebSocketBytes; },
@@ -195,29 +227,32 @@
         if (typeof channel?.value === "number") savedChannelWidth = Math.max(222, Math.min(500, channel.value));
       }).catch((error) => { actionError = messageFrom(error); });
     if (!desktopApp()) {
-      const stop = browserSession.watch(applyView);
+      resolveRestored();
+      const stop = browserSessions.watch(applyView);
       return () => { stop(); audio.dispose(); setIdentity(); };
     }
     let mounted = true;
-    let receivedEvent = false;
     let unlisten: (() => void) | undefined;
     watchVoice((state) => {
-      receivedEvent = true;
-      if (mounted) applyView(state);
+      if (mounted) applyView(state.origin, state);
     }).then(async (stop) => {
       if (!mounted) return stop();
       unlisten = stop;
-      const state = await call<VoiceState & { serverOrigin?: string | null }>("voice_state");
+      const sessions = await call<(VoiceState & { origin: string })[]>("voice_state");
       if (!mounted) return;
-      if (!receivedEvent) applyView(state, false);
-      const origin = state.serverOrigin;
-      if (!origin || serverOrigin || connectBusy || view.phase === "offline") return;
-      serverOrigin = origin;
-      const info = await getServerInfo(origin);
-      if (mounted && serverOrigin === origin && !serverInfo) serverInfo = info;
+      for (const state of sessions) {
+        if (connections.has(state.origin)) continue;
+        setConnection(state.origin, { view: state });
+        serverOrigin ||= state.origin;
+        void getServerInfo(state.origin).then(async (info) => {
+          setConnection(state.origin, { info }, false);
+          const memberVolumes = await getMemberVolumes(info.serverId).catch(() => ({}));
+          setConnection(state.origin, { memberVolumes }, false);
+        }).catch(() => {});
+      }
     }).catch((error: unknown) => {
       if (mounted) actionError = messageFrom(error);
-    });
+    }).finally(resolveRestored);
     return () => {
       mounted = false;
       unlisten?.();
@@ -231,7 +266,7 @@
       const hosted = await HostedAccount.restore();
       if (hosted) {
         useHostedIdentity(hosted);
-        void updateSavedServers("", (servers) => servers).catch(() => {});
+        void updateSavedServers("", (servers) => servers).then(connectSaved).catch(() => {});
         return;
       }
       if (localStorage.getItem(identityModeKey) === "local") {
@@ -248,6 +283,7 @@
     savedServers = profile.servers;
     setup = null;
     rememberIdentityMode("local");
+    void connectSaved();
   }
 
   async function continueLocally() {
@@ -274,12 +310,13 @@
     hostedAccount = account;
     setup = null;
     rememberIdentityMode("hosted");
+    void connectSaved();
   }
 
   async function signOut() {
     const account = hostedAccount;
     if (!account || connectBusy || pending || removing) return false;
-    if (serverOrigin && !await disconnect()) return false;
+    if (!await runAction("disconnect", disconnectAll)) return false;
     return runAction("sign-out", async () => {
       await account.signOut();
       setIdentity();
@@ -306,40 +343,138 @@
     return work;
   }
 
-  function applyView(state: VoiceState, notify = true) {
-    const channel = state.snapshot?.channelId;
-    const connection = state.snapshot?.connectionId;
-    const member = state.snapshot?.members.find(({ connectionId }) => connectionId === connection);
-    audio.setTalkContext(state.phase === "online" && state.voice === "active" && !state.whisperChannelId && connection && channel && member &&
-      !member.muted && !member.adminMuted && !member.deafened && !member.adminDeafened && !member.afk
-      ? { channelId: channel, connectionId: connection } : undefined);
-    if (channel && channel !== view.snapshot?.channelId) selectedChannelId = channel;
-    if (connection !== view.snapshot?.connectionId) {
-      unreadDirectCounts = new Map();
-      poke = null;
-      pokeTarget = null;
+  /** Adds or updates a connection. `create` is false for late updates that must not revive a removed server. */
+  function setConnection(origin: string, patch: Partial<ServerConnection>, create = true) {
+    const current = connections.get(origin);
+    if (!current && !create) return;
+    const next = new Map(connections);
+    next.set(origin, { origin, info: null, view: offline, unread: new Map(), memberVolumes: {}, attention: "", ...current, ...patch });
+    connections = next;
+  }
+
+  function removeConnection(origin: string) {
+    if (!connections.has(origin)) return;
+    const next = new Map(connections);
+    next.delete(origin);
+    connections = next;
+  }
+
+  function serverName(origin: string) {
+    return connections.get(origin)?.info?.name ?? savedServers.find((entry) => entry.origin === origin)?.name ?? shortHost(origin);
+  }
+
+  function applyView(origin: string | undefined, state: VoiceState, notify = true) {
+    // The desktop service reports a crash without an origin. It affects every server.
+    if (!origin) {
+      for (const key of connections.keys()) applyView(key, state, notify);
+      return;
     }
-    if (notify && state.lastPoke && state.lastPoke.id !== view.lastPoke?.id) {
-      poke = state.lastPoke;
+    const entry = connections.get(origin);
+    if (!entry) return;
+    const previous = entry.view;
+    const channel = state.snapshot?.channelId;
+    if (origin === serverOrigin && channel && channel !== previous.snapshot?.channelId) selectedChannelId = channel;
+    if (notify && state.lastPoke && state.lastPoke.id !== previous.lastPoke?.id) {
+      poke = { ...state.lastPoke, origin };
       playUiSound("poke");
     }
-    if (state.directMessages?.at(-1)?.id !== view.directMessages?.at(-1)?.id) {
-      const previous = new Set(view.directMessages?.map(({ id }) => id));
+    let unread = entry.unread;
+    if (state.directMessages?.at(-1)?.id !== previous.directMessages?.at(-1)?.id) {
+      const seen = new Set(previous.directMessages?.map(({ id }) => id));
       const incoming = state.directMessages?.filter((message) =>
-        message.recipientId === state.snapshot?.account.id && !previous.has(message.id)) ?? [];
+        message.recipientId === state.snapshot?.account.id && !seen.has(message.id)) ?? [];
       if (incoming.length) {
         if (notify) playUiSound("directMessage");
-        const unread = new Map(unreadDirectCounts);
-        const viewingDirect = onWorkspace && roomView === "directMessages" &&
+        const next = new Map(unread);
+        const viewingDirect = origin === serverOrigin && onWorkspace && roomView === "directMessages" &&
           (mobilePane === "room" || viewport > 760);
         for (const message of incoming) {
           if (viewingDirect && directAccountId === message.senderId) continue;
-          unread.set(message.senderId, (unread.get(message.senderId) ?? 0) + 1);
+          next.set(message.senderId, (next.get(message.senderId) ?? 0) + 1);
         }
-        unreadDirectCounts = unread;
+        unread = next;
       }
     }
-    view = state;
+    setConnection(origin, { view: state, unread }, false);
+    updateTalkContext();
+  }
+
+  // Push-to-talk follows the server with the active voice channel, which may be in the background.
+  function updateTalkContext() {
+    const state = [...connections.values()].map((entry) => entry.view).find((entry) => entry.snapshot?.channelId);
+    const channel = state?.snapshot?.channelId;
+    const connection = state?.snapshot?.connectionId;
+    const member = state?.snapshot?.members.find(({ connectionId }) => connectionId === connection);
+    audio.setTalkContext(state?.phase === "online" && state.voice === "active" && !state.whisperChannelId && connection && channel && member &&
+      !member.muted && !member.adminMuted && !member.deafened && !member.adminDeafened && !member.afk
+      ? { channelId: channel, connectionId: connection } : undefined);
+  }
+
+  function focusServer(origin: string) {
+    if (origin !== serverOrigin) {
+      roomView = "chat";
+      directAccountId = null;
+      pokeTarget = null;
+      connectionInfo = null;
+      selectedChannelId = connections.get(origin)?.view.snapshot?.channelId ?? null;
+      serverOrigin = origin;
+    }
+    if (origin) void preferences.local.put({ key: focusKey, value: origin }).catch(() => {});
+  }
+
+  /** Connects to every saved server that is not already connected. */
+  async function connectSaved() {
+    await restored;
+    if (!identityReady) return;
+    if (!serverOrigin) {
+      const preferred = await preferences.local.get(focusKey).then((entry) => entry?.value).catch(() => undefined);
+      const entry = savedServers.find(({ origin }) => origin === preferred) ?? savedServers[0];
+      if (entry && !serverOrigin) serverOrigin = entry.origin;
+    }
+    await Promise.all(savedServers.map(({ origin }) => autoConnect(origin)));
+  }
+
+  /**
+   * Signs in without prompting. A server that needs a certificate decision, password or
+   * enrollment keeps an `attention` message, and selecting it runs the interactive flow.
+   */
+  async function autoConnect(origin: string) {
+    if (connections.has(origin)) return;
+    setConnection(origin, { view: { ...offline, phase: "connecting" } });
+    try {
+      if (desktopApp()) {
+        const contact = await call<CertificateContact>("inspect_server", { address: origin });
+        const previous = (await preferences.trust.get(contact.origin))?.fingerprint;
+        if (contact.origin !== origin || !(previous === contact.fingerprint || (!previous && contact.publiclyTrusted))) {
+          throw new Error("Check this server's certificate to connect.");
+        }
+        if (!connections.has(origin)) return;
+        await call("prepare_server", { origin, fingerprint: previous ?? null });
+      } else await browserSessions.select(origin);
+      const info = await getServerInfo(origin);
+      setConnection(origin, { info }, false);
+      if (!info.identityAuthentication || !info.identityEnrollment || info.setupRequired) {
+        throw new Error("Open this server to finish connecting.");
+      }
+      const password = info.passwordRequired ? await getSavedPassword(origin, info.serverId).catch(() => undefined) : undefined;
+      if (info.passwordRequired && !password) throw new Error("Enter the server password to connect.");
+      if (!connections.has(origin)) return;
+      const login = await authenticateIdentity(origin, info.serverId, deviceName, { operation: "login", password });
+      if (login.status !== 200) throw identityError(login);
+      if (!connections.has(origin)) return;
+      await beginSession(origin, info);
+    } catch (error) {
+      const message = messageFrom(error);
+      setConnection(origin, { attention: message, view: { ...offline, phase: "error", error: message } }, false);
+    }
+  }
+
+  async function beginSession(origin: string, info: ServerInfo) {
+    await audio.load();
+    const volumes = await getMemberVolumes(info.serverId).catch(() => ({}));
+    setConnection(origin, { info, memberVolumes: volumes, attention: "",
+      view: { ...(connections.get(origin)?.view ?? offline), phase: "connecting", error: null } });
+    await startSession(origin, volumes);
   }
 
   function openWorkspace(pane: MobilePane) {
@@ -368,12 +503,24 @@
     connectOpen = true;
   }
 
-  function selectBookmark(origin: string) {
+  /** A live server becomes the focus. Otherwise this runs the interactive connect flow. */
+  function selectServer(origin: string) {
     if (!identityReady || connectBusy || pending) return;
-    if (origin === serverOrigin && (online || view.phase === "connecting" || view.phase === "reconnecting")) {
+    if (isLive(origin)) {
+      focusServer(origin);
       openWorkspace("channels");
       return;
     }
+    selectBookmark(origin);
+  }
+
+  function isLive(origin: string) {
+    const entry = connections.get(origin);
+    return Boolean(entry && !entry.attention && ["online", "connecting", "reconnecting"].includes(entry.view.phase));
+  }
+
+  function selectBookmark(origin: string) {
+    if (!identityReady || connectBusy || pending) return;
     resetConnect(origin);
     bookmarkOrigin = origin;
     void discoverServer();
@@ -386,11 +533,6 @@
   }
 
   async function discoverServerInfo(origin: string) {
-    roomView = "chat";
-    directAccountId = null;
-    serverInfo = null;
-    serverOrigin = "";
-    selectedChannelId = null;
     const target = { origin, info: await getServerInfo(origin) };
     discovery = target;
     if (!target.info.identityAuthentication || !target.info.identityEnrollment) {
@@ -469,11 +611,13 @@
       serverCode = invitation ?? "";
       if (!desktopApp()) {
         const origin = browserServerOrigin(address);
-        await browserSession.select(origin);
+        if (focusLive(origin)) return;
+        await browserSessions.select(origin);
         await discoverServerInfo(origin);
         return;
       }
       const contact = await call<CertificateContact>("inspect_server", { address });
+      if (focusLive(contact.origin)) return;
       const previous = (await preferences.trust.get(contact.origin))?.fingerprint;
       if (previous === contact.fingerprint) await loadServer(contact, previous);
       else if (!previous && contact.publiclyTrusted) await loadServer(contact, null);
@@ -487,6 +631,15 @@
     } finally {
       connectBusy = false;
     }
+  }
+
+  // Entering the address of a server that is already connected shows it.
+  function focusLive(origin: string) {
+    if (!isLive(origin)) return false;
+    focusServer(origin);
+    connectOpen = false;
+    openWorkspace("channels");
+    return true;
   }
 
   async function approveTrust() {
@@ -574,17 +727,13 @@
   }
 
   async function finishConnection(target: Target, password?: string) {
-    serverInfo = target.info;
-    serverOrigin = target.origin;
+    focusServer(target.origin);
     try {
-      await audio.load();
-      memberVolumes = await getMemberVolumes(target.info.serverId).catch(() => ({}));
-      if (desktopApp()) await call("start_session", { memberVolumes });
-      else await browserSession.start(memberVolumes);
+      await beginSession(target.origin, target.info);
     } catch (error) {
       actionError = messageFrom(error);
     }
-    if (view.phase === "online") playUiSound("connect");
+    if (connections.get(target.origin)?.view.phase === "online") playUiSound("connect");
     if (password && password !== savedServerPassword) {
       await savePassword(target.origin, target.info.serverId, password).catch(() => {
         actionError = "This device could not save the server password.";
@@ -621,16 +770,19 @@
     }
   }
 
+  /** Runs a session command on the focused server. */
   function run(action: string, command: string, args?: Record<string, unknown>) {
+    const origin = serverOrigin;
     return runAction(action, () => {
-      if (desktopApp()) return call(command, args);
-      if (command === "disconnect") return browserSession.disconnect();
-      if (command === "save_channel") return browserSession.saveChannel(args?.payload as Record<string, unknown>);
-      if (command === "delete_channel") return browserSession.deleteChannel(args?.channelId as string);
-      if (command === "join_channel") return browserSession.joinChannel(args?.channelId as string, (args?.password as string | null) ?? undefined);
-      if (command === "leave_channel") return browserSession.leaveChannel();
-      if (command === "set_presence") return browserSession.setPresence(args);
-      if (command === "send_message") return browserSession.sendMessage(args?.channelId as string, args?.text as string, args?.html as string | undefined);
+      if (!origin) throw new Error("Connect to a server first.");
+      if (desktopApp()) return call(command, { ...args, origin });
+      if (command === "join_channel") return browserSessions.joinChannel(origin, args?.channelId as string, (args?.password as string | null) ?? undefined);
+      const session = browserSessions.session(origin);
+      if (command === "save_channel") return session.saveChannel(args?.payload as Record<string, unknown>);
+      if (command === "delete_channel") return session.deleteChannel(args?.channelId as string);
+      if (command === "leave_channel") return session.leaveChannel();
+      if (command === "set_presence") return session.setPresence(args);
+      if (command === "send_message") return session.sendMessage(args?.channelId as string, args?.text as string, args?.html as string | undefined);
       throw new Error("Open Korero.chat in the desktop app to use voice.");
     });
   }
@@ -643,7 +795,9 @@
   }
 
   function memberAction(request: MemberRequest) {
-    return runAction(request.kind, () => desktopApp() ? call("member_action", request) : browserSession.memberAction(request));
+    const origin = serverOrigin;
+    return runAction(request.kind, () => desktopApp() ? call("member_action", { ...request, origin })
+      : browserSessions.session(origin).memberAction(request));
   }
 
   function setMemberVolume(accountId: string, level: number) {
@@ -654,13 +808,13 @@
       if (!isCurrentServer() || view.phase !== "online" || pending === "disconnect") return false;
       actionError = "";
       try {
-        if (desktopApp()) await call("set_member_volume", { accountId, level });
-        else browserSession.setMemberVolume(accountId, level);
+        if (desktopApp()) await call("set_member_volume", { origin, accountId, level });
+        else browserSessions.session(origin).setMemberVolume(accountId, level);
         if (!isCurrentServer()) return false;
         const next = { ...memberVolumes };
         if (level === defaultMemberVolume) delete next[accountId];
         else next[accountId] = level;
-        memberVolumes = next;
+        setConnection(origin, { memberVolumes: next }, false);
         if (serverId) await saveMemberVolumes(serverId, next);
         return true;
       } catch (error) {
@@ -671,17 +825,27 @@
     return memberVolumeUpdate;
   }
 
-  async function disconnect() {
-    if (connectBusy) return false;
-    if (!await run("disconnect", "disconnect")) return false;
+  async function disconnect(origin = serverOrigin) {
+    if (connectBusy || !origin) return false;
+    if (!await runAction("disconnect", () => disconnectServer(origin))) return false;
     playUiSound("disconnect");
-    roomView = "chat";
-    serverInfo = null;
-    serverOrigin = "";
-    selectedChannelId = null;
-    directAccountId = null;
-    openWorkspace("room");
     return true;
+  }
+
+  async function disconnectServer(origin: string) {
+    removeConnection(origin);
+    if (origin === serverOrigin) {
+      const next = [...connections.keys()].find(isLive) ?? "";
+      focusServer(next);
+      openWorkspace("room");
+    }
+    updateTalkContext();
+    if (desktopApp()) await call("disconnect", { origin });
+    else await browserSessions.disconnect(origin);
+  }
+
+  async function disconnectAll() {
+    await Promise.all([...connections.keys()].map(disconnectServer));
   }
 
   function showServerSettings() {
@@ -701,7 +865,7 @@
     if (accountId && unreadDirectCounts.has(accountId)) {
       const unread = new Map(unreadDirectCounts);
       unread.delete(accountId);
-      unreadDirectCounts = unread;
+      setConnection(serverOrigin, { unread }, false);
     }
     roomView = "directMessages";
     openWorkspace("room");
@@ -732,7 +896,8 @@
   }
 
   function replyToPoke() {
-    if (!poke || !online || !serverInfo?.serverId) return;
+    if (!poke || connections.get(poke.origin)?.view.phase !== "online") return;
+    focusServer(poke.origin);
     showDirectMessages(poke.senderId);
     poke = null;
   }
@@ -749,6 +914,7 @@
       actions.push({ label: "Connection info", onSelect: () => showConnectionInfo(connectionId) });
       if (canAdminister) actions.push({ label: "Server administration", onSelect: showServerSettings });
     }
+    if (!savedServers.some(({ origin }) => origin === entry.origin)) return actions;
     actions.push({ label: "Remove server", onSelect: () => {
       removingServer = entry;
       removeError = "";
@@ -763,7 +929,7 @@
     removing = true;
     removeError = "";
     try {
-      if (origin === serverOrigin && !await disconnect()) throw new Error(actionError || "Could not disconnect from the server.");
+      if (connections.has(origin) && !await disconnect(origin)) throw new Error(actionError || "Could not disconnect from the server.");
       await updateSavedServers(origin, (servers) => servers.filter((server) => server.origin !== origin));
       await preferences.passwords.where("origin").equals(origin).delete();
       removeServerOpen = false;
@@ -790,34 +956,40 @@
       <Button variant="outline" class="rail-connect" disabled={!identityReady || connectBusy || Boolean(pending)} onclick={() => showConnect()}><Plus size={18} /> Connect to server</Button>
       <section class="rail-section">
         <div class="rail-section-label"><span>Servers</span></div>
-        {#if serverOrigin}
-          <div class="active-server">
-            <ContextActions actions={serverActions({ origin: serverOrigin, name: serverTitle })} disabled={connectBusy || Boolean(pending)}>
-              {#snippet trigger(props)}
-                <button {...props} type="button" class="rail-server" onclick={() => openWorkspace("channels")}>
-                  <span class="shrinkable"><strong class="truncate">{serverTitle}</strong></span>
-                  <span class="connection-dot" data-online={online}></span>
-                </button>
-              {/snippet}
-            </ContextActions>
-            <button type="button" class="disconnect-server" aria-label={`Disconnect from ${serverTitle}`} title="Disconnect"
-              disabled={connectBusy || Boolean(pending)} onclick={() => { void disconnect(); }}>
-              <X size={16} aria-hidden="true" />
+        {#each railServers as entry (entry.origin)}
+          {@const connection = connections.get(entry.origin)}
+          {@const unread = connection ? [...connection.unread.values()].reduce((total, count) => total + count, 0) : 0}
+          {#snippet serverButton(props: Record<string, unknown>)}
+            <button {...props} type="button" class="rail-server" aria-current={entry.origin === serverOrigin ? "true" : undefined}
+              title={connection?.attention || undefined} onclick={() => selectServer(entry.origin)}>
+              <span class="shrinkable"><strong class="truncate">{entry.name}</strong>
+                {#if connectBusy && bookmarkOrigin === entry.origin && !connectOpen}<small role="status">Connecting…</small>
+                {:else if connection?.attention}<small class="truncate">Select to connect</small>
+                {:else if connection?.view.phase === "connecting" || connection?.view.phase === "reconnecting"}<small>Connecting…</small>{/if}
+              </span>
+              {#if unread}
+                <span class="rail-unread">{unread}<span class="sr-only">{unread === 1 ? " unread message" : " unread messages"}</span></span>
+              {/if}
+              {#if connection && !connection.attention}<span class="connection-dot" data-online={connection.view.phase === "online"}></span>{/if}
             </button>
-          </div>
-        {/if}
-        {#each savedServers.filter((entry) => entry.origin !== serverOrigin) as entry (entry.origin)}
+          {/snippet}
           <ContextActions actions={serverActions(entry)} disabled={connectBusy || Boolean(pending)}>
             {#snippet trigger(props)}
-          <button {...props} tabindex="0" class="rail-server" onclick={() => selectBookmark(entry.origin)}>
-            <span class="shrinkable"><strong class="truncate">{entry.name}</strong>
-              {#if connectBusy && bookmarkOrigin === entry.origin && !connectOpen}<small role="status">Connecting…</small>{/if}
-            </span>
-          </button>
+              {#if connection}
+                <div class="active-server" data-focused={entry.origin === serverOrigin}>
+                  {@render serverButton(props)}
+                  <button type="button" class="disconnect-server" aria-label={`Disconnect from ${entry.name}`} title="Disconnect"
+                    disabled={connectBusy || Boolean(pending)} onclick={() => { void disconnect(entry.origin); }}>
+                    <X size={16} aria-hidden="true" />
+                  </button>
+                </div>
+              {:else}
+                {@render serverButton(props)}
+              {/if}
             {/snippet}
           </ContextActions>
         {:else}
-          {#if !serverOrigin}<p class="rail-empty">No saved servers</p>{/if}
+          <p class="rail-empty">No saved servers</p>
         {/each}
       </section>
     </div>
@@ -862,6 +1034,7 @@
       <BellRing size={20} class="mt-0.5 shrink-0 text-(--info)" aria-hidden="true" />
       <span class="min-w-0 flex-1 wrap-anywhere">
         <strong class="block text-sm">{poke.senderName} poked you</strong>
+        {#if connections.size > 1}<span class="block text-xs text-muted-foreground">{serverName(poke.origin)}</span>{/if}
         {#if poke.message}<span class="block text-sm">{poke.message}</span>{/if}
         <span class="block text-xs text-muted-foreground">Reply in direct messages</span>
       </span>
@@ -889,10 +1062,13 @@
   <AccountSetup open={true} migration={{ username, origin: hostedAccount?.origin, submit: transferIdentity }}
     onlocal={async () => { setup = null; }} oncomplete={useHostedIdentity} />
 {:else if setup === "hosted"}
-  <AccountSetup open={true} onlocal={continueLocally} oncomplete={useHostedIdentity} />
+  <AccountSetup open={true} onlocal={continueLocally} onlink={() => { setup = "link"; }} oncomplete={useHostedIdentity} />
 {/if}
 {#if setup === "local"}
   <LocalIdentitySetup open={true} onback={() => { setup = "hosted"; }} oncomplete={useLocalIdentity} />
+{:else if setup === "link"}
+  <DeviceLinkImport open={true} onback={() => { setup = "hosted"; }}
+    oncomplete={(linked) => linked.kind === "local" ? useLocalIdentity(linked.profile) : useHostedIdentity(linked.result)} />
 {/if}
 
 <Modal bind:open={connectOpen} title={trustPrompt ? (trustPrompt.previous ? "Server certificate changed" : "Trust this server?") : discovery ? discovery.info.name : "Connect to a server"} description={discovery ? shortHost(discovery.origin) : "Paste an invitation link or enter a server address."} dismissible={!connectBusy}>

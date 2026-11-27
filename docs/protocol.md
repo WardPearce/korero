@@ -56,7 +56,7 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | GET `/api/v1/admin/invitations` | `manageInvitations` | — | `invitations` with non-deleted records |
 | PATCH `/api/v1/admin/invitations/:id` | `manageInvitations` | `expiresAt?, usesLeft?` | Updated invitation record |
 | DELETE `/api/v1/admin/invitations/:id` | `manageInvitations` | — | `{}` |
-| PATCH `/api/v1/admin/banner` | `manageSettings` | `bannerImageUrl` as an HTTPS URL or `null` | `{bannerImageUrl}` |
+| PATCH `/api/v1/admin/banner` | `manageSettings` | `bannerImageUrl` as an HTTPS URL (from `server.image_hosts` when set) or `null` | `{bannerImageUrl}` |
 | PATCH `/api/v1/channels/order` | `editChannels` | `channelId, targetId, placement` as `before`, `after`, or `inside`, with optional `parentId` | `{}` |
 | GET `/api/v1/admin/password` | `manageSettings` | — | `{passwordRequired, passwordLocked}` |
 | PATCH `/api/v1/admin/password` | `manageSettings` when `VOICE_SERVER_PASSWORD` is unset | `password` or `null` to remove it | `{passwordRequired}` |
@@ -184,7 +184,8 @@ to other accounts below the caller's role, and records changes in the audit log.
 
 Oversized frames, a full pending request queue or outbound backpressure may close
 the socket. Treat close code 4401 as a need to reauthenticate, 4403 as a kick, and
-4429 as a limit. Ticket renewal can extend a session without tearing down media.
+4429 as a limit. A kicked account cannot authenticate a new connection for 60
+seconds; `connection.authenticate` returns `FORBIDDEN` until then. Ticket renewal can extend a session without tearing down media.
 A revoked device receives 4401 and its transports are closed.
 
 ## Application requests
@@ -246,7 +247,10 @@ History is empty when text persistence is disabled. Current live text still work
 Message objects contain `id, channelId, recipientId, senderId, createdAt, text`
 and may include `html` and attachment metadata as `attachment: {name, size}`.
 When server info advertises `richChat`, clients may send an optional `html`
-representation of the same content, up to 32,768 characters. Keep `text` as the
+representation of the same content, up to 32,768 characters. The server strips
+markup outside the formatting allowlist (`p, br, strong, b, em, i, u, s, del, code,
+pre, blockquote, ul, ol, li, a`, with `href` on links to `http(s)` URLs and `start` on
+ordered lists) before storing or relaying it. Keep `text` as the
 plain-text representation. `maxWebSocketBytes` caps the UTF-8 request envelope.
 Treat received markup as untrusted and render it only
 after sanitizing it against a strict formatting allowlist, or display `text`.
@@ -278,18 +282,33 @@ AFK. An empty string clears the message.
 
 ## Encrypted direct messages
 
-Snapshots advertise `directMessages: {maxBytes, persistent, canSend}`. Both accounts live
-on the selected server. Sending requires server-level `sendDirectMessages` permission and a
+Snapshots advertise `directMessages: {maxBytes, persistent, offlineDelivery, canSend}`.
+Both accounts live on the same server. Clients keep a connection to each saved server,
+so a direct message reaches the recipient on that server regardless of which server
+they are viewing. Sending requires server-level `sendDirectMessages` permission and a
 recipient with an enrolled identity. The server derives the sender from the
 authenticated socket and delivers `direct.created` to both accounts’ active
 devices. Packets include `id, senderId, recipientId, createdAt, nonce, ciphertext,
 signature`. The server supplies `createdAt` and uses it for retention and history order.
 
-With `persistent` enabled, the recipient can be offline when the server accepts
-the packet. The sender can retry an identical stored packet using the same ID.
+The recipient can be offline when the server accepts a packet. `direct.send` returns
+`{messageId, queued}`, where `queued` is true when no recipient device was connected.
+The server holds a queued packet until a recipient device fetches it with
+`direct.pending`, which returns up to 100 of the oldest undelivered packets addressed
+to the caller, oldest first, each with the sender's current `senderName`. The client then sends `direct.ack` with
+`{ids}` (1 to 100 packet IDs). Repeat until `direct.pending` returns an empty list.
+Clients call `direct.pending` after each successful `connection.authenticate`.
+Acknowledging an unknown or already delivered ID has no effect. A recipient holds at
+most `messaging.offline_delivery_queue` undelivered packets, of which one sender may
+hold at most `messaging.offline_delivery_per_sender`. Further offline sends return `LIMIT`. The sender can retry an identical packet using the same ID.
+
+With `persistent` enabled, delivered packets stay in history until the
+`messaging.retention_hours` cutoff, and undelivered packets follow the same cutoff.
 History returns up to 10 packets newest first, breaking ties by ID. Pass the
 returned `next` as `before` to load another page. With persistence disabled, inbox
-and history are empty and sending to a wholly offline account returns `CONFLICT`.
+and history are empty. The server deletes each queued packet when a recipient device
+acknowledges it, or after `messaging.offline_delivery_hours`. A packet delivered to a
+connected device is not stored.
 The encrypted requests are separate from channel chat. The server rejects legacy
 plaintext direct-message sends.
 

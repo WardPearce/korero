@@ -7,6 +7,7 @@ import { accountIdentities, accounts, accountRoles, bans, invitations, profilePi
 import { maxProfilePictureBytes } from "../protocol";
 import { Credentials, equalDigest, randomToken } from "../security/credentials";
 import { fail, ProtocolError } from "../security/errors";
+import { PasswordWork } from "../security/work";
 
 export type Account = typeof accounts.$inferSelect & { role: Role; avatarId: string | null };
 const { accessDigest: _, ...sessionColumns } = getTableColumns(sessions);
@@ -84,7 +85,7 @@ export class Auth {
   private readonly tickets = new Map<string, Ticket>();
   readonly passwordLocked = process.env.VOICE_SERVER_PASSWORD !== undefined;
   private readonly environmentPasswordHash?: string;
-  private passwordWork = 0;
+  private readonly passwordWork = new PasswordWork();
   onRevoked: (sessionIds: Set<string>) => void = () => {};
   onAccountChanged: (accountId: string) => void = () => {};
   onAccountCreated: () => void = () => {};
@@ -134,15 +135,10 @@ export class Auth {
 
   passwordRequired() { return Boolean(this.passwordHash()); }
 
-  private async password<T>(work: () => Promise<T>) {
-    if (this.passwordWork >= 2) fail("RATE_LIMITED");
-    this.passwordWork++;
-    try { return await work(); } finally { this.passwordWork--; }
-  }
-
-  private async verifyPassword(password?: string) {
+  /** Checks the server password, if one is set. `client` identifies the caller for fair queueing. */
+  async verifyPassword(client: string, password?: string) {
     const hash = this.passwordHash();
-    if (hash && (!password || !await this.password(() => Bun.password.verify(password, hash)))) fail("AUTH_FAILED");
+    if (hash && (!password || !await this.passwordWork.run(client, () => Bun.password.verify(password, hash)))) fail("AUTH_FAILED");
     return hash;
   }
 
@@ -150,7 +146,7 @@ export class Auth {
     if (this.passwordLocked) throw new ProtocolError("FORBIDDEN", "The server password is managed by the host.");
     const previous = this.passwordHash();
     const hash = password === null ? null :
-      await this.password(() => Bun.password.hash(password, passwordOptions));
+      await this.passwordWork.run(authorize().id, () => Bun.password.hash(password, passwordOptions));
     const actor = authorize();
     this.db.transaction((tx) => {
       if (this.passwordHash() !== previous) fail("CONFLICT");
@@ -190,9 +186,9 @@ export class Auth {
     }, { behavior: "immediate" });
   }
 
-  async bootstrap(token: string, name: string, device: string, identity: IdentityChallenge, password?: string) {
+  async bootstrap(client: string, token: string, name: string, device: string, identity: IdentityChallenge, password?: string) {
     if (hasOwner(this.db)) fail("NOT_FOUND");
-    const hash = await this.verifyPassword(password);
+    const hash = await this.verifyPassword(client, password);
     const { result, created } = this.db.transaction((tx) => {
       if (hasOwner(tx)) fail("NOT_FOUND");
       if (this.passwordHash() !== hash) fail("CONFLICT");
@@ -216,9 +212,9 @@ export class Auth {
     return result;
   }
 
-  async register(name: string, device: string, identity: IdentityChallenge, invitation?: string, password?: string) {
+  async register(client: string, name: string, device: string, identity: IdentityChallenge, invitation?: string, password?: string) {
     if (this.config.server.registration === "disabled") fail("FORBIDDEN");
-    const hash = invitation ? undefined : await this.verifyPassword(password);
+    const hash = invitation ? undefined : await this.verifyPassword(client, password);
     const result = this.db.transaction((tx) => {
       if (!invitation && this.passwordHash() !== hash) fail("CONFLICT");
       const mode = this.config.server.registration;
@@ -295,9 +291,12 @@ export class Auth {
     return challenge;
   }
 
-  async loginIdentity(serverId: string, id: string, signature: string, password?: string) {
+  async loginIdentity(client: string, serverId: string, id: string, signature: string, password?: string) {
     const { publicKey, deviceName } = this.proveIdentity(serverId, "login", id, signature);
-    const hash = await this.verifyPassword(password);
+    // Look the identity up first so a throwaway key cannot be used to test server passwords.
+    if (!this.db.select({ accountId: accountIdentities.accountId }).from(accountIdentities)
+      .where(eq(accountIdentities.publicKey, publicKey)).get()) fail("NOT_FOUND");
+    const hash = await this.verifyPassword(client, password);
     return this.db.transaction((tx) => {
       if (this.passwordHash() !== hash) fail("CONFLICT");
       const row = tx.select().from(accountIdentities).where(eq(accountIdentities.publicKey, publicKey)).get();

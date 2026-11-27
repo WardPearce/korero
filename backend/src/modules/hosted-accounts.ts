@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, count, eq } from "drizzle-orm";
 import type { Config } from "../config";
 import type { Store } from "../database";
 import { hostedAccounts } from "../database/schema";
@@ -17,9 +17,15 @@ export class HostedAccounts {
       throw new ProtocolError("FORBIDDEN", "This provider has closed account registration.");
     }
     const revision = 1;
-    const inserted = this.db.insert(hostedAccounts)
-      .values({ username, credentialDigest: this.digest(username, credential), encryptedData, revision })
-      .onConflictDoNothing().returning({ revision: hostedAccounts.revision }).get();
+    const inserted = this.db.transaction((tx) => {
+      const { total } = tx.select({ total: count() }).from(hostedAccounts).get()!;
+      if (total >= this.config.limits.hosted_accounts) {
+        throw new ProtocolError("LIMIT", "This provider is not accepting new accounts.");
+      }
+      return tx.insert(hostedAccounts)
+        .values({ username, credentialDigest: this.digest(username, credential), encryptedData, revision })
+        .onConflictDoNothing().returning({ revision: hostedAccounts.revision }).get();
+    }, { behavior: "immediate" });
     if (!inserted) throw new ProtocolError("CONFLICT", "This username is already taken at this provider.");
     return { revision };
   }

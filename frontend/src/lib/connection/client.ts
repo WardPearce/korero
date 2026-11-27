@@ -1,6 +1,6 @@
 import { treaty } from "@elysia/eden";
 import type { App } from "../../../../backend/src/app";
-import { browserSession } from "./browser-session";
+import { browserSessions } from "./browser-session";
 import { call, desktopApp, watchDesktop } from "./platform";
 
 export { call, desktopApp } from "./platform";
@@ -66,7 +66,7 @@ export interface Snapshot {
   canReorderChannels?: boolean;
   canSendText?: boolean;
   canAttachFiles?: boolean;
-  directMessages?: { maxBytes: number; persistent: boolean; canSend?: boolean };
+  directMessages?: { maxBytes: number; persistent: boolean; offlineDelivery?: boolean; canSend?: boolean };
   pokeMaxLength?: number;
   canShareScreen?: boolean;
   canUseCamera?: boolean;
@@ -106,6 +106,8 @@ export interface DirectMessage {
   nonce: string;
   ciphertext: string;
   signature: string;
+  /** Present on packets queued while the recipient was offline. */
+  senderName?: string;
 }
 
 export interface Poke {
@@ -119,6 +121,8 @@ export interface Poke {
 export type DirectOperation = "direct.peer" | "direct.inbox" | "direct.history" | "direct.send" | "direct.poke";
 
 export interface VoiceState {
+  /** Server origin of the desktop session that produced this state. */
+  origin?: string;
   phase: "offline" | "connecting" | "online" | "reconnecting" | "error";
   snapshot: Snapshot | null;
   messages: Message[];
@@ -171,7 +175,12 @@ export const offline: VoiceState = {
 export function directRequest<T>(connectionId: string, kind: DirectOperation, payload: unknown = {}) {
   return desktopApp()
     ? call<T>("direct_request", { connectionId, kind, payload })
-    : browserSession.directRequest<T>(connectionId, kind, payload);
+    : browserSessions.directRequest<T>(connectionId, kind, payload);
+}
+
+/** Starts the signed-in session for a server prepared with `browserSessions.select` or `prepare_server`. */
+export function startSession(origin: string, memberVolumes: Record<string, number>) {
+  return desktopApp() ? call("start_session", { origin, memberVolumes }) : browserSessions.session(origin).start(memberVolumes);
 }
 
 export function watchVoice(onState: (state: VoiceState) => void) {
@@ -181,7 +190,7 @@ export function watchVoice(onState: (state: VoiceState) => void) {
 export function apiFor(origin: string) {
   const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
-    if (!desktopApp()) return browserSession.fetch(request);
+    if (!desktopApp()) return browserSessions.fetch(request);
     const url = new URL(request.url);
     const body = request.body ? (await request.json() as unknown) : null;
     const result = await call<RelayResponse>("api_fetch", {

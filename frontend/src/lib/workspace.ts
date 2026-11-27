@@ -1,5 +1,6 @@
 import { createContext, type Snippet } from "svelte";
 import type { Member, MemberRequest, VoiceState } from "./connection/client";
+import type { DeviceLink } from "./identity/device-link";
 
 export type MobilePane = "servers" | "channels" | "room";
 export type RoomView = "chat" | "directMessages" | "channelSettings" | "serverSettings";
@@ -8,6 +9,7 @@ export type ChannelPlacement = "before" | "after" | "inside";
 interface Workspace {
   readonly identity: { provider?: string; username: string; publicKey: string } | undefined;
   showAccountSetup(): void;
+  createDeviceLink(): Promise<DeviceLink>;
   signOut(): Promise<boolean>;
   readonly view: VoiceState;
   readonly serverOrigin: string;
@@ -19,7 +21,8 @@ interface Workspace {
   readonly channelBackgrounds: boolean;
   readonly profilePictures: boolean;
   avatarId(accountId: string): string | null | undefined;
-  profilePicture(origin: string, connectionId: string, accountId: string, avatarId?: string | null): Promise<string | undefined>;
+  profilePicture(origin: string, accountId: string, avatarId?: string | null): Promise<string | undefined>;
+  cacheProfilePicture(origin: string, accountId: string, avatarId: string | null, data: string | null): void;
   readonly maxAttachmentBytes: number;
   readonly richChat: boolean;
   readonly maxWebSocketBytes: number | undefined;

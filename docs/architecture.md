@@ -42,9 +42,11 @@ Cached request replies are socket-local and bounded.
 
 One server owns both accounts in a direct conversation. It resolves the
 recipient’s public identity, accepts encrypted packets and delivers them to each
-participant’s active device sessions, independent of channel membership. With
-message persistence enabled, SQLite holds the packets until the configured
-retention cutoff. Clients fetch their own inbox and history after reconnecting.
+participant’s active device sessions, independent of channel membership. When no
+recipient device is connected, SQLite queues the packet until a recipient device
+fetches and acknowledges it, or until the offline delivery cutoff. With message
+persistence enabled, SQLite also keeps delivered packets until the retention
+cutoff. Clients fetch pending packets, inbox and history after reconnecting.
 
 Each worker has a shared UDP/TCP WebRtcServer. The first media request in an occupied
 channel creates its Opus router and audio-level observer on the least loaded available
