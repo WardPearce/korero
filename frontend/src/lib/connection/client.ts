@@ -31,6 +31,8 @@ export interface Channel {
   canSetPassword?: boolean;
   canMute?: boolean;
   canMove?: boolean;
+  /** The account may set per-role permission overrides for this channel. */
+  canManagePermissions?: boolean;
   canWhisperTo?: boolean;
   audioBitrate?: number | null;
   canSetAudioBitrate?: boolean;

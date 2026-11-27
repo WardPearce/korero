@@ -579,3 +579,49 @@ test("invited identities can sign back in without the password and invitations h
     expect(reconnected.payload.sessionId).not.toBe(login.payload.sessionId);
   } finally { await server.cleanup(); }
 });
+
+test("channel permission settings list and apply per-role overrides over HTTP", async () => {
+  const server = await fixture();
+  try {
+    const owner = await server.owner();
+    const moderator = await server.register("Moderator");
+    const member = await server.register("Member");
+    await server.call("/api/v1/admin/roles", { accountId: moderator.account.id, role: "Moderator" }, owner.accessToken, "PATCH");
+    const ownerWs = await server.ws(owner);
+    const memberWs = await server.ws(member);
+    const { channelId: parent } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Staff" });
+    const { channelId: child } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Briefing", parentId: parent });
+    const path = (channelId: string) => `/api/v1/channels/${channelId}/permissions`;
+    type State = { canShareScreen: boolean; channels: { id: string; canManagePermissions: boolean }[] };
+    type Table = { roles: { name: string; permissions: Record<string, { allow: boolean | null; inherited: boolean }> }[]; editable: string[] };
+
+    const state = await ownerWs.rpc<State>("state.get");
+    expect(state.channels.find(({ id }) => id === child)).toMatchObject({ canManagePermissions: true });
+    expect((await memberWs.rpc<State>("state.get")).channels.find(({ id }) => id === child))
+      .toMatchObject({ canManagePermissions: false });
+    expect((await server.fail(path(child), undefined, member.accessToken, "GET")).status).toBe(403);
+    expect((await server.fail(path(child), undefined, moderator.accessToken, "GET")).status).toBe(403);
+
+    const changes = [
+      { role: "Member", permission: "speak", allow: false },
+      { role: "Moderator", permission: "speak", allow: true },
+    ];
+    expect((await server.fail(path(parent), { changes }, owner.accessToken, "PATCH")).status).toBe(200);
+    const { payload: table } = await server.call<Table>(path(child), undefined, owner.accessToken, "GET");
+    expect(table.editable).toContain("speak");
+    const roleEntry = (name: string) => table.roles.find((role) => role.name === name)!;
+    expect(roleEntry("Member").permissions.speak).toEqual({ allow: null, inherited: false });
+    expect(roleEntry("Guest").permissions.join).toEqual({ allow: null, inherited: true });
+    expect(table.roles.map(({ name }) => name)).not.toContain("Owner");
+
+    await memberWs.rpc("channel.join", { channelId: child });
+    expect((await memberWs.rpc<State>("state.get")).canShareScreen).toBe(false);
+    expect((await server.fail(path(parent), { changes: [{ role: "Member", permission: "speak", allow: null }] },
+      owner.accessToken, "PATCH")).status).toBe(200);
+    const { payload: parentTable } = await server.call<Table>(path(parent), undefined, owner.accessToken, "GET");
+    expect(parentTable.roles.find((role) => role.name === "Member")!.permissions.speak).toEqual({ allow: null, inherited: true });
+    expect(parentTable.roles.find((role) => role.name === "Moderator")!.permissions.speak).toEqual({ allow: true, inherited: true });
+    expect((await server.fail(path(parent), { changes: [{ role: "Owner", permission: "speak", allow: false }] },
+      owner.accessToken, "PATCH")).status).toBe(403);
+  } finally { await server.cleanup(); }
+}, 20000);

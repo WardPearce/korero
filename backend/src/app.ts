@@ -176,7 +176,7 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
     })
     .get("/api/v1/server/info", () => ({ ...info, name: config.server.name, version: serverVersion, protocolVersions: [version],
       registration: config.server.registration, setupRequired: !auth.hasOwner(), identityAuthentication: true,
-      identityEnrollment: true, channelBackgrounds: true, channelIcons: true, serverAdministration: true, extendedServerAdministration: true,
+      identityEnrollment: true, channelBackgrounds: true, channelIcons: true, channelPermissions: true, serverAdministration: true, extendedServerAdministration: true,
       passwordRequired: auth.passwordRequired(),
       invitationPasswordBypass: true, bannerImageUrl: realtime.bannerImageUrl,
       screenSharing: true, richChat: true, channelAudioQuality: true, profilePictures: true,
@@ -308,6 +308,11 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
       realtime.saveServerPreferences(bearer(request).accountId, body), { body: httpBodies.serverPreferences })
     .patch("/api/v1/admin/banner", ({ request, body }) =>
       realtime.setBanner(bearer(request).accountId, body.bannerImageUrl), { body: httpBodies.serverBanner })
+    .get("/api/v1/channels/:id/permissions", ({ request, params }) =>
+      realtime.channelPermissionTable(bearer(request).accountId, params.id), { params: t.Object({ id }) })
+    .patch("/api/v1/channels/:id/permissions", ({ request, params, body }) =>
+      realtime.setChannelPermissions(bearer(request).accountId, params.id, body),
+      { params: t.Object({ id }), body: httpBodies.channelPermissions })
     .patch("/api/v1/channels/order", ({ request, body }) =>
       realtime.reorderChannel(bearer(request).accountId, body), { body: httpBodies.channelOrder })
     .get("/api/v1/admin/invitations", ({ request }) => ({ invitations: auth.invitations(manageInvitations(request), false) }))

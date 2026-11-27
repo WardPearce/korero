@@ -118,7 +118,7 @@ instructions.
 
 # Manage a server
 
-Right-click a connected server and choose **Server administration** to set the message of the day,
+Right-click a connected server and choose **Server settings** to set the message of the day,
 default role, default Opus bitrate, roles and permissions, and to browse the audit log.
 Right-click a channel to change its password or bitrate.
 

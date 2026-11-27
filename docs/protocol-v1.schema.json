@@ -2044,6 +2044,189 @@
               ]
             },
             "type": {
+              "const": "message.edit"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "messageId",
+                "text"
+              ],
+              "properties": {
+                "messageId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "text": {
+                  "minLength": 0,
+                  "maxLength": 8192,
+                  "type": "string"
+                },
+                "html": {
+                  "minLength": 1,
+                  "maxLength": 32768,
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
+              "const": "direct.edit"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "accountId",
+                "id",
+                "nonce",
+                "ciphertext",
+                "signature"
+              ],
+              "properties": {
+                "accountId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "id": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "nonce": {
+                  "minLength": 16,
+                  "maxLength": 16,
+                  "pattern": "^[A-Za-z0-9_-]+$",
+                  "type": "string"
+                },
+                "ciphertext": {
+                  "minLength": 23,
+                  "maxLength": 10944,
+                  "pattern": "^[A-Za-z0-9_-]+$",
+                  "type": "string"
+                },
+                "signature": {
+                  "minLength": 86,
+                  "maxLength": 86,
+                  "pattern": "^[A-Za-z0-9_-]+$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
+              "const": "direct.delete"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "accountId",
+                "id"
+              ],
+              "properties": {
+                "accountId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "id": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
               "const": "direct.pending"
             },
             "payload": {
@@ -4022,6 +4205,66 @@
               "type": "null"
             }
           ]
+        }
+      }
+    },
+    "channelPermissions": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "changes"
+      ],
+      "properties": {
+        "changes": {
+          "minItems": 1,
+          "maxItems": 512,
+          "type": "array",
+          "items": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "role",
+              "permission",
+              "allow"
+            ],
+            "properties": {
+              "role": {
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^(?=.*\\S)[^/\\u0000-\\u001f\\u007f]+$",
+                "type": "string"
+              },
+              "permission": {
+                "default": "join",
+                "type": "string",
+                "enum": [
+                  "join",
+                  "speak",
+                  "text",
+                  "createChannels",
+                  "editChannels",
+                  "deleteChannels",
+                  "move",
+                  "mute",
+                  "attachFiles",
+                  "shareScreen",
+                  "useCamera",
+                  "whisper",
+                  "removeChannels"
+                ]
+              },
+              "allow": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
         }
       }
     },

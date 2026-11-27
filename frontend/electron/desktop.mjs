@@ -14,6 +14,7 @@ const endpoints = new Set([
 ]);
 const accountResource = /^\/api\/v1\/(?:account\/picture|connections|chat\/attachments)\/[\da-f-]{36}$/i;
 const invitation = /^\/api\/v1\/admin\/invitations\/[\da-f-]{36}$/i;
+const channelPermissions = /^\/api\/v1\/channels\/[\da-f-]{36}\/permissions$/i;
 const directOperations = new Set(["direct.peer", "direct.inbox", "direct.history", "direct.send", "direct.edit", "direct.delete", "direct.poke"]);
 const mediaOperations = new Set([
   "media.capabilities", "media.transport.create", "media.transport.connect", "media.transport.close", "media.producers",
@@ -119,7 +120,8 @@ export class Desktop {
     const route = `${method} ${url.pathname}`;
     if (publicEndpoints.has(route)) return this.#entry(origin).server.http(method, path, body);
     if (!endpoints.has(route) && !(method === "GET" && accountResource.test(url.pathname)) &&
-        !(["PATCH", "DELETE"].includes(method) && invitation.test(url.pathname))) {
+        !(["PATCH", "DELETE"].includes(method) && invitation.test(url.pathname)) &&
+        !(["GET", "PATCH"].includes(method) && channelPermissions.test(url.pathname))) {
       throw new Error("Unsupported client HTTP operation.");
     }
     const session = this.#entry(origin).session;

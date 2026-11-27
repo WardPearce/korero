@@ -53,6 +53,8 @@ export const httpBodies = {
   channelOrder: object({ channelId: id, targetId: id, placement: t.UnionEnum(["before", "after", "inside"]),
     parentId: optional(nullable(id)) }),
   serverBanner: object({ bannerImageUrl: nullable(text(512)) }),
+  channelPermissions: object({ changes: list(object({ role: roleName, permission: t.UnionEnum([...channelPermissions]),
+    allow: nullable(t.Boolean()) }), 512, 1) }),
   attachmentUpload: object({
     connectionId: id, channelId: id, text: text(8192, 0), html: richMessageHtml,
     name: t.String({ minLength: 1, maxLength: 255, pattern: "^[^\\u0000-\\u001f\\u007f/:\\\\]+$" }),

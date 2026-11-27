@@ -11,6 +11,7 @@
   import ServerAuditLog from "./ServerAuditLog.svelte";
   import { apiFor, messageFrom, requestError } from "#lib/connection/client";
   import { getWorkspace } from "#lib/workspace";
+  import { permissionLabels as sharedPermissionLabels } from "#lib/permissions";
 
   let { origin, title, permissions, bannerSupported, bannerImageUrl, extended, onclose }: {
     origin: string;
@@ -35,15 +36,7 @@
   type Roles = Extract<Awaited<ReturnType<ReturnType<typeof apiFor>["admin"]["accounts"]["get"]>>["data"], { accounts: unknown }>;
   type RoleDefinition = Roles["customRoles"][number];
   type Permission = RoleDefinition["permissions"][number];
-  const permissionLabels: Record<Permission, string> = {
-    join: "See and join channels", speak: "Speak in voice", text: "Read and send channel messages", createChannels: "Create channels",
-    editChannels: "Edit channels", removeChannels: "Delete channels", deleteChannels: "Delete other members’ channel messages",
-    move: "Move members", mute: "Mute members",
-    kick: "Kick members", ban: "Ban members", manageRoles: "Assign roles", manageInvitations: "Manage invitations",
-    manageSettings: "Manage server settings", viewAdmin: "View diagnostics and audit log",
-    attachFiles: "Upload attachments", sendDirectMessages: "Send direct messages", shareScreen: "Share screen",
-    useCamera: "Use camera", whisper: "Whisper to other channels",
-  };
+  const permissionLabels: Record<Permission, string> = sharedPermissionLabels;
   const permissionGroups = [
     { label: "Channel access and voice", permissions: ["join", "speak", "shareScreen", "useCamera", "whisper"] },
     { label: "Messaging", permissions: ["text", "attachFiles", "sendDirectMessages", "deleteChannels"] },

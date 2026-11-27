@@ -667,7 +667,8 @@ export class Realtime {
             canDelete: id !== LOBBY && !parentIds.has(id) && this.allowed(account, "removeChannels", channel),
             canSetPassword: id !== LOBBY && canEdit,
             canMute: this.allowed(account, "mute") && this.allowed(account, "mute", channel),
-            canMove: this.allowed(account, "move", channel) };
+            canMove: this.allowed(account, "move", channel),
+            canManagePermissions: this.canManageChannelPermissions(account, channel) };
         }),
       presence: [...this.online.values()].map((connections) => {
         const { id, displayName, avatarId } = connections.values().next().value!.account!;
@@ -835,6 +836,57 @@ export class Realtime {
       }
       if (child.id === id && depth + descendantDepth >= 16) fail("CONFLICT");
     }
+  }
+  private canManageChannelPermissions(actor: Account, channel: Channel) {
+    return this.allowed(actor, "manageRoles") && this.allowed(actor, "editChannels") &&
+      this.allowed(actor, "join", channel) && this.allowed(actor, "editChannels", channel);
+  }
+  /** Lists each manageable role's override and inherited grant for every channel permission. */
+  channelPermissionTable(accountId: string, channelId: string) {
+    const actor = this.auth.account(accountId);
+    const channel = this.channel(channelId);
+    if (!this.canManageChannelPermissions(actor, channel)) fail("FORBIDDEN");
+    const parent = channel.parentId ? this.channel(channel.parentId) : undefined;
+    const overrides = this.overrides.get(channel.id);
+    const roleNames = this.lowerRoles(actor).filter((role) => this.holdsServerGrants(actor, this.roleGrants.get(role)));
+    return {
+      editable: channelPermissions.filter((permission) => this.allowed(actor, permission) && this.allowed(actor, permission, channel)),
+      roles: roleNames.map((name) => ({ name, permissions: Object.fromEntries(channelPermissions.map((permission) => [permission, {
+        allow: overrides?.get(`${name}/${permission}`) ?? null, inherited: this.roleAllowed(name, permission, parent),
+      }])) })),
+    };
+  }
+  /** Applies override changes in order; each is authorised against the state the previous ones left. */
+  setChannelPermissions(accountId: string, channelId: string, { changes }: typeof httpBodies.channelPermissions.static) {
+    const actor = this.auth.account(accountId);
+    const channel = this.channel(channelId);
+    if (!this.canManageChannelPermissions(actor, channel)) fail("FORBIDDEN");
+    try {
+      for (const change of changes) this.overrideChannel(actor, channel, change);
+    } finally { this.recheckAll(); }
+    return this.channelPermissionTable(accountId, channelId);
+  }
+  private overrideChannel(actor: Account, channel: Channel, { role, permission, allow }: { role: Role; permission: Permission; allow: boolean | null }) {
+    this.require(actor, "editChannels");
+    const nextGrant = allow ?? this.roleAllowed(role, permission, channel.parentId ? this.channel(channel.parentId) : undefined);
+    this.authorizeRolePermissionChange(actor, channel, role, permission, this.roleAllowed(role, permission, channel) !== nextGrant);
+    if (role === this.defaultRole && allow && !registrationGrants.has(permission)) {
+      throw new ProtocolError("CONFLICT", "Choose a different default role before granting elevated permissions to this role.");
+    }
+    const key = `${role}/${permission}`;
+    const overrides = this.overrides.get(channel.id) ?? new Map<string, boolean>();
+    if ((overrides.get(key) ?? null) === allow) return;
+    this.db.transaction((tx) => {
+      if (allow === null) tx.delete(channelOverrides).where(and(eq(channelOverrides.channelId, channel.id),
+        eq(channelOverrides.role, role), eq(channelOverrides.permission, permission))).run();
+      else tx.insert(channelOverrides).values({ channelId: channel.id, role, permission, allow }).onConflictDoUpdate({
+        target: [channelOverrides.channelId, channelOverrides.role, channelOverrides.permission], set: { allow },
+      }).run();
+      audit(tx, actor.id, "channel.permission_changed", channel.id, { channelName: channel.name, role, permission, allow });
+    }, { behavior: "immediate" });
+    if (allow === null) overrides.delete(key);
+    else overrides.set(key, allow);
+    this.overrides.set(channel.id, overrides);
   }
   private authorizeRolePermissionChange(actor: Account, channel: Channel, role: Role, permission: Permission, affectsDescendants: boolean) {
     this.require(actor, "manageRoles");
@@ -1150,26 +1202,8 @@ export class Realtime {
         break;
       }
       case "channel.override": {
-        const { channelId, role, permission, allow } = request.payload;
-        const channel = this.channel(channelId);
-        this.require(actor, "editChannels");
-        const nextGrant = allow ?? this.roleAllowed(role, permission, channel.parentId ? this.channel(channel.parentId) : undefined);
-        this.authorizeRolePermissionChange(actor, channel, role, permission, this.roleAllowed(role, permission, channel) !== nextGrant);
-        if (role === this.defaultRole && allow && !registrationGrants.has(permission)) {
-          throw new ProtocolError("CONFLICT", "Choose a different default role before granting elevated permissions to this role.");
-        }
-        this.db.transaction((tx) => {
-          if (allow === null) tx.delete(channelOverrides).where(and(eq(channelOverrides.channelId, channelId),
-            eq(channelOverrides.role, role), eq(channelOverrides.permission, permission))).run();
-          else tx.insert(channelOverrides).values({ channelId, role, permission, allow }).onConflictDoUpdate({
-            target: [channelOverrides.channelId, channelOverrides.role, channelOverrides.permission], set: { allow },
-          }).run();
-          audit(tx, actor.id, "channel.permission_changed", channelId, { channelName: channel.name, role, permission, allow });
-        }, { behavior: "immediate" });
-        const overrides = this.overrides.get(channelId) ?? new Map();
-        if (allow === null) overrides.delete(`${role}/${permission}`);
-        else overrides.set(`${role}/${permission}`, allow);
-        this.overrides.set(channelId, overrides);
+        const { channelId, ...change } = request.payload;
+        this.overrideChannel(actor, this.channel(channelId), change);
         this.recheckAll();
         break;
       }

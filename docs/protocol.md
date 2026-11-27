@@ -57,6 +57,8 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | PATCH `/api/v1/admin/invitations/:id` | `manageInvitations` | `expiresAt?, usesLeft?` | Updated invitation record |
 | DELETE `/api/v1/admin/invitations/:id` | `manageInvitations` | — | `{}` |
 | PATCH `/api/v1/admin/banner` | `manageSettings` | `bannerImageUrl` as an HTTPS URL (from `server.image_hosts` when set) or `null` | `{bannerImageUrl}` |
+| GET `/api/v1/channels/:id/permissions` | `manageRoles` and `editChannels` | — | `editable, roles` |
+| PATCH `/api/v1/channels/:id/permissions` | `manageRoles` and `editChannels` | `changes`, 1–512 entries of `role, permission, allow` | `editable, roles` after the changes |
 | PATCH `/api/v1/channels/order` | `editChannels` | `channelId, targetId, placement` as `before`, `after`, or `inside`, with optional `parentId` | `{}` |
 | GET `/api/v1/admin/password` | `manageSettings` | — | `{passwordRequired, passwordLocked}` |
 | PATCH `/api/v1/admin/password` | `manageSettings` when `VOICE_SERVER_PASSWORD` is unset | `password` or `null` to remove it | `{passwordRequired}` |
@@ -173,8 +175,9 @@ Extended administration adds `motd` and the effective server `targetAudioBitrate
 in bits per second. Changes to either value trigger `state.invalidated`.
 `lowerRoles` lists roles below the caller in the server hierarchy. `assignableRoles`
 lists roles the caller can assign to a subordinate account. The channel list has
-`id, parentId, name, description, position, capacity, temporary, passwordRequired, canDeleteMessages, canMute, canMove, canReparent, canDelete`.
+`id, parentId, name, description, position, capacity, temporary, passwordRequired, canDeleteMessages, canMute, canMove, canReparent, canDelete, canManagePermissions`.
 `canMove` reports the caller's effective `move` permission in that channel.
+`canManagePermissions` reports whether the caller can use the channel permissions endpoints.
 Invisible parents are represented as null. Members have `connectionId, accountId,
 displayName, role, badge, muted, deafened, adminMuted, adminDeafened` and cover the socket's
 current channel. Presence entries have
@@ -244,6 +247,15 @@ whose effective permission changes, the actor needs `join`, `editChannels`, the
 permission being changed, and the target role’s effective channel permissions.
 Moving a channel applies the same role and scope checks to changes in inherited
 permissions.
+
+The channel permissions endpoints need `manageRoles` and `editChannels` at server
+scope, plus `join` and `editChannels` in the channel. `roles` lists each role below
+the caller whose server grants the caller holds. Each role maps every channel
+permission to `allow`, the channel's own override (`true`, `false` or `null`), and
+`inherited`, the grant the role would have without that override. `editable` lists
+the channel permissions the caller holds at server and channel scope. PATCH applies
+`changes` in order with the `channel.override` checks. Changes before a failure stay
+applied. `allow: null` removes an override.
 
 `channel.delete` requires the effective `removeChannels` permission. The Lobby
 and channels with children cannot be deleted. Deleting another member’s channel
