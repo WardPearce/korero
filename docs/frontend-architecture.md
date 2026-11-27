@@ -1,7 +1,7 @@
 # Korero.chat client
 
 The SvelteKit client builds to `frontend/dist`. Electron packages those assets for
-Linux x86_64. Capacitor copies the same build into the Android and iOS projects.
+desktop. Capacitor copies the same build into the Android and iOS projects.
 The client connects to a separately deployed Bun/Elysia and mediasoup server
 using the [v1 protocol](protocol.md).
 
@@ -15,20 +15,25 @@ and finish the connect dialog. Voice uses one channel at a time. Joining a
 channel leaves any channel on another server, and push-to-talk follows the
 server you are talking on.
 
+Right-click a message to edit or delete it. Senders can edit their own messages, and
+a member with `deleteChannels` in the channel can delete another member's message.
+Direct messages follow the same rules for their sender. The client shows the
+`editedAt` marker after an edit is accepted.
+
 ## Electron desktop
 
 Electron serves the local app from a secure custom origin with a sandboxed
 renderer. The preload exposes the client operations and state events used by
-Svelte. A separate Rust process handles the verified HTTPS and WebSocket
-connections, signs identity challenges, and keeps the session credentials in
-memory. The same process uses libmediasoupclient and libwebrtc for voice.
-Electron supplies the camera and the screen or window picker.
+Svelte. The Electron main process verifies HTTPS and WebSocket connections,
+signs identity challenges, and keeps session credentials in memory. It relays
+media signaling for the renderer, which uses `mediasoup-client` for voice, camera
+and screen sharing. Electron supplies microphone and camera permissions and the
+screen or window picker.
 
-Install Bun 1.4.5, Node.js 22.12 or newer, Rust 1.95 or newer, Clang 19 or newer with its
-resource headers, CMake, Ninja, Git, curl, pkg-config, and the X11 development headers.
-First-time desktop builds prepare the pinned WebRTC SDK in
-`frontend/.native/m140-linux-x86_64`. Set `CXX` to select another Clang or
-`KORERO_MEDIA_SDK` to use a prepared SDK.
+Install Bun 1.4.5 and Node.js 22.12 or newer.
+If you previously selected individual audio devices, choose them again in Audio
+settings. The renderer uses Chromium device IDs and falls back to system defaults
+when a saved device is unavailable.
 
 From the repository root, start the server in one terminal.
 
@@ -104,15 +109,14 @@ the new installation.
 ## Verify
 
 Run `bun run check` in `frontend/` and run `bun run check` and `bun run test`
-in `backend/`. The existing native audio probe and browser audio checks exercise
-signaling and media with a synthetic input.
+in `backend/`. The browser and Electron audio checks exercise signaling and media
+with synthetic input. Run the Electron check from a graphical desktop session.
 
 ```sh
 cd frontend
-bun run prepare:media --if-needed
-cargo build --locked --manifest-path native/Cargo.toml --features media --bin voice-probe
+bun run build
 cd ../backend
 bunx --bun playwright install chromium
 bun run test:e2e
-bun run test:e2e:native
+bun run test:e2e:desktop
 ```

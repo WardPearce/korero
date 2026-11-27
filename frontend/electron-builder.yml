@@ -6,12 +6,9 @@ directories:
 files:
   - dist/**/*
   - electron/**/*
-  - "!node_modules"
+  - "!node_modules/!(ws|x11){,/**/*}"
 toolsets:
   appimage: "1.0.3"
-extraResources:
-  - from: native/target/release/desktop-client
-    to: desktop-client
 linux:
   icon: static/icon.png
   syncDesktopName: true
@@ -37,6 +34,8 @@ nsis:
   allowToChangeInstallationDirectory: true
 mac:
   icon: static/icon.png
+  extendInfo:
+    NSMicrophoneUsageDescription: Korero.chat uses the microphone for voice channels.
   target:
     - target: default
       arch: universal

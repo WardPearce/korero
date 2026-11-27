@@ -1,6 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 
-type DesktopEvent = "korero:state" | "korero:talk-shortcut";
+type DesktopEvent = "korero:state" | "korero:media" | "korero:talk-shortcut";
 
 interface DesktopBridge {
   invoke<T>(command: string, args: Record<string, unknown>): Promise<T>;

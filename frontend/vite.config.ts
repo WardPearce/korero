@@ -44,9 +44,9 @@ export default defineConfig(({ command, isPreview }) => {
           changeOrigin: true,
         },
       },
-      // The native SDK and Cargo build artifacts are outside the frontend module graph.
+      // Ignore SDK files from earlier desktop builds.
       watch: {
-        ignored: ["**/.native/**", "**/native/target/**"],
+        ignored: ["**/.native/**"],
       },
     },
   };

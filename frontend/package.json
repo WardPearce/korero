@@ -8,11 +8,9 @@
     "dev": "vite",
     "build": "vite build",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "prepare:media": "bash scripts/prepare-media.sh",
-    "electron:dev": "bun run electron:build:service && node scripts/electron-dev.mjs",
-    "electron:build:service": "bun run prepare:media --if-needed && cargo build --locked --manifest-path native/Cargo.toml --features desktop --bin desktop-client",
+    "electron:dev": "node scripts/electron-dev.mjs",
     "electron:start": "electron .",
-    "electron:pack": "bun run build && bun run prepare:media --if-needed && cargo build --locked --release --manifest-path native/Cargo.toml --features desktop --bin desktop-client && electron-builder --linux --x64 --publish never",
+    "electron:pack": "bun run build && electron-builder --linux --x64 --publish never",
     "mobile:sync": "bun run build && cap sync",
     "mobile:android": "cap open android",
     "mobile:ios": "cap open ios"
@@ -42,7 +40,9 @@
     "mediasoup-client": "3.26.0",
     "svelte": "5.59.1",
     "tailwind-merge": "^3.7.1",
-    "tone": "^15.1.22"
+    "tone": "^15.1.22",
+    "ws": "8.23.0",
+    "x11": "4.4.0"
   },
   "devDependencies": {
     "@capacitor/cli": "8.6.3",

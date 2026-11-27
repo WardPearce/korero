@@ -114,7 +114,7 @@ Use `bun run db:generate --name=NAME` in `backend/` to generate a Drizzle migrat
 - [Architecture](docs/architecture.md)
 - [Protocol](docs/protocol.md)
 - [Authentication](docs/authentication.md)
-- [Server identity and native client integration](docs/server-identity.md)
+- [Server identity and desktop trust](docs/server-identity.md)
 - [Deployment and backups](docs/deployment.md)
 - [Security](docs/security.md)
 - [Compatibility and measurements](docs/compatibility.md)

@@ -53,28 +53,13 @@ reconnecting. Restore the full data directory to preserve both the logical ID an
 
 ## Desktop and mobile clients
 
-Use native Rust for endpoint parsing, TLS, HTTP and WebSockets. Use a shared per-server
-`rustls::ClientConfig` for both connections. For private pins, a scoped
-`ServerCertVerifier` should check the certificate criteria above and delegate TLS 1.2
-and 1.3 signature verification and supported signature schemes to rustls's selected
-crypto provider. Use a current X.509 parser and disallow redirects across origins in
-credential-bearing HTTP requests. Use independently scoped connection pools.
-
-Pass the config into `reqwest` through its preconfigured rustls API and into
-`tokio-tungstenite` through its Rustls connector. Keep the dependency versions
-compatible across both transports.
-
-The Electron client keeps access and refresh credentials in the Rust process
-for the lifetime of the session. It uses the operating system trust store by
-default. For a private server, it displays the SHA-256 digest of the leaf
-certificate for explicit approval and verifies the approved certificate and
-hostname on HTTPS and WSS. This approval is specific to the leaf certificate.
-A replacement certificate requires a new approval.
+The Electron main process keeps access and refresh credentials in memory. It
+uses a separate connection pool for each server and shares its TLS settings
+between HTTPS and WebSocket requests. For a private server, Electron displays
+the SHA-256 digest of the leaf certificate for explicit approval. Subsequent
+connections check the trust chain, hostname, validity period, and approved
+certificate. A replacement certificate requires a new approval.
 
 Capacitor uses the device's HTTPS trust configuration. A private server needs
 a certificate trusted by the device, or a trusted HTTPS reverse proxy, before
 the mobile client can connect.
-
-- [rustls verifier contract](https://docs.rs/rustls/latest/rustls/client/danger/trait.ServerCertVerifier.html)
-- [reqwest ClientBuilder](https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html)
-- [tokio-tungstenite TLS connector](https://docs.rs/tokio-tungstenite/latest/tokio_tungstenite/enum.Connector.html)

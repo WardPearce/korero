@@ -1,9 +1,8 @@
 import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, net, protocol, session, shell } from "electron";
-import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { Desktop } from "./desktop.mjs";
 
 const directory = fileURLToPath(new URL(".", import.meta.url));
 const dist = resolve(directory, "../dist");
@@ -11,7 +10,9 @@ const development = !app.isPackaged && process.argv.includes("--dev");
 const appUrl = development ? "http://127.0.0.1:1420/" : "korero://app/";
 if (development) app.setPath("userData", join(app.getPath("appData"), "Korero.chat Dev"));
 let window;
-let helper;
+let desktop;
+let quitting = false;
+let pendingCommands = 0;
 
 protocol.registerSchemesAsPrivileged([{
   scheme: "korero",
@@ -41,62 +42,6 @@ async function serveApp(request) {
 
 function sendToWindow(event, payload) {
   if (window && !window.webContents.isDestroyed()) window.webContents.send(event, payload);
-}
-
-function startHelper() {
-  const executable = process.platform === "win32" ? "desktop-client.exe" : "desktop-client";
-  const path = app.isPackaged ? join(process.resourcesPath, executable)
-    : resolve(directory, "../native/target", process.argv.includes("--release") ? "release" : "debug", executable);
-  const processHandle = spawn(path, { stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
-  const pending = new Map();
-  let nextId = 0;
-  let failure;
-  function stop(error) {
-    failure ??= error;
-    for (const { reject } of pending.values()) reject(failure);
-    pending.clear();
-  }
-  processHandle.once("error", (error) => stop(new Error(`Could not start the Korero.chat desktop service. ${error.message}`)));
-  processHandle.once("exit", () => {
-    const error = new Error("The Korero.chat desktop service stopped. Restart the app to reconnect.");
-    stop(error);
-    sendToWindow("korero:state", {
-      phase: "error", snapshot: null, messages: [], speaking: [], voice: "idle", voiceError: null, error: error.message,
-    });
-  });
-  processHandle.stdin.on("error", stop);
-  createInterface({ input: processHandle.stdout }).on("line", (line) => {
-    let message;
-    try { message = JSON.parse(line); } catch { return; }
-    if (message.event === "korero:state" || message.event === "korero:talk-shortcut") {
-      sendToWindow(message.event, message.payload);
-      return;
-    }
-    const request = pending.get(message.id);
-    if (!request) return;
-    pending.delete(message.id);
-    if (typeof message.error === "string") request.reject(new Error(message.error));
-    else request.resolve(message.result);
-  });
-  return {
-    invoke(command, args) {
-      if (failure) return Promise.reject(failure);
-      if (pending.size >= 128) return Promise.reject(new Error("Too many pending desktop requests."));
-      const id = ++nextId;
-      return new Promise((resolve, reject) => {
-        const line = JSON.stringify({ id, command, args }) + "\n";
-        pending.set(id, { resolve, reject });
-        processHandle.stdin.write(line, (error) => {
-          if (error && pending.delete(id)) reject(error);
-        });
-      });
-    },
-    close() {
-      processHandle.stdin.end();
-      const timeout = setTimeout(() => processHandle.kill(), 3000);
-      timeout.unref();
-    },
-  };
 }
 
 async function chooseCapture(request, callback) {
@@ -135,6 +80,7 @@ function openWindow() {
     title: "Korero.chat",
     icon: join(dist, "icon.png"),
     webPreferences: {
+      backgroundThrottling: false,
       preload: join(directory, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
@@ -173,22 +119,30 @@ else {
   app.whenReady().then(() => {
     protocol.handle("korero", serveApp);
     const appSession = session.defaultSession;
-    const permissions = new Set(["media", "display-capture", "clipboard-sanitized-write"]);
+    const permissions = new Set(["media", "display-capture", "speaker-selection", "clipboard-sanitized-write"]);
     appSession.setPermissionRequestHandler((contents, permission, callback, details) =>
       callback(contents === window?.webContents && details.isMainFrame && isAppPage(details.requestingUrl) && permissions.has(permission)));
     appSession.setPermissionCheckHandler((contents, permission, origin, details) =>
       contents === window?.webContents && details.isMainFrame && isAppPage(origin) && permissions.has(permission));
     appSession.setDisplayMediaRequestHandler(chooseCapture, { useSystemPicker: true });
-    helper = startHelper();
-    ipcMain.handle("korero:command", (event, command, args) => {
+    desktop = new Desktop(sendToWindow);
+    ipcMain.handle("korero:command", async (event, command, args) => {
       if (event.sender !== window?.webContents || event.senderFrame !== event.sender.mainFrame || !isAppPage(event.senderFrame?.url) ||
           typeof command !== "string" || typeof args !== "object" || !args || Array.isArray(args)) {
         throw new Error("Invalid desktop request.");
       }
-      return helper.invoke(command, args);
+      if (pendingCommands >= 128) throw new Error("Too many pending desktop requests.");
+      pendingCommands++;
+      try { return await desktop.invoke(command, args); }
+      finally { pendingCommands--; }
     });
     openWindow();
   }).catch((error) => { console.error(error); app.quit(); });
   app.on("window-all-closed", () => app.quit());
-  app.on("before-quit", () => helper?.close());
+  app.on("before-quit", (event) => {
+    if (!desktop || quitting) return;
+    event.preventDefault();
+    quitting = true;
+    void desktop.close().finally(() => app.quit());
+  });
 }
