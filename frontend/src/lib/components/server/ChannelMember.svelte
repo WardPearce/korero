@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button } from "#lib/components/ui/button/index.js";
-  import { Activity, Ban, HeadphoneOff, LogOut, MessageCircle, MicOff, MonitorUp, Shield, Volume2 } from "@lucide/svelte";
+  import { Activity, Ban, BellRing, HeadphoneOff, LogOut, MessageCircle, MicOff, MonitorUp, Shield, Volume2 } from "@lucide/svelte";
   import { tick } from "svelte";
   import Avatar from "#lib/components/Avatar.svelte";
   import ContextActions from "#lib/components/ContextActions.svelte";
@@ -19,6 +19,7 @@
   const snapshot = $derived(workspace.view.snapshot);
   const ownAccount = $derived(member.accountId === snapshot?.account.id);
   const canOpenDirectMessage = $derived(!ownAccount && Boolean(snapshot?.directMessages && workspace.serverId));
+  const canPoke = $derived(!ownAccount && Boolean(snapshot?.pokeMaxLength && snapshot.directMessages?.canSend));
   const canModerate = $derived(!ownAccount && Boolean(member.role && snapshot?.lowerRoles?.includes(member.role)));
   const displayedRole = $derived(member.role === "Guest" || member.role === "Member" ? undefined : member.role);
   const roles = $derived(canModerate ? snapshot?.assignableRoles ?? [] : []);
@@ -105,6 +106,9 @@
       {/if}
       {#if canOpenDirectMessage}
         <ContextMenu.Item onSelect={openDirectMessage}><MessageCircle /> Direct message</ContextMenu.Item>
+      {/if}
+      {#if canPoke}
+        <ContextMenu.Item onSelect={() => workspace.showPoke(member)}><BellRing /> Poke…</ContextMenu.Item>
       {/if}
       {#if ownAccount}
         <ContextMenu.Item onSelect={() => { nameDraft = member.displayName; nameError = ""; nameDialogOpen = true; }}>Change display name…</ContextMenu.Item>

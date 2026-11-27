@@ -92,6 +92,13 @@
       "when": 1795678033916,
       "tag": "0012_remove_channels_permission",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1795766976592,
+      "tag": "0013_hosted_accounts",
+      "breakpoints": true
     }
   ]
 }

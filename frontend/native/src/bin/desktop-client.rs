@@ -284,7 +284,7 @@ async fn send_message(text: String, html: Option<String>, channel_id: Option<Str
 }
 
 async fn direct_request(connection_id: String, kind: String, payload: Value, state: &AppState) -> CommandResult<Value> {
-    if !matches!(kind.as_str(), "direct.peer" | "direct.inbox" | "direct.history" | "direct.send") {
+    if !matches!(kind.as_str(), "direct.peer" | "direct.inbox" | "direct.history" | "direct.send" | "direct.poke") {
         return Err("Unsupported direct message operation".into());
     }
     let controller = state.client.lock().await.controller.clone().ok_or("Connect to a server first")?;
@@ -293,7 +293,8 @@ async fn direct_request(connection_id: String, kind: String, payload: Value, sta
 
 async fn screen_request(connection_id: String, channel_id: String, kind: String, payload: Value, state: &AppState) -> CommandResult<Value> {
     if !matches!(kind.as_str(), "media.capabilities" | "media.transport.create" | "media.transport.connect"
-        | "media.transport.close" | "media.producer.create" | "media.producer.close" | "media.consumer.create" | "media.consumer.resume") {
+        | "media.transport.close" | "media.producer.create" | "media.producer.close"
+        | "media.consumer.create" | "media.consumer.resume" | "media.consumer.close") {
         return Err("Unsupported screen sharing operation".into());
     }
     let controller = state.client.lock().await.controller.clone().ok_or("Connect to a server first")?;

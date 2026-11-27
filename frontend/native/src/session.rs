@@ -67,6 +67,7 @@ pub struct View {
     pub snapshot: Value,
     pub messages: Vec<Value>,
     pub direct_messages: Vec<Value>,
+    pub last_poke: Option<Value>,
     pub speaking: Vec<String>,
     pub voice: &'static str,
     pub whisper_channel_id: Option<String>,
@@ -716,6 +717,9 @@ impl Active {
                     }
                 }
             }
+            "direct.poked" if payload["recipientId"] == self.view.snapshot["account"]["id"] => {
+                self.view.last_poke = Some(payload.clone());
+            }
             "message.deleted" => self
                 .view
                 .messages
@@ -724,9 +728,14 @@ impl Active {
                 let event_type = event["type"].as_str().unwrap_or_default();
                 let source = if event_type.starts_with("media.camera") { "cameras" } else { "screens" };
                 if let Some(shares) = self.view.snapshot[source].as_array_mut() {
-                    shares.retain(|share| share["producerId"] != payload["producerId"]);
                     if event_type.ends_with("Available") {
-                        shares.push(payload.clone());
+                        if let Some(share) = shares.iter_mut().find(|share| share["producerId"] == payload["producerId"]) {
+                            *share = payload.clone();
+                        } else {
+                            shares.push(payload.clone());
+                        }
+                    } else {
+                        shares.retain(|share| share["producerId"] != payload["producerId"]);
                     }
                 }
             }

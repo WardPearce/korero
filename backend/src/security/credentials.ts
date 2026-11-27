@@ -9,7 +9,7 @@ export function equalDigest(a: string, b: string) {
 }
 export class Credentials {
   constructor(private readonly secret: Uint8Array) {}
-  digest(domain: "access" | "refresh" | "invitation" | "setup" | "ticket", token: string) {
+  digest(domain: "access" | "refresh" | "invitation" | "setup" | "ticket" | "hosted-account", token: string) {
     return createHmac("sha256", this.secret).update(`voice/v1/verifier/${domain}\0`).update(token).digest("hex");
   }
   successor(domain: "access" | "refresh", previous: string) {

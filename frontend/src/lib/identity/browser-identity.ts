@@ -40,6 +40,11 @@ function unpack(pkcs8: Uint8Array) {
   return { seed, publicKey };
 }
 
+export function identityFromPrivateKey(privateKey: string): DeviceIdentity {
+  const { publicKey } = unpack(decodeBase64Url(privateKey));
+  return { privateKey, publicKey };
+}
+
 async function wrappingKey(passphrase: string, salt: Uint8Array<ArrayBuffer>) {
   if (Array.from(passphrase).length < 12) throw new Error("Use a passphrase of at least 12 characters.");
   const base = await crypto.subtle.importKey("raw", encoder.encode(passphrase), "PBKDF2", false, ["deriveKey"]);

@@ -15,7 +15,7 @@ try {
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH,
     args: ["--autoplay-policy=no-user-gesture-required", "--ignore-certificate-errors-spki-list=" + trustedKey] });
   try {
-    await server.owner();
+    const owner = await server.ws(await server.owner());
     const page = await browser.newPage();
     await page.goto(server.origin + "/api/v1/server/info");
     await page.addScriptTag({ content: await bundle.outputs[0]!.text() });
@@ -27,7 +27,7 @@ try {
     await Bun.write(ca, server.ca);
     const credentials = await server.register("Rust voice probe");
     const native = Bun.spawn([executable, server.origin, ca], { stdin: "pipe", stdout: "pipe", stderr: "inherit" });
-    type Result = { ready?: number; left?: number; connectionId?: string; decoded?: number; peak?: number };
+    type Result = { ready?: number; left?: number; connectionId?: string; decoded?: number; peak?: number; bitrate?: number };
     const results: Result[] = [];
     const collectResults = (async () => {
       let tail = "";
@@ -58,6 +58,19 @@ try {
         const nativeAudio = await until(async () => results.find((entry) => entry.decoded === round), Boolean);
         if (!nativeAudio?.peak || nativeAudio.peak < 0.025) throw new Error("Native peer did not decode audio");
         console.log(`Round ${round}: Opus decoded in both directions (native peak ${nativeAudio.peak.toFixed(3)}, browser peak ${inbound.peak.toFixed(3)})`);
+        if (round === 1) {
+          const { channelId, targetAudioBitrate } =
+            await page.evaluate(() => window.harness.rpc<{ channelId: string; targetAudioBitrate: number }>("state.get"));
+          for (const audioBitrate of [32000, 128000, null]) {
+            const previousResults = results.length;
+            await owner.rpc("channel.edit", { channelId, audioBitrate });
+            await until(async () => results.slice(previousResults).some((entry) => entry.bitrate === (audioBitrate ?? targetAudioBitrate)), Boolean);
+            const senders = await page.evaluate(() => window.harness.rpc<{ producerId: string }[]>("media.producers"));
+            if (!senders.some(({ producerId }) => producerId === producer)) throw new Error("Changing the bitrate replaced the active voice producer");
+            const before = await page.evaluate(() => window.harness.stats());
+            await until(() => page.evaluate(() => window.harness.stats()), (packets) => packets > before);
+          }
+        }
         native.stdin.write("leave\n");
         await native.stdin.flush();
         await until(async () => results.some((entry) => entry.left === round), Boolean);
@@ -66,6 +79,7 @@ try {
       }
       if (await native.exited !== 0) throw new Error("Failed to exit after reconnect");
     } finally {
+      owner.close();
       if (native.exitCode === null) native.kill();
       await native.exited;
       await collectResults;

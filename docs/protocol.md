@@ -219,6 +219,7 @@ password or permission-override fields.
 | `direct.inbox` | — | Up to 50 recent contacts with `accountId, displayName, lastMessageAt` |
 | `direct.history` | `accountId, before?: {createdAt, id}` | `{messages, next}` |
 | `direct.send` | `accountId, id, nonce, ciphertext, signature` | `{messageId}` |
+| `direct.poke` | `accountId, message?` | `{}` |
 
 `channel.delete` requires the effective `removeChannels` permission. The Lobby
 and channels with children cannot be deleted. Deleting another member’s channel
@@ -284,6 +285,12 @@ returned `next` as `before` to load another page. With persistence disabled, inb
 and history are empty and sending to a wholly offline account returns `CONFLICT`.
 The encrypted requests are separate from channel chat. The server rejects legacy
 plaintext direct-message sends.
+
+Snapshots advertise poke support through `pokeMaxLength`. A poke requires
+`sendDirectMessages` permission and an active recipient on the same server.
+The server delivers `direct.poked` to the recipient's active devices immediately.
+The optional single-line note travels as text over the WebSocket and is not stored
+in direct message history. Pokes have a separate rate limit of six per minute per account.
 
 Clients check that `ownPublicKey` matches their enrolled identity and verify the
 conversation safety code out of band before sending or decrypting. Compute the code
@@ -388,6 +395,7 @@ in `cameras` or through `media.cameraAvailable`.
 | `message.created` | Message |
 | `message.deleted` | `messageId` |
 | `direct.created` | Encrypted direct message packet |
+| `direct.poked` | `id, senderId, senderName, recipientId, message?` |
 | `media.producerAvailable` | `channelId, producerId, connectionId` |
 | `media.producerClosed` | `channelId, producerId` |
 | `media.producerState` | `producerId, paused` |

@@ -66,6 +66,7 @@ export interface Snapshot {
   canSendText?: boolean;
   canAttachFiles?: boolean;
   directMessages?: { maxBytes: number; persistent: boolean; canSend?: boolean };
+  pokeMaxLength?: number;
   canShareScreen?: boolean;
   canUseCamera?: boolean;
   whispers?: { producerId: string; from: string }[];
@@ -77,6 +78,7 @@ export interface ScreenShare {
   producerId: string;
   connectionId: string;
   audioProducerId?: string;
+  screenNumber?: number;
 }
 
 export type MemberRequest =
@@ -105,13 +107,22 @@ export interface DirectMessage {
   signature: string;
 }
 
-export type DirectOperation = "direct.peer" | "direct.inbox" | "direct.history" | "direct.send";
+export interface Poke {
+  id: string;
+  senderId: string;
+  senderName: string;
+  recipientId: string;
+  message?: string;
+}
+
+export type DirectOperation = "direct.peer" | "direct.inbox" | "direct.history" | "direct.send" | "direct.poke";
 
 export interface VoiceState {
   phase: "offline" | "connecting" | "online" | "reconnecting" | "error";
   snapshot: Snapshot | null;
   messages: Message[];
   directMessages?: DirectMessage[];
+  lastPoke?: Poke | null;
   speaking: string[];
   voice: "idle" | "active" | "muted" | "deafened" | "error";
   voiceError: string | null;

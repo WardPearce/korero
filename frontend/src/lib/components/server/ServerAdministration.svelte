@@ -3,6 +3,7 @@
   import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
   import { Input } from "#lib/components/ui/input/index.js";
   import SelectField from "#lib/components/fields/SelectField.svelte";
+  import VoiceBitrateField from "#lib/components/fields/VoiceBitrateField.svelte";
   import { Textarea } from "#lib/components/ui/textarea/index.js";
   import { onMount } from "svelte";
   import { Settings2, X } from "@lucide/svelte";
@@ -10,12 +11,10 @@
   import ServerAuditLog from "./ServerAuditLog.svelte";
   import { apiFor, messageFrom, requestError } from "#lib/connection/client";
 
-  let { origin, title, permissions, passwordRequired, onPasswordChange, bannerSupported, bannerImageUrl, extended, onclose }: {
+  let { origin, title, permissions, bannerSupported, bannerImageUrl, extended, onclose }: {
     origin: string;
     title: string;
     permissions: string[];
-    passwordRequired: boolean;
-    onPasswordChange: (origin: string, required: boolean) => void;
     onclose: () => void;
     bannerSupported: boolean;
     bannerImageUrl: string | null;
@@ -27,7 +26,6 @@
     { id: "roles", label: "Roles", permission: "manageRoles" },
     { id: "audit", label: "Audit log", permission: "viewAdmin" },
     { id: "banner", label: "Banner", permission: "manageSettings" },
-    { id: "password", label: "Password", permission: "manageSettings" },
     { id: "invitation", label: "Invitations", permission: "manageInvitations" },
   ] as const;
   type Tab = typeof tabs[number]["id"];
@@ -68,9 +66,6 @@
   let notice = $state("");
   let members = $state.raw<Roles | null>(null);
   let pages = $state<(string | undefined)[]>([undefined]);
-  let passwordLocked = $state<boolean | null>(null);
-  let password = $state("");
-  let removePassword = $state(false);
   let invitations = $state.raw<Invitation[] | null>(null);
   let createdInvitation = $state.raw<{ id: string; url: string } | null>(null);
   let editedInvitation = $state.raw<Invitation | null>(null);
@@ -99,14 +94,14 @@
   const templateOptions = $derived(roleTemplates.filter(({ permissions }) =>
     permissions.every((permission) => members?.assignablePermissions.includes(permission)))
     .map(({ name }) => ({ label: name, value: name })));
+  const roleOptions = $derived((members?.roles ?? []).map((role) => ({ label: role, value: role })));
   let serverPreferences = $state.raw<ServerPreferences | null>(null);
   let motd = $state("");
   let defaultRole = $state("");
-  let voiceKbps = $state<number | undefined>();
+  let voiceBitrate = $state<number | null>(null);
   let attachmentMiB = $state<number | undefined>();
   let defaultRoleOptions = $derived([...new Set([...(serverPreferences?.defaultRoles ?? []), serverPreferences?.defaultRole ?? ""])]
     .filter(Boolean).map((role) => ({ value: role, label: role })));
-  let voiceBitrate = $derived(voiceKbps === undefined ? null : Math.round(voiceKbps * 1000));
   let preferencesChanged = $derived(serverPreferences && (motd.trim() !== serverPreferences.motd ||
     defaultRole !== serverPreferences.defaultRole || voiceBitrate !== serverPreferences.defaultAudioBitrate ||
     attachmentMiB !== serverPreferences.maxAttachmentMiB));
@@ -159,14 +154,12 @@
     notice = "";
     if (next === "overview") await loadPreferences();
     if (next === "roles") await loadMembers(pages);
-    if (next === "password") await loadPassword();
     if (next === "banner") bannerUrl = bannerImageUrl ?? "";
     if (next === "invitation") await loadInvitations();
   }
 
-  async function setRole(event: Event, account: Roles["accounts"][number]) {
-    const select = event.currentTarget as HTMLSelectElement;
-    const role = select.value;
+  async function setRole(account: Roles["accounts"][number], role: string | undefined) {
+    if (role === undefined || role === account.role) return;
     await run(async () => {
       const response = await apiFor(origin).admin.roles.patch({ accountId: account.id, role });
       if (response.error) throw requestError(response.error);
@@ -175,7 +168,6 @@
       }
       notice = `${account.displayName} is now ${role}.`;
     });
-    if (error) select.value = account.role;
   }
 
   function editBadge(account: Roles["accounts"][number]) {
@@ -230,7 +222,7 @@
     serverPreferences = preferences;
     motd = preferences.motd;
     defaultRole = preferences.defaultRole;
-    voiceKbps = preferences.defaultAudioBitrate === null ? undefined : preferences.defaultAudioBitrate / 1000;
+    voiceBitrate = preferences.defaultAudioBitrate;
     attachmentMiB = preferences.maxAttachmentMiB;
   }
 
@@ -301,37 +293,6 @@
       if (!response.data || !("bannerImageUrl" in response.data)) throw requestError({ value: response.data });
       bannerUrl = response.data.bannerImageUrl ?? "";
       notice = bannerUrl ? "Server banner saved." : "Server banner removed.";
-    });
-  }
-
-  function loadPassword() {
-    const requestOrigin = origin;
-    return run(async () => {
-      passwordLocked = null;
-      const response = await apiFor(requestOrigin).admin.password.get();
-      if (response.status === 404) {
-        passwordLocked = false;
-        return;
-      }
-      if (response.error) throw requestError(response.error);
-      if (!response.data || !("passwordLocked" in response.data)) throw requestError({ value: response.data });
-      passwordLocked = response.data.passwordLocked;
-      if (passwordRequired !== response.data.passwordRequired) onPasswordChange(requestOrigin, response.data.passwordRequired);
-    });
-  }
-
-  function savePassword(event: SubmitEvent) {
-    event.preventDefault();
-    if (passwordLocked !== false) return;
-    const requestOrigin = origin;
-    void run(async () => {
-      const response = await apiFor(requestOrigin).admin.password.patch({ password: removePassword ? null : password });
-      if (response.error) throw requestError(response.error);
-      if (!response.data || !("passwordRequired" in response.data)) throw requestError({ value: response.data });
-      password = "";
-      removePassword = false;
-      onPasswordChange(requestOrigin, response.data.passwordRequired);
-      notice = response.data.passwordRequired ? "Server password saved." : "Server password removed.";
     });
   }
 
@@ -447,16 +408,16 @@
             <Textarea rows={4} maxlength={1000} disabled={busy} bind:value={motd} placeholder="Leave blank to hide the message" />
           </label>
           <p class="field-hint">Appears above the chat for connected members.</p>
-          <label>Default voice bitrate (kbps)
-            {#if serverPreferences.audioBitrateLocked}
-              <Input type="number" value={serverPreferences.configuredAudioBitrate / 1000} disabled />
-            {:else}
-              <Input type="number" min="32" max="128" step="0.001" disabled={busy} bind:value={voiceKbps}
-                placeholder={String(serverPreferences.configuredAudioBitrate / 1000)} />
-            {/if}
-          </label>
+          {#if serverPreferences.audioBitrateLocked}
+            <VoiceBitrateField label="Default voice bitrate" defaultLabel="Server configuration"
+              defaultBitrate={serverPreferences.configuredAudioBitrate} value={null} disabled />
+          {:else}
+            <VoiceBitrateField label="Default voice bitrate" defaultLabel="Server configuration"
+              defaultBitrate={serverPreferences.configuredAudioBitrate} savedBitrate={serverPreferences.defaultAudioBitrate}
+              bind:value={voiceBitrate} disabled={busy} />
+          {/if}
           <p class="field-hint">{serverPreferences.audioBitrateLocked ? "The server environment sets this value." :
-            "Used by voice channels that inherit the default. Clear the field to use the server configuration."}</p>
+            "Used by voice channels that inherit the default."}</p>
           {#if serverPreferences.maxSupportedAttachmentMiB !== undefined}
             <label>Maximum chat attachment size (MiB)
               <Input type="number" min="1" max={serverPreferences.maxSupportedAttachmentMiB} step="1" required
@@ -578,11 +539,11 @@
                 <small class="field-hint">{account.id}</small>
               </span>
               {#if account.editable}
-                <select aria-label={`Role for ${account.displayName} (${account.id})`} value={account.role}
-                  disabled={busy || !members.roles.length} onchange={(event) => setRole(event, account)}>
-                  {#if !members.roles.includes(account.role)}<option value={account.role} disabled>{account.role}</option>{/if}
-                  {#each members.roles as role (role)}<option value={role}>{role}</option>{/each}
-                </select>
+                <SelectField label={`Role for ${account.displayName} (${account.id})`} hideLabel
+                  options={members.roles.includes(account.role) ? roleOptions
+                    : [{ label: account.role, value: account.role, disabled: true }, ...roleOptions]}
+                  disabled={busy || !roleOptions.length}
+                  bind:value={() => account.role, (role) => void setRole(account, role)} />
               {:else}
                 <span>{account.role}</span>
               {/if}
@@ -620,22 +581,6 @@
         <p class="field-hint">Clear the URL to remove the banner.</p>
         <div class="dialog-actions"><Button variant="default" type="submit" disabled={busy}>Save banner</Button></div>
       </form>
-    {:else if tab === "password" && permissions.includes("manageSettings")}
-      {#if passwordLocked}
-        <p class="field-hint">The server environment manages the shared password.</p>
-      {:else if passwordLocked === false}
-        <form class="dialog-form" onsubmit={savePassword}>
-          <p class="field-hint">{passwordRequired ? "A password is required for new sign-ins." : "Set a shared password to require it for new sign-ins."}</p>
-          <label>Server password<Input type="password" autocomplete="new-password" maxlength={128} required={!removePassword}
-            disabled={busy || removePassword} bind:value={password} /></label>
-          {#if passwordRequired}
-            <Checkbox label="Remove server password" disabled={busy} bind:checked={removePassword} />
-          {/if}
-          <div class="dialog-actions"><Button variant="default" type="submit" disabled={busy}>Save password</Button></div>
-        </form>
-      {:else if !busy}
-        <Button variant="outline" onclick={loadPassword}>Load password settings</Button>
-      {/if}
     {:else if tab === "invitation" && permissions.includes("manageInvitations")}
       <form class="dialog-form" onsubmit={saveInvitation}>
         <section class="invite-panel">

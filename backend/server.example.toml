@@ -1,68 +1,183 @@
+# Korero voice server configuration.
+# Every setting is optional; omitted values use the defaults shown below. Each setting can
+# also be supplied as VOICE_<SECTION>_<KEY> (e.g. VOICE_SERVER_PORT), which takes precedence
+# over this file. Unless stated otherwise, lists accept up to 32 strings of at most 2048
+# characters each, and all numbers must be integers within the range shown.
+# Validate a file with: voice-server --config ./server.toml config validate
+
+# ---------------------------------------------------------------------------
+# Signalling server: HTTPS / secure WebSocket endpoint and account policy.
+# ---------------------------------------------------------------------------
 [server]
+# Display name shown to clients. 1-100 characters, no control characters and at least one
+# non-space character. An Owner/Administrator may change it via the API unless set by env.
 name = "Voice Server"
+# Address for HTTPS/WSS to listen on: an IPv4 or IPv6 literal only (no DNS name).
+# "::" binds all IPv6 and IPv4-mapped addresses; "0.0.0.0" binds IPv4 only.
 host = "::"
+# TCP port for HTTPS and secure WebSocket. Valid: 1-65535. Must not overlap the media
+# worker ports when media TCP is enabled.
 port = 8443
+# New account policy. Valid: "open" (anyone), "invitation" (any valid invite),
+# "admin" (Administrator/Owner invite only), "disabled" (existing accounts can still sign in).
+# Host-only setting: change in TOML or via VOICE_SERVER_REGISTRATION, not the API.
 registration = "open"
+# Maximum number of simultaneously online users. Valid: 1-10000. Host-only setting.
 max_users = 128
+# Cross-origin browser requests are allowed only from these exact origins, up to 32 entries.
+# Valid: "https://host[:port]" or "http://host[:port]" with no path, plus the special value
+# "capacitor://localhost". [] permits same-origin requests only.
 # For the Capacitor app, explicitly allow https://localhost and capacitor://localhost.
 origins = []
+# Public signalling addresses/IPs published at startup and added as TLS SANs.
+# Valid: up to 32 IP literals or DNS names, without a scheme or port (e.g. "voice.example.com").
 public_addresses = []
+# Exact IP addresses of reverse proxies allowed to set X-Forwarded-For for rate limiting.
+# Valid: up to 32 IP literals; wildcard addresses ("::", "0.0.0.0") are rejected.
+# Required to be non-empty when tls.mode = "proxy".
 trusted_proxies = []
-# Optional shared password required for new sign-ins/registrations. Leave empty to disable.
+# Optional shared password required for new sign-ins/registrations. Valid: string up to 128
+# characters; "" disables it. Stored as an Argon2id hash.
 password = ""
 
+# ---------------------------------------------------------------------------
+# TLS: HTTPS is always used. Self-signed/manual certificates are pinned by clients.
+# ---------------------------------------------------------------------------
 [tls]
+# Certificate source. Valid: "self-signed" (generated and renewed automatically, clients
+# verify a public-key pin), "manual" (your own PEM files), "proxy" (TLS terminated by a
+# trusted reverse proxy, which must also present TLS to clients).
 mode = "self-signed"
+# Path to a PEM certificate chain, including intermediates when applicable.
+# Valid: string up to 2048 characters; required when mode = "manual".
 # certificate = "/etc/voice/server.crt"
+# Path to the matching PEM private key, readable only by the server user (owner-only mode).
+# Valid: string up to 2048 characters; required when mode = "manual".
 # private_key = "/etc/voice/server.key"
+# Extra subject alternative names for the self-signed certificate.
+# Valid: up to 32 IP literals or DNS names without a port; add signalling addresses that
+# cannot be discovered automatically (see also server.public_addresses).
 names = []
 
+# ---------------------------------------------------------------------------
+# WebRTC media (SFU): bind/announced addresses, worker ports and ICE servers.
+# ---------------------------------------------------------------------------
 [media]
-# Empty means enumerate concrete interface addresses for direct LAN use.
+# Concrete local IPs to bind media to. Valid: up to 32 unscoped IP literals; [] discovers
+# local IPv4 and non-link-local IPv6 addresses for direct LAN use.
+# Use only one of listen_ips, listen (below) or the legacy listen_ip.
 listen_ips = []
+# Alternative per-interface form: up to 32 entries of { ip = "...", announced_address = "..." }.
+# Each announced_address is the public IP/name for that bind (IP family must match).
+# Mutually exclusive with listen_ips, listen_ip, announced_address and announced_ipv6.
 # Alternatively set listen = [{ ip = "192.168.1.100" }, { ip = "192.168.1.101", announced_address = "203.0.113.10" }]
+# Public IP address or DNS name advertised in ICE candidates in place of the local bind.
+# Valid: IP literal or DNS name without a port; "" uses the bind address. Required for a
+# wildcard bind. Mutually exclusive with media.listen.
 announced_address = ""
+# Public IPv6 literal advertised in ICE candidates. Valid: an IPv6 address; "" uses the
+# bind address. Mutually exclusive with media.listen.
 announced_ipv6 = ""
+# Base media port. Workers use consecutive ports port .. port + workers - 1 for UDP and/or
+# TCP. Valid: 1-65535 with no overflow or overlap with server.port when media TCP is enabled.
 port = 8444
+# Number of media worker processes/ports. Valid: 1-32.
 workers = 1
+# Target audio bitrate in bits per second. Valid: 32000-128000 (32-128 kbit/s).
 target_audio_bitrate = 64000
+# Offer UDP media candidates. Valid: true or false; at least one of enable_udp/enable_tcp
+# must be true.
 enable_udp = true
+# Offer TCP media candidates as a fallback. Valid: true or false; at least one of
+# enable_udp/enable_tcp must be true.
 enable_tcp = true
+# External STUN/TURN servers exposed to authenticated clients. Valid: up to 8 entries of
+# { urls = ["stun:..."], username = "...", credential = "..." } where each URL starts with
+# stun:, stuns:, turn: or turns:; username and credential are optional.
 ice_servers = []
 
+# ---------------------------------------------------------------------------
+# Authentication: credential lifetimes in seconds.
+# ---------------------------------------------------------------------------
 [authentication]
+# Access token lifetime. Valid: 1-86400 seconds (up to 24 hours).
 access_seconds = 900
+# Refresh token lifetime. Valid: 2-31536000 seconds (up to 365 days), and strictly greater
+# than access_seconds and refresh_retry_seconds.
 refresh_seconds = 7776000
+# Lifetime of the one-time setup token used to claim the first Owner.
+# Valid: 30-86400 seconds.
 setup_seconds = 900
+# Lifetime of a single-use WebSocket ticket obtained over authenticated HTTP.
+# Valid: 2-120 seconds.
 ticket_seconds = 20
+# Window in which retrying an already-used refresh token yields the same new credential
+# pair instead of revoking the device session. Valid: 1-60 seconds.
 refresh_retry_seconds = 10
+# Maximum independently revocable device sessions per account. Valid: 1-1000.
 max_sessions = 32
 
+# ---------------------------------------------------------------------------
+# Resource and rate limits (integers). Per-minute limits are token buckets, enforced
+# per account unless stated otherwise.
+# ---------------------------------------------------------------------------
 [limits]
+# Maximum simultaneous WebSocket connections per account. Valid: 1-32.
 connections_per_account = 4
+# Maximum unauthenticated WebSocket connections across the server. Valid: 1-2048.
 pending_connections = 32
+# Maximum unauthenticated WebSocket connections per client IP. Valid: 1-2048; also capped
+# at half of pending_connections when that pool has two or more slots.
 pending_connections_per_ip = 4
+# Maximum voice transports and simultaneous outgoing screen shares per connection, counted separately. Valid: 2-16.
 transports = 2
+# Maximum audio producers per connection. Valid: 1-16 (one producer of each media kind per screen share).
 producers = 1
+# Maximum voice, screen video, or screen audio consumers per connection, counted separately. Valid: 1-1024 (one camera).
 consumers = 128
+# Maximum members per channel. Valid: 1-1024; the effective cap is the smaller of this and
+# the channel's own capacity.
 users_per_channel = 32
-max_channels = 1024
+# Maximum total channels. Valid: 1-10000.
+# max_channels = 1024
+# Maximum WebSocket message size in bytes; also caps attachment sizes.
+# Valid: 4096-262144 (4-256 KiB).
 websocket_bytes = 65536
+# Maximum in-flight requests per WebSocket connection. Valid: 1-128.
 websocket_pending = 16
+# Realtime WebSocket requests per account per minute. Valid: 10-60000.
 websocket_requests_per_minute = 3600
+# Media operations per account per minute. Valid: 1-20000.
 media_per_minute = 1800
+# ICE restarts per account per minute. Valid: 1-1000.
 ice_restarts_per_minute = 30
+# Channel joins per account per minute. Valid: 1-1000.
 channel_joins_per_minute = 60
+# Attachment uploads per account per minute. Valid: 1-10000.
 attachment_uploads_per_minute = 120
+# Attachment downloads per account per minute. Valid: 1-10000.
 attachment_downloads_per_minute = 240
+# Downloaded attachment data per account per minute. Valid: 1048576-1073741824 bytes (1 MiB-1 GiB).
 attachment_download_bytes_per_minute = 134217728
+# Concurrent attachment uploads across the server. Valid: 1-256.
 attachment_uploads_concurrent = 32
+# HTTP sign-in/authentication requests per client IP per minute. Valid: 1-1000.
 auth_per_minute = 30
+# HTTP registration requests per client IP per minute. Valid: 1-1000.
 registration_per_minute = 12
+# WebSocket upgrade attempts per client IP per minute. Valid: 1-1000.
 upgrades_per_minute = 60
 
+# ---------------------------------------------------------------------------
+# Chat messaging.
+# ---------------------------------------------------------------------------
 [messaging]
+# Store messages on the server for later history. Valid: true or false; false delivers
+# messages only to currently connected members (no history).
 persistence = false
+# How long stored messages are retained. Valid: 1-8760 hours (up to 365 days).
 retention_hours = 24
+# Maximum length of a message. Valid: 1-8192 characters.
 max_length = 2000
+# Chat messages per account per minute. Valid: 1-10000.
 per_minute = 120

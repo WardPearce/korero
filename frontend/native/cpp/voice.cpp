@@ -519,8 +519,17 @@ void Voice::set_send(rust::Str transport) {
   impl_->track = impl_->factory->CreateAudioTrack("korero-microphone", source.get());
   if (!impl_->track) throw std::runtime_error("Could not create the microphone track");
   const json codec = {{"opusDtx", true}, {"opusFec", true}, {"opusStereo", false},
-                      {"opusMaxAverageBitrate", p.value("bitrate", uint32_t{48000})}, {"opusPtime", uint32_t{20}}};
+                      {"opusMaxAverageBitrate", uint32_t{128000}}, {"opusPtime", uint32_t{20}}};
   impl_->producer.reset(impl_->send->Produce(&impl_->listeners, impl_->track.get(), nullptr, &codec, nullptr));
+  set_bitrate(p.at("bitrate").get<uint32_t>());
+}
+
+void Voice::set_bitrate(uint32_t bitrate) {
+  auto* sender = impl_->producer->GetRtpSender();
+  auto parameters = sender->GetParameters();
+  parameters.encodings.at(0).max_bitrate_bps = bitrate;
+  const auto result = sender->SetParameters(parameters);
+  if (!result.ok()) throw std::runtime_error(result.message());
 }
 
 void Voice::set_receive(rust::Str transport) {

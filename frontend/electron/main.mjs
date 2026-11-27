@@ -133,7 +133,7 @@ function openWindow() {
     minHeight: 600,
     autoHideMenuBar: true,
     title: "Korero.chat",
-    icon: join(dist, "vnx-icon.png"),
+    icon: join(dist, "korero-logo.png"),
     webPreferences: {
       preload: join(directory, "preload.cjs"),
       contextIsolation: true,
@@ -145,10 +145,20 @@ function openWindow() {
   contents.on("will-navigate", (event, url) => {
     if (!isAppPage(url)) event.preventDefault();
   });
-  contents.setWindowOpenHandler(({ url }) => {
+  contents.setWindowOpenHandler(({ url, frameName }) => {
+    if (url === "about:blank" && /^korero-screen-share-[\da-f-]{36}$/.test(frameName)) {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: { autoHideMenuBar: true, minWidth: 320, minHeight: 240 },
+      };
+    }
     const external = URL.parse(url);
     if (external && ["https:", "http:", "mailto:"].includes(external.protocol)) void shell.openExternal(external.href).catch(() => {});
     return { action: "deny" };
+  });
+  contents.on("did-create-window", (popup) => {
+    popup.webContents.on("will-navigate", (event) => event.preventDefault());
+    popup.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   });
   window.once("closed", () => { window = undefined; });
   void window.loadURL(appUrl);

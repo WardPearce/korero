@@ -7,8 +7,9 @@ import { styleText } from "node:util";
 import { createApp } from "./app";
 import { defaultToml, endpoint, loadConfig, localAddresses, type Config } from "./config";
 import { lockDirectory, openDatabase, audit, snapshotDatabase, type Store } from "./database";
-import { accounts, metadata, settings } from "./database/schema";
+import { accounts, hostedAccounts, metadata, settings } from "./database/schema";
 import { Auth } from "./modules/auth";
+import { HostedAccounts } from "./modules/hosted-accounts";
 import { Media } from "./modules/media";
 import { Realtime } from "./modules/realtime";
 import { loadCredentials } from "./security/credentials";
@@ -142,7 +143,7 @@ async function backup(db: Store, config: Config, destination: string) {
   console.log(`Backup saved in ${output}`);
 }
 
-async function start(db: Store, auth: Auth, config: Config) {
+async function start(db: Store, auth: Auth, hosted: HostedAccounts, config: Config) {
   const tls = await identity(config);
   delete process.env.MEDIASOUP_USE_VALGRIND;
   delete process.env.MEDIASOUP_VERSION;
@@ -174,7 +175,7 @@ async function start(db: Store, auth: Auth, config: Config) {
       throw new Error(`Media worker could not start. Check OpenSSL 3.5.9+, media addresses and port availability (${detail})`);
     }
     realtime = new Realtime(db, auth, media, config);
-    const app = createApp(config, auth, media, realtime, { serverId, fingerprint: tls?.fingerprint });
+    const app = createApp(config, auth, hosted, media, realtime, { serverId, fingerprint: tls?.fingerprint });
     app.listen({ hostname: config.server.host, port: config.server.port, reusePort: false,
       websocket: {
         // Elysia's route-level pong handler drops the frame payload.
@@ -218,14 +219,16 @@ export async function cli(args: string[]) {
   let db: Store | undefined;
   try {
     db = openDatabase(config.directory);
-    const initialized = !!db.select({ id: accounts.id }).from(accounts).limit(1).get();
-    const auth = new Auth(db, await loadCredentials(config.directory, initialized), config);
+    const initialized = Boolean(db.select({ id: accounts.id }).from(accounts).limit(1).get() ||
+      db.select({ username: hostedAccounts.username }).from(hostedAccounts).limit(1).get());
+    const credentials = await loadCredentials(config.directory, initialized);
+    const auth = new Auth(db, credentials, config);
     applySettings(db, config);
     if (!auth.passwordLocked && config.server.password) auth.syncConfiguredServerPassword(config.server.password);
     switch (options.command) {
       case "start":
         if (!existsSync(config.file)) await atomicWrite(config.file, defaultToml);
-        await start(db, auth, config);
+        await start(db, auth, new HostedAccounts(db, credentials, config), config);
         break;
       case "admin setup-token": console.log(formatSetup(auth.issueSetup(true)!)); break;
       case "identity fingerprint":

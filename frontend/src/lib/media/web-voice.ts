@@ -1,4 +1,4 @@
-import type { Consumer, ConsumerOptions, RtpCapabilities, Transport, TransportOptions } from "mediasoup-client/types";
+import type { Consumer, ConsumerOptions, Producer, RtpCapabilities, Transport, TransportOptions } from "mediasoup-client/types";
 import type { Snapshot, VoiceState } from "../connection/client";
 import type { MobileCallAudio } from "./mobile-call-audio";
 import type { MediaRequest } from "./screen-media";
@@ -26,6 +26,7 @@ export class WebVoice {
   private receiveGeneration = 0;
   private bitrate = 48000;
   private sender?: Transport;
+  private producer?: Producer;
   private receiver?: Transport;
   private microphone?: MediaStreamTrack;
   private sources = new Set<string>();
@@ -63,7 +64,10 @@ export class WebVoice {
     const { muted, deafened, adminMuted, adminDeafened, afk } = member;
     const receive = !deafened && !adminDeafened && !afk;
     const send = receive && !muted && !adminMuted;
-    this.bitrate = snapshot.targetAudioBitrate ?? this.bitrate;
+    const bitrate = snapshot.channels.find(({ id }) => id === this.channelId)?.audioBitrate
+      ?? snapshot.targetAudioBitrate ?? 48000;
+    const bitrateChanged = bitrate !== this.bitrate;
+    this.bitrate = bitrate;
     if (receive !== this.canReceive) {
       this.canReceive = receive;
       if (receive) this.playback = this.callAudio.setMode("playback", () => !this.closed && this.canReceive);
@@ -73,6 +77,8 @@ export class WebVoice {
       this.canSend = send;
       this.restartSending();
       if (!send) this.releaseMicrophoneMode();
+    } else if (send && bitrateChanged) {
+      this.updateSendBitrate();
     }
   }
 
@@ -182,11 +188,13 @@ export class WebVoice {
         void this.request<{ id: string }>("media.producer.create", { transportId: transport.id, kind, rtpParameters })
           .then(accept, reject);
       });
-      await transport.produce({
+      const producer = await transport.produce({
         track,
-        codecOptions: { opusDtx: true, opusFec: true, opusStereo: false, opusMaxAverageBitrate: this.bitrate, opusPtime: 20 },
+        encodings: [{ maxBitrate: this.bitrate }],
+        codecOptions: { opusDtx: true, opusFec: true, opusStereo: false, opusMaxAverageBitrate: 128000, opusPtime: 20 },
       });
       if (!current()) return;
+      this.producer = producer;
       this.publishing = true;
       this.changed();
     }).catch((error) => {
@@ -194,9 +202,34 @@ export class WebVoice {
     });
   }
 
+  private updateSendBitrate() {
+    const generation = this.sendGeneration;
+    this.sending = this.sending.then(async () => {
+      if (generation !== this.sendGeneration || !this.producer) return;
+      const sender = this.producer.rtpSender;
+      const parameters = sender?.getParameters();
+      const encoding = parameters?.encodings[0];
+      if (!sender || !parameters || !encoding) throw new Error("The voice bitrate could not be updated.");
+      if (encoding.maxBitrate !== this.bitrate) {
+        encoding.maxBitrate = this.bitrate;
+        await sender.setParameters(parameters);
+      }
+      if (generation === this.sendGeneration && this.sendError) {
+        this.sendError = null;
+        this.changed();
+      }
+    }).catch((error) => {
+      if (generation === this.sendGeneration) {
+        this.sendError = error instanceof Error ? error.message : String(error);
+        this.changed();
+      }
+    });
+  }
+
   private stopSending() {
     this.microphone?.stop();
     this.microphone = undefined;
+    this.producer = undefined;
     this.publishing = false;
     const stopping = this.stopTransport(this.sender);
     this.sender = undefined;

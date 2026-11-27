@@ -18,6 +18,7 @@ public:
 
   rust::String capabilities() const;
   void set_send(rust::Str transport);
+  void set_bitrate(uint32_t bitrate);
   void set_receive(rust::Str transport);
   void consume(rust::Str parameters);
   void set_consumer_volume(rust::Str producer_id, uint16_t level);

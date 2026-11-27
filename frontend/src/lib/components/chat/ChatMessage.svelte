@@ -46,7 +46,7 @@
     gap: 10px;
     padding: calc(var(--ui-gap) * .55) var(--ui-gap);
   }
-  .chat-message:hover { background: var(--muted); }
+  .chat-message:hover { background: var(--control-hover); }
   .chat-message.compact {
     --chat-avatar-size: 1.5rem;
     gap: 6px;

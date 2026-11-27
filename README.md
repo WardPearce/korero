@@ -19,10 +19,15 @@ to accounts. **Audit log** shows account activity,
 connections, voice channel joins and leaves, moderation, and server changes.
 Filter by event type or actor account ID.
 
-The first owner claims the server with its setup token. Regular sign-in uses
-your Korero.chat identity and follows the server’s registration policy. Right-click
+The first owner claims the server with its setup token. Voice servers recognize
+your Ed25519 identity and apply their own registration policies. Right-click
 a channel to change its password or bitrate. Leave the channel bitrate blank to
 inherit the server default.
+
+At launch, you can create or sign in to an optional hosted account. Use
+`voice.korero.chat` or enter your own provider. Signing in restores your encrypted
+identity and saved servers on any device. You can also continue with a local
+identity and manage your own encrypted backup in Identity settings.
 
 Start the server with `--config ./server.toml` from `backend/` to use that
 file. Host-side TOML changes apply after a restart. Environment overrides take

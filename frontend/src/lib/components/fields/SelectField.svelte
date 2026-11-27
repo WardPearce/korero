@@ -1,12 +1,13 @@
 <script lang="ts" generics="Value extends string">
   import * as Select from "#lib/components/ui/select/index.js";
 
-  let { label, options, value = $bindable(), placeholder = "Choose an option", disabled = false }: {
+  let { label, options, value = $bindable(), placeholder = "Choose an option", disabled = false, hideLabel = false }: {
     label: string;
     options: readonly { value: Value; label: string; disabled?: boolean }[];
     value?: Value;
     placeholder?: string;
     disabled?: boolean;
+    hideLabel?: boolean;
   } = $props();
 
   const id = $props.id();
@@ -19,7 +20,7 @@
 </script>
 
 <div class="grid min-w-0 gap-1">
-  <label for={id} class="text-sm font-medium">{label}</label>
+  <label for={id} class={hideLabel ? "sr-only" : "text-sm font-medium"}>{label}</label>
   <Select.Root type="single" {disabled} items={[...options]}
     bind:value={() => value ?? "", changeValue}>
     <Select.Trigger {id} class="w-full min-w-0 text-left">

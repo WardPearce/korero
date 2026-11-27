@@ -76,35 +76,3 @@ export async function getMemberVolumes(serverId: string) {
 export async function saveMemberVolumes(serverId: string, value: Record<string, number>) {
   await preferences.local.put({ key: `member-volumes:${serverId}`, value });
 }
-
-export async function getUsername() {
-  const stored = await preferences.local.get("username");
-  return typeof stored?.value === "string" ? stored.value : "";
-}
-
-export async function saveUsername(value: string) {
-  const username = value.trim();
-  const length = Array.from(username).length;
-  if (length < 4 || length > 32 || /[\u0000-\u001f\u007f]/.test(username)) {
-    throw new Error("Enter a username between 4 and 32 characters.");
-  }
-  await preferences.local.put({ key: "username", value: username });
-  return username;
-}
-
-export async function migrateSavedServers() {
-  const legacy = localStorage.getItem("korero:servers");
-  if (!legacy) return;
-  let entries: unknown;
-  try { entries = JSON.parse(legacy); } catch { return; }
-  if (!Array.isArray(entries)) return;
-  await preferences.transaction("rw", preferences.servers, async () => {
-    for (const entry of entries) {
-      if (typeof entry?.origin === "string" && typeof entry?.name === "string" &&
-          !await preferences.servers.get(entry.origin)) {
-        await preferences.servers.put({ name: entry.name, origin: entry.origin });
-      }
-    }
-  });
-  localStorage.removeItem("korero:servers");
-}

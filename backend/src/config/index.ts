@@ -72,13 +72,13 @@ export async function loadConfig(options: { file?: string; directory?: string } 
     const settings = raw[section] ?? {};
     if (!objectValue(settings)) throw new Error(`Expected [${section}] table`);
     const next: Record<string, unknown> = { ...values, ...settings };
-    if (section === "server" && next.registration === "closed") next.registration = "disabled";
     for (const [key, value] of Object.entries(values)) {
       const env = process.env[`VOICE_${section.toUpperCase()}_${key.toUpperCase()}`];
       if (env === undefined) continue;
       try { next[key] = typeof value === "string" ? env : JSON.parse(env); }
       catch { throw new Error(`Invalid environment override for ${section}.${key}`); }
     }
+    if (section === "server" && next.registration === "closed") next.registration = "disabled";
     merged[section] = next;
   }
   for (const section of Object.keys(raw)) {

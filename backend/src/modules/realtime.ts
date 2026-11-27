@@ -5,7 +5,7 @@ import type { Config } from "../config";
 import { audit, channelPermissions, defaultPermissions, DEFAULT_ROLE_KEY, editableBuiltInRoles, INITIAL_ROLE, LOBBY,
   memberPermissions, permissions, roles, type Permission, type Role, type Store } from "../database";
 import { accounts, accountRoles, attachments, auditEvents, bans, channelOverrides, channels, hearingRestrictions, messages, rolePermissions, rolesTable, settings, speakingRestrictions } from "../database/schema";
-import { attachmentDataLength, bytesPerMiB, decode, defaultAttachmentMiB, maxSupportedAttachmentMiB, type httpBodies, type Request } from "../protocol";
+import { attachmentDataLength, bytesPerMiB, decode, defaultAttachmentMiB, maxSupportedAttachmentMiB, pokeMaxLength, type httpBodies, type Request } from "../protocol";
 import { errorResponse, fail, ProtocolError, RateLimit } from "../security/errors";
 import { Auth, isBanned, type Account, type Session } from "./auth";
 import { DirectMessages } from "./direct-messages";
@@ -57,6 +57,7 @@ export class Realtime {
   private readonly attachmentDownloadRate: RateLimit;
   private readonly requestRate: RateLimit;
   private readonly messageRate: RateLimit;
+  private readonly pokeRate = new RateLimit(6);
   private readonly directMessages: DirectMessages;
   private readonly mediaRate: RateLimit;
   private readonly iceRate: RateLimit;
@@ -269,6 +270,9 @@ export class Realtime {
     if (!peers) return;
     const text = JSON.stringify({ version: 1, type, payload });
     for (const peer of [...peers]) if (peer !== except) this.send(peer, text);
+  }
+  private activeDevices(accountId: string) {
+    return [...(this.online.get(accountId) ?? [])].filter(({ session }) => session && this.auth.getSession(session.id));
   }
   private broadcastVisible(channelId: string, type: string, payload: unknown) {
     const channel = this.catalog.get(channelId);
@@ -594,6 +598,7 @@ export class Realtime {
       canAttachFiles: canSendText && this.allowed(account, "attachFiles", joinedChannel),
       directMessages: { maxBytes: this.directMessages.maxBytes, persistent: this.config.messaging.persistence,
         canSend: this.allowed(account, "sendDirectMessages") },
+      pokeMaxLength,
       canShareScreen: canSpeak && this.allowed(account, "shareScreen", joinedChannel),
       canUseCamera: canSpeak && this.allowed(account, "useCamera", joinedChannel),
       channels: visible.sort(compareChannels).map(
@@ -1170,15 +1175,28 @@ export class Realtime {
         this.messageRate.take(actor.id);
         this.directMessages.peer(actor.id, accountId);
         if (isBanned(this.db, accountId)) fail("NOT_FOUND");
-        const activeDevices = (accountId: string) => [...(this.online.get(accountId) ?? [])]
-          .filter(({ session }) => session && this.auth.getSession(session.id));
-        const recipients = activeDevices(accountId);
+        const recipients = this.activeDevices(accountId);
         if (!recipients.length && !this.config.messaging.persistence) {
           throw new ProtocolError("CONFLICT", "The recipient is offline and this server does not retain direct messages.");
         }
         const message = this.directMessages.send(actor.id, request.payload);
-        if (message) this.broadcast([...activeDevices(actor.id), ...recipients], "direct.created", message);
+        if (message) this.broadcast([...this.activeDevices(actor.id), ...recipients], "direct.created", message);
         return { messageId: id };
+      }
+      case "direct.poke": {
+        const { accountId, message } = request.payload;
+        this.require(actor, "sendDirectMessages");
+        if (actor.id === accountId) fail("INVALID_REQUEST");
+        this.pokeRate.take(actor.id);
+        const recipients = this.activeDevices(accountId);
+        if (!recipients.length || isBanned(this.db, accountId)) {
+          throw new ProtocolError("CONFLICT", "The recipient is offline.");
+        }
+        this.broadcast(recipients, "direct.poked", {
+          id: randomUUID(), senderId: actor.id, senderName: actor.displayName, recipientId: accountId,
+          message: message?.trim() || undefined,
+        });
+        return {};
       }
       case "message.delete": {
         const live = this.liveAttachments.get(request.payload.messageId);

@@ -8,23 +8,27 @@
   import { goto } from "$app/navigation";
   import { asset, resolve } from "$app/paths";
   import { page } from "$app/state";
-  import { ArrowRight, AudioLines, Bookmark, Cable, ListTree, LockKeyhole, Plus, Server, Settings2, X } from "@lucide/svelte";
+  import { ArrowRight, AudioLines, BellRing, Bookmark, Cable, ListTree, LockKeyhole, Plus, Server, Settings2, X } from "@lucide/svelte";
   import { onMount } from "svelte";
   import { AudioSettings, setAudioSettings } from "#lib/media/audio.svelte";
   import PaneDivider from "#lib/components/PaneDivider.svelte";
-  import { defaultMemberVolume, forgetPassword, getMemberVolumes, getSavedPassword, getUsername, migrateSavedServers, preferences, saveMemberVolumes, savePassword, type SavedServer } from "#lib/preferences";
+  import { defaultMemberVolume, forgetPassword, getMemberVolumes, getSavedPassword, preferences, saveMemberVolumes, savePassword, type SavedServer } from "#lib/preferences";
   import Avatar from "#lib/components/Avatar.svelte";
   import ContextActions from "#lib/components/ContextActions.svelte";
-  import IdentitySetup from "#lib/components/IdentitySetup.svelte";
+  import AccountSetup from "#lib/components/AccountSetup.svelte";
+  import LocalIdentitySetup from "#lib/components/LocalIdentitySetup.svelte";
   import IconButton from "#lib/components/IconButton.svelte";
   import Modal from "#lib/components/Modal.svelte";
   import ConnectionInfo from "#lib/components/server/ConnectionInfo.svelte";
+  import ScreenSharing from "#lib/components/media/ScreenSharing.svelte";
   import ServerAdministration from "#lib/components/server/ServerAdministration.svelte";
   import {
-    apiFor, call, messageFrom, desktopApp, offline, requestError, shortHost, watchVoice,
-    type MemberRequest, type ServerInfo, type VoiceState,
+    apiFor, call, directRequest, messageFrom, desktopApp, offline, requestError, shortHost, watchVoice,
+    type Member, type MemberRequest, type Poke, type ServerInfo, type VoiceState,
   } from "#lib/connection/client";
-  import { authenticateIdentity, getIdentity, identityError } from "#lib/identity/identity";
+  import { authenticateIdentity, getIdentity, identityError, setIdentity } from "#lib/identity/identity";
+  import { HostedAccount } from "#lib/identity/hosted-account";
+  import { identityModeKey, readLocalIdentity, rememberIdentityMode, type LocalProfile } from "#lib/identity/local-identity";
   import { browserServerOrigin, browserSession } from "#lib/connection/browser-session";
   import { applyAppearance, readAppearance } from "#lib/theme";
   import { readChatDisplay, saveChatDisplay, setChatDisplay, type ChatDisplay } from "#lib/chat/chat-display";
@@ -61,12 +65,12 @@
   let view = $state.raw<VoiceState>(offline);
   let serverInfo = $state.raw<ServerInfo | null>(null);
   let serverOrigin = $state("");
-  let savedServers = $state<SavedServer[]>([]);
+  let savedServers = $state.raw<SavedServer[]>([]);
+  let hostedAccount = $state.raw<HostedAccount>();
   let username = $state("");
-  let hasIdentity = $state(false);
-  let identityReady = $state(false);
-  let identitySetupOpen = $state(false);
-  let identityLoadError = $state("");
+  let identityReady = $derived(Boolean(username));
+  let setup = $state<"hosted" | "local" | "transfer" | null>(null);
+  let bookmarkUpdate = Promise.resolve();
   let connectOpen = $state(false);
   let connectBusy = $state(false);
   let connectError = $state("");
@@ -93,9 +97,16 @@
   let selectedChannelId = $state<string | null>(null);
   let mobilePane = $state<MobilePane>("room");
   let roomView = $state<RoomView>("chat");
+  let screenShareViewerTarget = $state<HTMLElement>();
+  let screenShareControlsTarget = $state<HTMLElement>();
   let directAccountId = $state<string | null>(null);
   let connectionInfo = $state.raw<{ origin: string; viewerId: string; connectionId: string } | null>(null);
   let unreadDirectAccounts = $state.raw<ReadonlySet<string>>(new Set());
+  let poke = $state.raw<Poke | null>(null);
+  let pokeTarget = $state.raw<(Pick<Member, "accountId" | "displayName"> & { viewerId: string }) | null>(null);
+  let pokeDraft = $state("");
+  let pokeError = $state("");
+  let sendingPoke = $state(false);
 
   let me = $derived(view.snapshot?.account);
   let online = $derived(view.phase === "online");
@@ -115,6 +126,12 @@
   );
 
   setWorkspace({
+    get identity() {
+      const identity = getIdentity();
+      if (username && identity) return { provider: hostedAccount?.origin, username, publicKey: identity.publicKey };
+    },
+    showAccountSetup() { if (identityReady && !connectBusy && !pending && !removing) setup = "transfer"; },
+    signOut,
     get view() { return view; },
     get serverOrigin() { return serverOrigin; },
     get serverId() { return serverInfo?.serverId ?? ""; },
@@ -127,6 +144,10 @@
     get richChat() { return serverInfo?.richChat === true; },
     get maxWebSocketBytes() { return serverInfo?.maxWebSocketBytes; },
     get screenSharing() { return Boolean(serverInfo?.screenSharing); },
+    get screenShareViewerTarget() { return screenShareViewerTarget; },
+    set screenShareViewerTarget(value) { screenShareViewerTarget = value; },
+    get screenShareControlsTarget() { return screenShareControlsTarget; },
+    set screenShareControlsTarget(value) { screenShareControlsTarget = value; },
     get channelAudioQuality() { return Boolean(serverInfo?.channelAudioQuality); },
     get channelWidth() { return channelWidth; },
     get channelMax() { return channelMax; },
@@ -143,6 +164,7 @@
     get directAccountId() { return directAccountId; },
     get unreadDirectAccounts() { return unreadDirectAccounts; },
     showDirectMessages,
+    showPoke,
     showConnectionInfo,
     showConnect,
     showServerSettings,
@@ -158,24 +180,15 @@
   onMount(() => {
     applyAppearance(readAppearance());
     void audio.load();
-    void Promise.all([migrateSavedServers().then(() => preferences.servers.toArray()), preferences.local.bulkGet(["rail", "channel"])])
-      .then(([servers, [rail, channel]]) => {
-        savedServers = servers;
+    void restoreIdentityMode();
+    void preferences.local.bulkGet(["rail", "channel"])
+      .then(([rail, channel]) => {
         if (typeof rail?.value === "number") savedRailWidth = Math.max(180, Math.min(340, rail.value));
         if (typeof channel?.value === "number") savedChannelWidth = Math.max(222, Math.min(500, channel.value));
       }).catch((error) => { actionError = messageFrom(error); });
-    void Promise.all([getIdentity(), getUsername()]).then(([identity, name]) => {
-      hasIdentity = Boolean(identity);
-      username = name;
-      identityReady = hasIdentity && Boolean(username);
-      identitySetupOpen = !identityReady;
-    }).catch((error: unknown) => {
-      identityLoadError = messageFrom(error);
-      identitySetupOpen = true;
-    });
     if (!desktopApp()) {
       const stop = browserSession.watch(applyView);
-      return () => { stop(); audio.dispose(); };
+      return () => { stop(); audio.dispose(); setIdentity(); };
     }
     let mounted = true;
     let receivedEvent = false;
@@ -188,7 +201,7 @@
       unlisten = stop;
       const state = await call<VoiceState & { serverOrigin?: string | null }>("voice_state");
       if (!mounted) return;
-      if (!receivedEvent) applyView(state);
+      if (!receivedEvent) applyView(state, false);
       const origin = state.serverOrigin;
       if (!origin || serverOrigin || connectBusy || view.phase === "offline") return;
       serverOrigin = origin;
@@ -201,10 +214,91 @@
       mounted = false;
       unlisten?.();
       audio.dispose();
+      setIdentity();
     };
   });
 
-  function applyView(state: VoiceState) {
+  async function restoreIdentityMode() {
+    try {
+      const hosted = await HostedAccount.restore();
+      if (hosted) {
+        useHostedIdentity(hosted);
+        void updateSavedServers("", (servers) => servers).catch(() => {});
+        return;
+      }
+      if (localStorage.getItem(identityModeKey) === "local") {
+        const profile = await readLocalIdentity();
+        if (profile) return useLocalIdentity(profile);
+      }
+    } catch (error) { actionError = messageFrom(error); }
+    setup = "hosted";
+  }
+
+  function useLocalIdentity(profile: LocalProfile) {
+    setIdentity(profile.identity);
+    username = profile.username;
+    savedServers = profile.servers;
+    setup = null;
+    rememberIdentityMode("local");
+  }
+
+  async function continueLocally() {
+    const profile = await readLocalIdentity();
+    if (profile) useLocalIdentity(profile);
+    else setup = "local";
+  }
+
+  async function transferIdentity(provider: string, name: string, password: string) {
+    await bookmarkUpdate;
+    if (hostedAccount) return hostedAccount.transfer(provider, name, password);
+    const profile = await readLocalIdentity();
+    if (!profile) throw new Error("The local identity could not be loaded.");
+    return HostedAccount.open(provider, name, password, {
+      privateKey: async () => profile.identity.privateKey,
+      servers: profile.servers,
+    });
+  }
+
+  function useHostedIdentity({ account, identity, servers }: Awaited<ReturnType<typeof HostedAccount.open>>) {
+    setIdentity(identity);
+    username = account.username;
+    savedServers = servers;
+    hostedAccount = account;
+    setup = null;
+    rememberIdentityMode("hosted");
+  }
+
+  async function signOut() {
+    const account = hostedAccount;
+    if (!account || connectBusy || pending || removing) return false;
+    if (serverOrigin && !await disconnect()) return false;
+    return runAction("sign-out", async () => {
+      await account.signOut();
+      setIdentity();
+      username = "";
+      savedServers = [];
+      hostedAccount = undefined;
+      setup = "hosted";
+    });
+  }
+
+  function updateSavedServers(origin: string, edit: (servers: SavedServer[]) => SavedServer[]) {
+    const account = hostedAccount;
+    const work = bookmarkUpdate.then(async () => {
+      const servers = account ? await account.updateServers(edit) : await preferences.transaction("rw", preferences.servers, async () => {
+        const entries = edit(await preferences.servers.toArray());
+        const entry = entries.find((server) => server.origin === origin);
+        if (entry) await preferences.servers.put(entry);
+        else await preferences.servers.delete(origin);
+        return entries;
+      });
+      if (hostedAccount === account) savedServers = servers;
+    });
+    bookmarkUpdate = work.catch(() => {});
+    return work;
+  }
+
+  function applyView(state: VoiceState, notify = true) {
     const channel = state.snapshot?.channelId;
     const connection = state.snapshot?.connectionId;
     const member = state.snapshot?.members.find(({ connectionId }) => connectionId === connection);
@@ -212,7 +306,15 @@
       !member.muted && !member.adminMuted && !member.deafened && !member.adminDeafened && !member.afk
       ? { channelId: channel, connectionId: connection } : undefined);
     if (channel && channel !== view.snapshot?.channelId) selectedChannelId = channel;
-    if (connection !== view.snapshot?.connectionId) unreadDirectAccounts = new Set();
+    if (connection !== view.snapshot?.connectionId) {
+      unreadDirectAccounts = new Set();
+      poke = null;
+      pokeTarget = null;
+    }
+    if (notify && state.lastPoke && state.lastPoke.id !== view.lastPoke?.id) {
+      poke = state.lastPoke;
+      playUiSound("poke");
+    }
     if (state.directMessages?.at(-1)?.id !== view.directMessages?.at(-1)?.id) {
       const previous = new Set(view.directMessages?.map(({ id }) => id));
       const unread = new Set(unreadDirectAccounts);
@@ -476,8 +578,9 @@
     }
     if (remembered) {
       const entry = { name: target.info.name, origin: target.origin, passwordRequired: target.info.passwordRequired };
-      savedServers = [entry, ...savedServers.filter(({ origin }) => origin !== target.origin)];
-      await preferences.servers.put(entry).catch((error) => { actionError = messageFrom(error); });
+      try {
+        await updateSavedServers(entry.origin, (servers) => [entry, ...servers.filter(({ origin }) => origin !== entry.origin)]);
+      } catch (error) { actionError = messageFrom(error); }
     }
     connectOpen = false;
     openWorkspace("channels");
@@ -588,6 +691,36 @@
     openWorkspace("room");
   }
 
+  function showPoke({ accountId, displayName }: Pick<Member, "accountId" | "displayName">) {
+    const snapshot = view.snapshot;
+    if (!online || !snapshot?.pokeMaxLength || !snapshot.directMessages?.canSend || sendingPoke) return;
+    pokeDraft = "";
+    pokeError = "";
+    pokeTarget = { accountId, displayName, viewerId: snapshot.connectionId };
+  }
+
+  async function sendPoke(event: SubmitEvent) {
+    event.preventDefault();
+    const target = pokeTarget;
+    if (!target || sendingPoke) return;
+    sendingPoke = true;
+    pokeError = "";
+    try {
+      await directRequest(target.viewerId, "direct.poke", { accountId: target.accountId, message: pokeDraft.trim() || undefined });
+      pokeTarget = null;
+    } catch (error) {
+      pokeError = messageFrom(error);
+    } finally {
+      sendingPoke = false;
+    }
+  }
+
+  function replyToPoke() {
+    if (!poke || !online || !serverInfo?.serverId) return;
+    showDirectMessages(poke.senderId);
+    poke = null;
+  }
+
   function showConnectionInfo(connectionId: string) {
     if (!online || !serverOrigin || !view.snapshot) return;
     connectionInfo = { origin: serverOrigin, viewerId: view.snapshot.connectionId, connectionId };
@@ -615,11 +748,8 @@
     removeError = "";
     try {
       if (origin === serverOrigin && !await disconnect()) throw new Error(actionError || "Could not disconnect from the server.");
-      await preferences.transaction("rw", preferences.servers, preferences.passwords, async () => {
-        await preferences.servers.delete(origin);
-        await preferences.passwords.where("origin").equals(origin).delete();
-      });
-      savedServers = savedServers.filter((server) => server.origin !== origin);
+      await updateSavedServers(origin, (servers) => servers.filter((server) => server.origin !== origin));
+      await preferences.passwords.where("origin").equals(origin).delete();
       removeServerOpen = false;
     } catch (error) {
       removeError = messageFrom(error);
@@ -691,6 +821,12 @@
 
 
   {@render children()}
+  {#if online && view.snapshot}
+    {#key view.snapshot.connectionId}
+      <ScreenSharing snapshot={view.snapshot} controlsTarget={screenShareControlsTarget}
+        inlineTarget={screenShareViewerTarget} visible={Boolean(screenShareViewerTarget)} />
+    {/key}
+  {/if}
 
   <nav class="mobile-nav" aria-label="Workspace navigation">
     <button aria-current={onWorkspace && mobilePane === "servers" ? "page" : undefined} onclick={() => openWorkspace("servers")}><Server size={18} /> Servers</button>
@@ -700,8 +836,48 @@
   </nav>
 </div>
 
-<IdentitySetup open={identitySetupOpen} {hasIdentity} migrationError={identityLoadError}
-  oncomplete={(name) => { username = name; identityReady = true; identitySetupOpen = false; }} />
+<div class="sr-only" role="status">
+  {#if poke}{poke.senderName} poked you. {poke.message}{/if}
+</div>
+{#if poke}
+  <div class="fixed inset-x-3 top-[max(0.75rem,env(safe-area-inset-top))] z-50 mx-auto flex max-w-md items-start gap-1 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg">
+    <button type="button" class="flex min-w-0 flex-1 items-start gap-3 rounded-md p-2 text-left hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+      onclick={replyToPoke}>
+      <BellRing size={20} class="mt-0.5 shrink-0 text-(--info)" aria-hidden="true" />
+      <span class="min-w-0 flex-1 wrap-anywhere">
+        <strong class="block text-sm">{poke.senderName} poked you</strong>
+        {#if poke.message}<span class="block text-sm">{poke.message}</span>{/if}
+        <span class="block text-xs text-muted-foreground">Reply in direct messages</span>
+      </span>
+    </button>
+    <IconButton label="Dismiss poke" onclick={() => { poke = null; }}><X size={16} aria-hidden="true" /></IconButton>
+  </div>
+{/if}
+
+{#if pokeTarget}
+  <Modal bind:open={() => true, (open) => { if (!open) pokeTarget = null; }}
+    title={`Poke ${pokeTarget.displayName}`} description="Send a sound and a pop-up to get their attention." dismissible={!sendingPoke}>
+    {#snippet icon()}<BellRing size={21} aria-hidden="true" />{/snippet}
+    <form class="dialog-form" onsubmit={sendPoke}>
+      <label>Message (optional)<Input autofocus maxlength={view.snapshot?.pokeMaxLength} bind:value={pokeDraft} /></label>
+      {#if pokeError}<p class="form-error" role="alert">{pokeError}</p>{/if}
+      <div class="dialog-actions">
+        <Button type="button" variant="outline" disabled={sendingPoke} onclick={() => { pokeTarget = null; }}>Cancel</Button>
+        <Button type="submit" disabled={sendingPoke}>{sendingPoke ? "Sending…" : "Send poke"}</Button>
+      </div>
+    </form>
+  </Modal>
+{/if}
+
+{#if setup === "transfer"}
+  <AccountSetup open={true} migration={{ username, origin: hostedAccount?.origin, submit: transferIdentity }}
+    onlocal={async () => { setup = null; }} oncomplete={useHostedIdentity} />
+{:else if setup === "hosted"}
+  <AccountSetup open={true} onlocal={continueLocally} oncomplete={useHostedIdentity} />
+{/if}
+{#if setup === "local"}
+  <LocalIdentitySetup open={true} onback={() => { setup = "hosted"; }} oncomplete={useLocalIdentity} />
+{/if}
 
 <Modal bind:open={connectOpen} title={trustPrompt ? (trustPrompt.previous ? "Server certificate changed" : "Trust this server?") : discovery ? discovery.info.name : "Connect to a server"} description={discovery ? shortHost(discovery.origin) : "Paste an invitation link or enter a server address."} dismissible={!connectBusy}>
   {#snippet icon()}{#if discovery?.info.passwordRequired}<LockKeyhole size={21} />{:else}<Cable size={21} />{/if}{/snippet}
@@ -777,15 +953,7 @@
     {#key serverOrigin}
       <ServerAdministration origin={serverOrigin} title={serverTitle} permissions={serverPermissions}
         extended={Boolean(serverInfo.extendedServerAdministration)}
-        bannerSupported={serverInfo.bannerImageUrl !== undefined} {bannerImageUrl} onclose={showChat}
-        passwordRequired={Boolean(serverInfo.passwordRequired)} onPasswordChange={(origin, passwordRequired) => {
-          if (serverInfo && origin === serverOrigin) serverInfo = { ...serverInfo, passwordRequired };
-          const entry = savedServers.find((server) => server.origin === origin);
-          if (entry) {
-            entry.passwordRequired = passwordRequired;
-            void preferences.servers.put({ ...entry }).catch((error) => { actionError = messageFrom(error); });
-          }
-        }} />
+        bannerSupported={serverInfo.bannerImageUrl !== undefined} {bannerImageUrl} onclose={showChat} />
     {/key}
   {/if}
 {/snippet}

@@ -37,10 +37,12 @@ bun install --frozen-lockfile
 bun run electron:dev
 ```
 
-`bun run electron:pack` builds an AppImage and a Debian package in
-`frontend/desktop-dist`. On Fedora the bundled Debian packaging tool needs
-`libxcrypt-compat`. System-wide talk shortcuts use X11. The focused-window
-shortcuts also work in Wayland sessions.
+`bun run electron:pack` builds Linux x86-64 AppImage, Debian, RPM, Snap, and ZIP
+packages in `frontend/desktop-dist`. On Fedora install `libxcrypt-compat` for
+Electron Builder's bundled FPM and `rpm-build` for `rpmbuild`.
+
+System-wide talk shortcuts use X11. The focused-window shortcuts also work in
+Wayland sessions.
 
 When connecting to a server with a private certificate, verify the displayed
 certificate SHA-256 fingerprint with the operator before approving it. See

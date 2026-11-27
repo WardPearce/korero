@@ -1,39 +1,51 @@
 <script lang="ts">
   import { BitsConfig, Portal } from "bits-ui";
-  import { ExternalLink, Grip, Monitor, MonitorUp, PanelTop, Play, Square, Video, VideoOff, X } from "@lucide/svelte";
-  import { onDestroy, tick, untrack } from "svelte";
+  import { Monitor, MonitorUp, Square, Video, VideoOff, X } from "@lucide/svelte";
+  import { onDestroy, untrack } from "svelte";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
   import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
   import SelectField from "#lib/components/fields/SelectField.svelte";
   import Modal from "#lib/components/Modal.svelte";
+  import ScreenShareViewer from "./ScreenShareViewer.svelte";
   import { messageFrom, type ScreenShare, type Snapshot } from "#lib/connection/client";
-  import { chooseScreen, ScreenMedia, supportsWebRtc, type VideoSource } from "#lib/media/screen-media";
+  import { chooseScreen, ScreenMedia, supportsWebRtc, type ScreenSettings, type ScreenSubscription, type VideoSource } from "#lib/media/screen-media";
 
-  let { snapshot, visible, controlsTarget, inlineTarget, onDock, source = "screen" }: {
-    snapshot: Snapshot; visible: boolean; controlsTarget: HTMLElement; source?: VideoSource;
-    inlineTarget?: HTMLElement; onDock?: () => void;
+  let { snapshot, visible, controlsTarget, inlineTarget, source = "screen" }: {
+    snapshot: Snapshot; visible: boolean; controlsTarget?: HTMLElement; inlineTarget?: HTMLElement; source?: VideoSource;
   } = $props();
+  interface Publication {
+    id: string;
+    title: string;
+    capture: MediaStream;
+    preview: MediaStream;
+    settings: ScreenSettings;
+    requestedAudio: boolean;
+    session?: ScreenMedia;
+    channel?: string;
+    producerId?: string;
+    seen: boolean;
+    starting: boolean;
+    closing: boolean;
+    editing: boolean;
+    failure: string;
+  }
+
+  let publications = $state<Publication[]>([]);
   let setupOpen = $state(false);
   let setupForm = $state<HTMLFormElement>();
   let choosing = $state(false);
   let publishing = $state(false);
-  let capture = $state<MediaStream>();
-  let outgoing = $state<ScreenMedia>();
-  let outgoingId = $state("");
-  let wasPublished = false;
-  let incoming = $state<ScreenMedia>();
-  let watched = $state<MediaStream>();
-  let watchedId = $state("");
-  let poppedOut = $state(false);
-  let floatingPlayer = $state<HTMLElement>();
-  let playerToggle = $state<HTMLElement | null>(null);
-  let playerPosition = $state<{ x: number; y: number }>();
-  let drag: { id: number; offsetX: number; offsetY: number } | undefined;
-  let streamMuted = $state(true);
-  let streamVolume = $state(1);
-  let stoppingShare = $state(false);
-  let stoppingWatch = $state(false);
+  let draft = $state<MediaStream>();
+  let editing = $state<Publication>();
+  let setupVersion = 0;
+  let incoming: ScreenMedia | undefined;
+  let incomingChannel: string | null = null;
+  const watched = new SvelteMap<string, { subscription: ScreenSubscription; stream?: MediaStream }>();
+  const closing = new SvelteSet<string>();
+  let stoppingReceiving = $state(false);
+  let switchingCamera = $state(false);
   let error = $state("");
   let setupError = $state("");
   let resolution = $state(untrack(() => source === "camera" ? "720" : "1080"));
@@ -49,7 +61,7 @@
   const CaptureIcon = $derived(camera ? Video : MonitorUp);
   const WatchIcon = $derived(camera ? Video : Monitor);
   const StopIcon = $derived(camera ? VideoOff : Square);
-  const title = $derived(camera ? "Camera" : "Share screen");
+  const title = $derived(camera ? "Camera" : editing ? `Edit ${editing.title.toLowerCase()}` : "Share screen");
   const cameraResolutions = [360, 480, 720, 1080].map((height) => ({ value: String(height), label: `${height}p` }));
   const screenResolutions = [{ value: "0", label: "Source" }, ...cameraResolutions, { value: "1440", label: "1440p" }];
   const frameRates = [5, 15, 30, 60].map((fps) => ({ value: String(fps), label: `${fps} FPS` }));
@@ -57,39 +69,89 @@
   const canCapture = $derived(typeof navigator !== "undefined" &&
     typeof navigator.mediaDevices?.[camera ? "getUserMedia" : "getDisplayMedia"] === "function");
   const availableShares = $derived(camera ? snapshot.cameras : snapshot.screens);
-  const sharing = $derived(Boolean(outgoingId));
+  const cameraPublication = $derived(camera ? publications[0] : undefined);
   const member = $derived(snapshot.members.find(({ connectionId }) => connectionId === snapshot.connectionId));
-  const canReceive = $derived(!member?.deafened && !member?.adminDeafened && !member?.afk);
-  const canShare = $derived(canReceive && (camera ? snapshot.canUseCamera ?? snapshot.canShareScreen : snapshot.canShareScreen) !== false && !member?.adminMuted);
+  const canReceive = $derived(Boolean(snapshot.channelId) && !member?.deafened && !member?.adminDeafened && !member?.afk);
+  const hasSharePermission = $derived((camera ? snapshot.canUseCamera ?? snapshot.canShareScreen : snapshot.canShareScreen) !== false);
+  const canShare = $derived(hasSharePermission && canReceive && !member?.adminMuted);
   const shares = $derived((availableShares ?? []).filter(({ connectionId }) => connectionId !== snapshot.connectionId));
-  const watchedShare = $derived(shares.find(({ producerId }) => producerId === watchedId));
-  const floating = $derived(!camera && Boolean(watched && watchedShare) && (poppedOut || !visible));
+  const cameraWatch = $derived(camera ? watched.values().next().value : undefined);
+  const ownScreens = $derived(publications.map((entry) => ({
+    id: entry.id,
+    title: entry.title,
+    stream: entry.preview,
+    live: Boolean(entry.producerId && entry.channel === snapshot.channelId),
+    status: entry.failure || (!snapshot.channelId ? "Sharing paused. Join a voice channel to resume."
+      : !canShare ? "Sharing paused. Screen sharing is unavailable in this channel."
+      : !entry.producerId ? "Connecting screen share…" : ""),
+    error: Boolean(entry.failure),
+    edit: () => openSetup(entry),
+    stop: () => stopPublication(entry),
+    resume: canShare && entry.failure ? () => { entry.failure = ""; } : undefined,
+  })));
+  const screenEntries = $derived(shares.map((share) => {
+    const number = share.screenNumber ?? 1;
+    const name = presenter(share.connectionId);
+    const title = `${name}’s screen${number > 1 ? ` ${number}` : ""}`;
+    const watch = watched.get(share.producerId);
+    return {
+      id: share.producerId,
+      title,
+      stream: watch?.stream,
+      loading: Boolean(watch && !watch.stream),
+      disabled: !canReceive || stoppingReceiving || closing.has(share.producerId),
+      watch: () => watchShare(share),
+      stop: () => stopWatching(share.producerId),
+    };
+  }));
 
   $effect(() => {
-    if (!setupOpen && !outgoing) releaseCapture();
+    if (!setupOpen) untrack(clearDraft);
   });
 
   $effect(() => {
-    const published = availableShares?.some(({ connectionId }) => connectionId === snapshot.connectionId);
-    if (published) wasPublished = true;
-    if (!canShare || (outgoingId && wasPublished && !published)) {
-      if (setupOpen) setupOpen = false;
-      if (outgoing) void stopSharing();
+    const channel = snapshot.channelId;
+    const live = availableShares ?? [];
+    if (!canShare && !editing && setupOpen && !publishing) setupOpen = false;
+    for (const entry of publications) {
+      const present = live.some(({ producerId }) => producerId === entry.producerId);
+      if (present) entry.seen = true;
+      const ended = entry.seen && !present;
+      if (!canShare || entry.channel !== channel) {
+        entry.failure = "";
+        if (entry.session) {
+          if (camera) untrack(() => { void stopPublication(entry); });
+          else untrack(() => { void closePublication(entry); });
+        }
+      } else if (entry.session && ended) {
+        if (camera) untrack(() => { void stopPublication(entry); });
+        else untrack(() => { void closePublication(entry); });
+      }
+      if (canShare && !entry.session && !entry.starting && !entry.closing && !entry.editing && !entry.failure) {
+        untrack(() => { void publish(entry); });
+      }
     }
   });
 
   $effect(() => {
-    if (!watchedId) return;
-    if (!canReceive || !watchedShare) void stopWatching();
-    else if (!watchedShare.audioProducerId && watched) {
-      for (const track of watched.getAudioTracks()) watched.removeTrack(track);
+    if (!canReceive || (incoming && incomingChannel !== snapshot.channelId)) {
+      if (incoming) void stopReceiving();
+      return;
+    }
+    for (const [id, { subscription }] of watched) {
+      const share = shares.find(({ producerId }) => producerId === id);
+      if (!share) void stopWatching(id);
+      else subscription.setAudioProducer(share.audioProducerId);
     }
   });
 
   onDestroy(() => {
     destroyed = true;
-    releaseCapture();
-    void outgoing?.close();
+    clearDraft();
+    for (const entry of publications) {
+      stopCapture(entry.capture);
+      void entry.session?.close();
+    }
     void incoming?.close();
   });
 
@@ -97,47 +159,60 @@
     return new ScreenMedia(snapshot.connectionId, snapshot.channelId!, failed, source);
   }
 
-  function releaseCapture() {
-    capture?.getTracks().forEach((track) => track.stop());
-    capture = undefined;
+  function stopCapture(stream?: MediaStream) {
+    stream?.getTracks().forEach((track) => track.stop());
   }
 
-  function openSetup() {
+  function clearDraft() {
+    if (draft && draft !== editing?.capture && !publications.some((entry) => entry.capture === draft)) stopCapture(draft);
+    draft = undefined;
+    editing = undefined;
+  }
+
+  function openSetup(entry?: Publication) {
+    if (setupOpen || publishing || entry?.starting || entry?.closing) return;
     if (!supportsWebRtc()) {
       error = "This browser does not support WebRTC. Open Korero.chat in a browser with WebRTC support.";
       return;
     }
+    clearDraft();
+    setupVersion++;
     setupError = "";
+    editing = entry;
+    draft = entry?.capture;
+    resolution = entry ? String(entry.settings.resolution ?? 0) : camera ? "720" : "1080";
+    frameRate = String(entry?.settings.frameRate ?? 30);
+    videoKbps = entry ? entry.settings.videoBitrate / 1000 : camera ? 2000 : 6000;
+    shareAudio = entry?.settings.audio ?? false;
+    audioKbps = String((entry?.settings.audioBitrate ?? 128000) / 1000);
+    requestedAudio = entry?.requestedAudio ?? false;
+    sourceHasAudio = Boolean(draft?.getAudioTracks().some((track) => track.readyState === "live"));
     setupOpen = true;
   }
 
-  async function toggleSharing() {
-    if (outgoingId) await stopSharing();
-    else openSetup();
-  }
-
   async function selectSource() {
-    if (choosing || publishing || !canShare) return;
+    if (choosing || publishing || (!canShare && !editing)) return;
     choosing = true;
     setupError = "";
     const audio = shareAudio;
+    const version = setupVersion;
     try {
       const stream = camera ? await navigator.mediaDevices.getUserMedia({
         video: { height: { ideal: Number(resolution) || 720 }, frameRate: { ideal: Number(frameRate) } }, audio: false,
       }) : await chooseScreen(audio);
-      if (destroyed || !setupOpen || !canShare) {
-        stream.getTracks().forEach((track) => track.stop());
+      if (destroyed || !setupOpen || version !== setupVersion || (!canShare && !editing)) {
+        stopCapture(stream);
         return;
       }
-      releaseCapture();
-      capture = stream;
+      if (draft !== editing?.capture) stopCapture(draft);
+      draft = stream;
       requestedAudio = audio;
       sourceHasAudio = stream.getAudioTracks().length > 0;
-      const track = stream.getVideoTracks()[0];
-      track?.addEventListener("ended", () => {
-        if (capture !== stream) return;
-        if (outgoing) void stopSharing();
-        else releaseCapture();
+      stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+        if (draft === stream && !publications.some((entry) => entry.capture === stream)) {
+          stopCapture(stream);
+          draft = undefined;
+        }
       }, { once: true });
     } catch (failure) {
       if (camera || !(failure instanceof DOMException && failure.name === "NotAllowedError")) setupError = messageFrom(failure);
@@ -146,85 +221,192 @@
     }
   }
 
-  async function startSharing(event: SubmitEvent) {
+  async function submitShare(event: SubmitEvent) {
     event.preventDefault();
-    if (!canShare || !capture || outgoing || stoppingShare || videoKbps === undefined) return;
-    error = "";
-    setupError = "";
+    const stream = draft;
+    if (!stream || publishing || videoKbps === undefined || (!canShare && !editing)) return;
+    const settings = {
+      resolution: Number(resolution) || null, frameRate: Number(frameRate), videoBitrate: videoKbps * 1000,
+      audio: shareAudio, audioBitrate: Number(audioKbps) * 1000,
+    };
     publishing = true;
-    wasPublished = false;
-    const session = media((message) => {
-      if (outgoing !== session) return;
-      error = message;
-      void stopSharing();
-    });
-    outgoing = session;
+    setupError = "";
     try {
-      const producerId = await session.share(capture, {
-        resolution: Number(resolution) || null, frameRate: Number(frameRate), videoBitrate: videoKbps * 1000,
-        audio: shareAudio, audioBitrate: Number(audioKbps) * 1000,
-      });
-      if (outgoing === session) {
-        outgoingId = producerId;
-        setupOpen = false;
+      if (editing) {
+        await editPublication(editing, stream, settings);
+      } else {
+        let number = 1;
+        while (publications.some(({ id }) => id === `local-${number}`)) number++;
+        publications.push({
+          id: `local-${number}`, title: number === 1 ? "Your screen" : `Your screen ${number}`,
+          capture: stream, preview: new MediaStream(stream.getVideoTracks()), settings, requestedAudio,
+          seen: false, starting: false, closing: false, editing: false, failure: "",
+        });
+        const entry = publications[publications.length - 1];
+        watchCapture(entry, stream);
+        await publish(entry);
+        if (entry.failure) {
+          publications = publications.filter(({ id }) => id !== entry.id);
+          setupError = entry.failure;
+          return;
+        }
       }
+      setupOpen = false;
     } catch (failure) {
-      if (outgoing !== session) return;
       setupError = messageFrom(failure);
-      await session.close();
-      if (outgoing === session) outgoing = undefined;
     } finally {
       publishing = false;
     }
   }
 
-  async function stopSharing() {
-    const session = outgoing;
-    if (!session) return;
-    stoppingShare = true;
-    outgoing = undefined;
-    outgoingId = "";
-    wasPublished = false;
-    releaseCapture();
-    await session.close();
-    stoppingShare = false;
+  function watchCapture(entry: Publication, stream: MediaStream) {
+    stream.getVideoTracks()[0]?.addEventListener("ended", () => {
+      if (entry.capture === stream && publications.includes(entry)) void stopPublication(entry);
+    }, { once: true });
   }
 
-  async function watch(share: ScreenShare) {
-    if (!canReceive || stoppingWatch || watchedId === share.producerId) return;
-    await stopWatching();
-    if (destroyed || incoming) return;
-    error = "";
-    const session = media((message) => {
-      if (incoming !== session) return;
-      error = message;
-      void stopWatching();
-    });
-    watchedId = share.producerId;
-    incoming = session;
+  async function editPublication(entry: Publication, stream: MediaStream, settings: ScreenSettings) {
+    const previous = entry.capture;
+    const session = entry.session;
+    entry.editing = true;
     try {
-      const stream = await session.watch(share);
-      if (incoming === session) watched = stream;
-    } catch (failure) {
-      if (incoming !== session) return;
-      error = messageFrom(failure);
-      await stopWatching();
+      if (session && entry.producerId) {
+        try {
+          await session.updateShare(stream, settings);
+        } catch (failure) {
+          if (entry.session === session) {
+            try {
+              await session.updateShare(previous, entry.settings);
+            } catch {
+              await closePublication(entry);
+            }
+          }
+          throw failure;
+        }
+      }
+      if (destroyed || !publications.includes(entry)) return;
+      if (stream !== previous) {
+        for (const track of entry.preview.getTracks()) entry.preview.removeTrack(track);
+        for (const track of stream.getVideoTracks()) entry.preview.addTrack(track);
+        entry.capture = stream;
+        watchCapture(entry, stream);
+        stopCapture(previous);
+      }
+      entry.settings = settings;
+      entry.requestedAudio = requestedAudio;
+      entry.failure = "";
+    } finally {
+      entry.editing = false;
     }
   }
 
-  async function stopWatching() {
-    const session = incoming;
+  async function publish(entry: Publication) {
+    const channel = snapshot.channelId;
+    if (!channel || destroyed || !canShare || entry.session || entry.starting || entry.closing) return;
+    entry.channel = channel;
+    entry.starting = true;
+    const session = media((message) => {
+      if (entry.session !== session) return;
+      if (camera) {
+        error = message;
+        void stopPublication(entry);
+      } else {
+        entry.failure = message;
+        void closePublication(entry);
+      }
+    });
+    entry.session = session;
+    try {
+      const id = await session.share(entry.capture, entry.settings);
+      if (entry.session === session && snapshot.channelId === channel) entry.producerId = id;
+    } catch (failure) {
+      if (entry.session !== session) return;
+      if (snapshot.channelId === channel && canShare) entry.failure = messageFrom(failure);
+      await closePublication(entry);
+    } finally {
+      entry.starting = false;
+    }
+  }
+
+  async function stopPublication(entry: Publication) {
+    publications = publications.filter(({ id }) => id !== entry.id);
+    if (editing === entry) setupOpen = false;
+    stopCapture(entry.capture);
+    await closePublication(entry);
+  }
+
+  async function closePublication(entry: Publication) {
+    const session = entry.session;
     if (!session) return;
-    stoppingWatch = true;
+    entry.closing = true;
+    entry.session = undefined;
+    entry.producerId = undefined;
+    entry.seen = false;
+    try {
+      await session.close();
+    } finally {
+      entry.closing = false;
+    }
+  }
+
+  async function watchShare(share: ScreenShare) {
+    const id = share.producerId;
+    if (!canReceive || stoppingReceiving || closing.has(id) || watched.has(id) || switchingCamera) return;
+    if (camera && watched.size) {
+      switchingCamera = true;
+      try {
+        await stopWatching(watched.keys().next().value!);
+      } finally {
+        switchingCamera = false;
+      }
+    }
+    if (destroyed || !canReceive || stoppingReceiving || !shares.some(({ producerId }) => producerId === id)) return;
+    error = "";
+    if (!incoming) {
+      const session = media((message) => {
+        if (incoming !== session) return;
+        error = message;
+        void stopReceiving();
+      });
+      incomingChannel = snapshot.channelId;
+      incoming = session;
+    }
+    const subscription = incoming.watch(share);
+    watched.set(id, { subscription });
+    try {
+      const stream = await subscription.stream;
+      if (!destroyed && watched.get(id)?.subscription === subscription) watched.set(id, { subscription, stream });
+    } catch (failure) {
+      if (destroyed || watched.get(id)?.subscription !== subscription) return;
+      error = camera ? messageFrom(failure) : `${presenter(share.connectionId)}’s screen: ${messageFrom(failure)}`;
+      await stopWatching(id);
+    }
+  }
+
+  async function stopWatching(id: string) {
+    const entry = watched.get(id);
+    if (!entry) return;
+    closing.add(id);
+    watched.delete(id);
+    try {
+      if (watched.size) await entry.subscription.close();
+      else await stopReceiving();
+    } finally {
+      closing.delete(id);
+    }
+  }
+
+  async function stopReceiving() {
+    const session = incoming;
     incoming = undefined;
-    watched = undefined;
-    watchedId = "";
-    poppedOut = false;
-    drag = undefined;
-    streamMuted = true;
-    streamVolume = 1;
-    await session.close();
-    stoppingWatch = false;
+    incomingChannel = null;
+    stoppingReceiving = true;
+    watched.clear();
+    try {
+      await session?.close();
+    } finally {
+      stoppingReceiving = false;
+    }
   }
 
   function presenter(connectionId: string) {
@@ -235,162 +417,63 @@
     element.srcObject = stream;
     return () => { element.srcObject = null; };
   }
-
-  async function togglePopout() {
-    if (floating) {
-      onDock?.();
-      poppedOut = false;
-    } else {
-      poppedOut = true;
-    }
-    await tick();
-    playerToggle?.focus();
-  }
-
-  function positionPlayer(x: number, y: number) {
-    if (!floatingPlayer) return;
-    const margin = 8;
-    playerPosition = {
-      x: Math.max(margin, Math.min(x, document.documentElement.clientWidth - floatingPlayer.offsetWidth - margin)),
-      y: Math.max(margin, Math.min(y, window.innerHeight - floatingPlayer.offsetHeight - margin)),
-    };
-  }
-
-  function keepPlayerInView() {
-    if (floating && playerPosition) positionPlayer(playerPosition.x, playerPosition.y);
-  }
-
-  function startDrag(event: PointerEvent) {
-    if (event.button !== 0 || drag || !floatingPlayer || !(event.currentTarget instanceof HTMLElement)) return;
-    const bounds = floatingPlayer.getBoundingClientRect();
-    drag = { id: event.pointerId, offsetX: event.clientX - bounds.left, offsetY: event.clientY - bounds.top };
-    event.currentTarget.setPointerCapture(event.pointerId);
-  }
-
-  function moveDrag(event: PointerEvent) {
-    if (drag?.id === event.pointerId) positionPlayer(event.clientX - drag.offsetX, event.clientY - drag.offsetY);
-  }
-
-  function finishDrag(event: PointerEvent) {
-    if (drag?.id === event.pointerId) drag = undefined;
-  }
-
-  function moveWithKeyboard(event: KeyboardEvent) {
-    if (!floatingPlayer) return;
-    const directions = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
-    if (!Object.hasOwn(directions, event.key)) return;
-    event.preventDefault();
-    const [x, y] = directions[event.key as keyof typeof directions];
-    const bounds = floatingPlayer.getBoundingClientRect();
-    positionPlayer(bounds.left + x * 24, bounds.top + y * 24);
-  }
 </script>
 
-<svelte:window onresize={keepPlayerInView} />
-
-{#snippet screenPlayer(stream: MediaStream, share: ScreenShare, detached: boolean)}
-  <header class="player-bar">
-    {#if detached}
-      <Button size="icon-sm" variant="ghost" class="drag-handle" aria-label="Move stream with arrow keys"
-        title="Drag to move stream" onpointerdown={startDrag} onpointermove={moveDrag}
-        onlostpointercapture={finishDrag} onkeydown={moveWithKeyboard}>
-        <Grip aria-hidden="true" />
-      </Button>
-    {/if}
-    <span class="live-dot" aria-hidden="true"></span>
-    <span class="player-name truncate" title={presenter(share.connectionId)}>{presenter(share.connectionId)}’s screen</span>
-    <Button size={detached ? "icon-sm" : "sm"} variant="outline" bind:ref={playerToggle} onclick={togglePopout}
-      aria-label={detached ? "Dock stream" : "Pop out stream"} title={detached ? "Dock stream" : "Pop out stream"}>
-      {#if detached}<PanelTop aria-hidden="true" />
-      {:else}<ExternalLink aria-hidden="true" /> Pop out{/if}
-    </Button>
-    {#if detached}
-      <Button size="icon-sm" variant="ghost" aria-label="Stop watching" title="Stop watching" onclick={stopWatching}>
-        <X aria-hidden="true" />
-      </Button>
-    {/if}
-  </header>
-  <video autoplay playsinline controls aria-label="Shared screen"
-    bind:muted={streamMuted} bind:volume={streamVolume} {@attach (element) => showPreview(element, stream)}></video>
-{/snippet}
-
-{#if visible && (shares.length || watched || (outgoingId && capture) || watchedId || error)}
-  <Portal to={inlineTarget} disabled={!inlineTarget}>
-    <section class="screen-sharing" aria-label={camera ? "Camera video" : "Screen sharing"}>
+{#if camera}
+  {#if visible && (shares.length || cameraPublication?.producerId || cameraWatch || error)}
+    <section class="camera-sharing" aria-label="Camera video">
       {#if shares.length}
-        <div class="screen-actions">
+        <div class="camera-actions">
           {#each shares as share (share.producerId)}
-            {@const watching = watchedId === share.producerId}
-            {#if camera}
-              <Button variant={watching ? "default" : "outline"} disabled={!canReceive || stoppingWatch}
-                onclick={() => watching ? stopWatching() : watch(share)}>
-                {#if watching}<X size={15} /> Stop watching
-                {:else}<WatchIcon size={15} /> Watch {presenter(share.connectionId)}’s camera{/if}
-              </Button>
-            {:else}
-              <div class="live-share">
-                <span class="live-label"><span class="live-dot" aria-hidden="true"></span> Live</span>
-                <span class="truncate" title={presenter(share.connectionId)}>{presenter(share.connectionId)} is sharing their screen</span>
-                <Button variant={watching ? "outline" : "default"} class="ms-auto" disabled={!canReceive || stoppingWatch}
-                  aria-label={watching ? `Stop watching ${presenter(share.connectionId)}` : `Watch live stream from ${presenter(share.connectionId)}`}
-                  onclick={() => watching ? stopWatching() : watch(share)}>
-                  {#if watching}<X size={15} aria-hidden="true" /> Stop watching
-                  {:else}<Play size={15} aria-hidden="true" /> Watch live stream{/if}
-                </Button>
-              </div>
-            {/if}
+            {@const watching = watched.has(share.producerId)}
+            <Button variant={watching ? "default" : "outline"}
+              disabled={!canReceive || stoppingReceiving || switchingCamera || closing.size > 0}
+              onclick={() => watching ? stopWatching(share.producerId) : watchShare(share)}>
+              {#if watching}<X size={15} /> Stop watching
+              {:else}<WatchIcon size={15} /> Watch {presenter(share.connectionId)}’s camera{/if}
+            </Button>
           {/each}
         </div>
       {/if}
-      {#if watched && watchedShare && !camera}
-        {#if !floating}{@render screenPlayer(watched, watchedShare, false)}{/if}
-      {:else if (watched && camera) || (outgoingId && capture)}
-        {@const stream = watched ?? capture!}
-        <video autoplay muted playsinline
-          aria-label={camera ? (watched ? "Shared camera" : "Your camera preview") : "Your screen preview"}
+      {#if cameraWatch?.stream || cameraPublication?.producerId}
+        {@const stream = cameraWatch?.stream ?? cameraPublication!.capture}
+        <video autoplay muted playsinline aria-label={cameraWatch?.stream ? "Shared camera" : "Your camera preview"}
           {@attach (element) => showPreview(element, stream)}></video>
-      {:else if watchedId}
-        <p role="status">{camera ? "Opening camera…" : "Opening screen share…"}</p>
+      {:else if cameraWatch}
+        <p role="status">Opening camera…</p>
       {/if}
       {#if error}<p class="form-error" role="alert">{error}</p>{/if}
     </section>
-  </Portal>
-{/if}
-
-{#if floating && watched && watchedShare}
-  <Portal to="body">
-    <section class="floating-player" aria-label="Floating live stream" bind:this={floatingPlayer}
-      data-positioned={playerPosition ? "" : undefined}
-      style:left={playerPosition ? playerPosition.x + "px" : undefined}
-      style:top={playerPosition ? playerPosition.y + "px" : undefined}
-      {@attach () => untrack(keepPlayerInView)}>
-      {@render screenPlayer(watched, watchedShare, true)}
-    </section>
-  </Portal>
-{/if}
-
-<Portal to={controlsTarget}>
-  {#if sharing || (visible && canCapture)}
-    <Button variant={sharing ? "secondary" : "outline"} aria-pressed={sharing}
-      title={sharing ? (camera ? "Turn off camera" : "Stop sharing") :
-        (camera ? "Turn on camera" : "Share screen")}
-      onclick={toggleSharing} disabled={!sharing && (!canShare || stoppingShare)}>
-      {#if sharing}<StopIcon size={15} aria-hidden="true" />{:else}<CaptureIcon size={15} aria-hidden="true" />{/if}
-      {camera ? "Camera" : "Screenshare"}
-    </Button>
   {/if}
+{:else}
+  <ScreenShareViewer entries={screenEntries} own={ownScreens} {inlineTarget} {visible} {error} />
+{/if}
 
-  <Modal bind:open={setupOpen} {title} description={camera ? "Preview your camera and choose the quality before sharing video with this channel."
-    : "Choose a window, tab, or entire display to share with this channel."}
+{#if cameraPublication || (visible && canCapture && snapshot.channelId && hasSharePermission)}
+  <Portal to={controlsTarget ?? "body"}>
+    <div class={controlsTarget ? "contents" : "share-controls-fallback"}>
+      <Button variant={cameraPublication ? "secondary" : "outline"} aria-pressed={camera ? Boolean(cameraPublication) : undefined}
+        title={camera ? (cameraPublication ? "Turn off camera" : "Turn on camera") : "Share screen"}
+        onclick={() => cameraPublication ? stopPublication(cameraPublication) : openSetup()}
+        disabled={!cameraPublication && (!canShare || publishing)}>
+        {#if cameraPublication}<StopIcon size={15} aria-hidden="true" />{:else}<CaptureIcon size={15} aria-hidden="true" />{/if}
+        {camera ? "Camera" : publications.length ? "Share another screen" : "Screenshare"}
+      </Button>
+    </div>
+  </Portal>
+{/if}
+
+<Modal bind:open={setupOpen} {title} description={camera ? "Preview your camera and choose the quality before sharing video with this channel."
+    : editing ? "Change the source or quality of this screen share." : "Choose a window, tab, or entire display to share with this channel."}
     dismissible={!publishing}>
-    <form class="dialog-form" bind:this={setupForm} onsubmit={startSharing}>
-      {#if capture}
-        <video autoplay muted playsinline aria-label="Source preview" {@attach (element) => showPreview(element, capture!)}></video>
+    <form class="dialog-form" bind:this={setupForm} onsubmit={submitShare}>
+      {#if draft}
+        <video autoplay muted playsinline aria-label="Source preview" {@attach (element) => showPreview(element, draft!)}></video>
       {/if}
-      {#if !camera || !capture}
+      {#if !camera || !draft}
         <Button type="button" variant="outline" onclick={selectSource} disabled={choosing || publishing}>
           <WatchIcon size={16} /> {camera ? (choosing ? "Opening camera…" : "Preview camera")
-            : (choosing ? "Opening source picker…" : capture ? "Change source" : "Choose source")}
+            : (choosing ? "Opening source picker…" : draft ? "Change source" : "Choose source")}
         </Button>
       {/if}
       {#if setupForm}
@@ -408,77 +491,28 @@
         </BitsConfig>
       {/if}
       {#if !camera}<Checkbox label="Share source audio" bind:checked={shareAudio} disabled={choosing || publishing} />{/if}
-      {#if shareAudio && !capture}
+      {#if shareAudio && !draft}
         <p class="field-hint">Audio availability depends on the selected source and your browser or operating system.</p>
-      {:else if shareAudio && capture && !requestedAudio}
+      {:else if shareAudio && draft && !requestedAudio}
         <p class="field-hint">Choose the source again to request its audio.</p>
-      {:else if shareAudio && capture && !sourceHasAudio}
+      {:else if shareAudio && draft && !sourceHasAudio}
         <p class="field-hint">This source supplied video only. Choose a different source to include audio.</p>
       {/if}
       {#if setupError}<p class="form-error" role="alert">{setupError}</p>{/if}
       <div class="dialog-actions">
         <Button type="button" variant="outline" onclick={() => { setupOpen = false; }} disabled={publishing}>Cancel</Button>
-        <Button type="submit" variant="default" disabled={!capture || choosing || publishing || (shareAudio && !requestedAudio)}>
-          {publishing ? "Starting…" : camera ? "Start camera" : "Go live"}
+        <Button type="submit" variant="default" disabled={!draft || choosing || publishing || (shareAudio && !requestedAudio)}>
+          {publishing ? (editing ? "Saving…" : "Starting…") : editing ? "Save changes" : camera ? "Start camera" : "Go live"}
         </Button>
       </div>
     </form>
-  </Modal>
-</Portal>
+</Modal>
 
 <style>
-  .screen-sharing { border-bottom: 1px solid var(--border); }
-  .screen-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-  .screen-actions:has(.live-share) { max-height: 26dvh; overflow-y: auto; }
-  .screen-actions, .screen-sharing p { padding: 8px var(--ui-gap); }
-  .live-share, .player-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    background: var(--card);
-  }
-  .live-share {
-    width: 100%;
-    flex-wrap: wrap;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-  }
-  .live-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 2px 6px;
-    border-radius: var(--radius-sm);
-    background: color-mix(in srgb, var(--destructive) 14%, transparent);
-    color: var(--destructive);
-    font-size: var(--type-caption);
-    font-weight: 700;
-    text-transform: uppercase;
-  }
-  .live-dot { flex: none; width: .45rem; height: .45rem; border-radius: 50%; background: var(--destructive); }
-  .player-bar { padding-inline: var(--ui-gap); }
-  .player-name { flex: 1; min-width: 0; font-size: var(--type-small); font-weight: 600; }
-  .floating-player {
-    position: fixed;
-    z-index: 40;
-    right: 12px;
-    bottom: max(12px, env(safe-area-inset-bottom));
-    width: min(32rem, calc(100% - 24px));
-    overflow: hidden;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    background: var(--card);
-    box-shadow: var(--shadow-floating);
-  }
-  .floating-player[data-positioned] { right: auto; bottom: auto; }
-  @media (max-width: 760px) {
-    .floating-player:not([data-positioned]) { top: 12px; bottom: auto; }
-  }
-  .floating-player .player-bar { padding-inline: 6px; }
-  .floating-player :global(.drag-handle) { cursor: grab; touch-action: none; }
-  .floating-player :global(.drag-handle:active) { cursor: grabbing; }
-  .floating-player video { aspect-ratio: 16 / 9; max-height: 50dvh; border-radius: 0; }
+  .camera-sharing { border-bottom: 1px solid var(--border); }
+  .camera-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .camera-actions, .camera-sharing p { padding: 8px var(--ui-gap); }
+  .share-controls-fallback { position: fixed; z-index: 41; top: 12px; right: 12px; display: flex; gap: 6px; }
   video {
     display: block;
     width: 100%;

@@ -43,7 +43,7 @@ function preset(id: string, name: string, scheme: Theme["scheme"], surfaces: Sur
 }
 
 export const defaultTheme = preset("korero", "Kōrero", "dark",
-  ["#101820", "#16212b", "#1e2c38", "#344758", "#627c90", "#f2f6fa", "#aabac8"],
+  ["#0c1218", "#111a22", "#18232d", "#2b3a48", "#627c90", "#f2f6fa", "#aabac8"],
   ["#5ce0cc", "#8ea5bc", "#b7acf3", "#6fd5a0", "#ff929b", "#f6bf74", "#83d3ee"]);
 
 export const playfulThemes = [
@@ -83,6 +83,15 @@ export const builtInThemes = [
   defaultTheme,
   preset("dark", "Dark", "dark", ["#15171d", "#1b1e26", "#20242e", "#363e50", "#606e86"], darkSwatches),
   preset("light", "Light", "light", ["#f8faff", "#eef1f8", "#ffffff", "#d5dbe8", "#7e899e"], lightSwatches),
+  // https://catppuccin.com/palette/ — Latte status colors are darkened for text contrast.
+  preset("catppuccin-latte", "Catppuccin Latte", "light", ["#eff1f5", "#dce0e8", "#e6e9ef", "#bcc0cc", "#6c6f85", "#4c4f69", "#5c5f77"],
+    ["#8839ef", "#1e66f5", "#179299", "#2b701d", "#c60e35", "#875310", "#1853c9"]),
+  preset("catppuccin-frappe", "Catppuccin Frappé", "dark", ["#303446", "#292c3c", "#414559", "#51576d", "#949cbb", "#c6d0f5", "#b5bfe2"],
+    ["#ca9ee6", "#babbf1", "#81c8be", "#a6d189", "#e78284", "#e5c890", "#8caaee"]),
+  preset("catppuccin-macchiato", "Catppuccin Macchiato", "dark", ["#24273a", "#1e2030", "#363a4f", "#494d64", "#939ab7", "#cad3f5", "#b8c0e0"],
+    ["#c6a0f6", "#b7bdf8", "#8bd5ca", "#a6da95", "#ed8796", "#eed49f", "#8aadf4"]),
+  preset("catppuccin-mocha", "Catppuccin Mocha", "dark", ["#1e1e2e", "#181825", "#313244", "#45475a", "#9399b2", "#cdd6f4", "#bac2de"],
+    ["#cba6f7", "#b4befe", "#94e2d5", "#a6e3a1", "#f38ba8", "#f9e2af", "#89b4fa"]),
   preset("corporate", "Corporate", "light", ["#fafbfd", "#eff2f6", "#ffffff", "#d4dbe5", "#7c8799"],
     ["#397bf4", "#6e7284", "#c43179", "#477800", "#ca3150", "#856000", "#00796f"], 6),
   preset("cupcake", "Cupcake", "light", ["#fff9f4", "#f6eae5", "#fffdfa", "#e4d1cf", "#8d7580"],

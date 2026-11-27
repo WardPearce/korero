@@ -37,6 +37,7 @@ mod ffi {
         ) -> Result<UniquePtr<Voice>>;
         fn capabilities(self: &Voice) -> Result<String>;
         fn set_send(self: Pin<&mut Voice>, transport: &str) -> Result<()>;
+        fn set_bitrate(self: Pin<&mut Voice>, bitrate: u32) -> Result<()>;
         fn set_receive(self: Pin<&mut Voice>, transport: &str) -> Result<()>;
         fn consume(self: Pin<&mut Voice>, parameters: &str) -> Result<()>;
         fn set_consumer_volume(self: Pin<&mut Voice>, producer_id: &str, level: u16) -> Result<()>;
@@ -125,6 +126,7 @@ type Reply = oneshot::Sender<Result<f64>>;
 
 enum Operation {
     Send(Option<Value>),
+    Bitrate(u32),
     Receive(Option<Value>),
     Consume(Value),
     ConsumerVolume(String, u16),
@@ -176,6 +178,7 @@ impl VoiceThread {
                 while let Some((operation, reply)) = current.blocking_recv() {
                     let result = match operation {
                         Operation::Send(options) => voice.pin_mut().set_send(&serialize(options)),
+                        Operation::Bitrate(bitrate) => voice.pin_mut().set_bitrate(bitrate),
                         Operation::Receive(options) => {
                             voice.pin_mut().set_receive(&serialize(options))
                         }
@@ -259,8 +262,8 @@ impl RoomVoice {
 
     pub async fn set_bitrate(&mut self, bitrate: u32) -> Result<()> {
         if bitrate != self.bitrate {
-            if self.whisper.is_none() {
-                self.set_sending(false).await?;
+            if self.whisper.is_none() && self.send_id.is_some() {
+                self.worker.request(Operation::Bitrate(bitrate)).await?;
             }
             self.bitrate = bitrate;
         }

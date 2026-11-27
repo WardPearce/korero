@@ -2,6 +2,7 @@ import { Elysia, t } from "elysia";
 import { isIP, SocketAddress } from "node:net";
 import type { Config } from "./config";
 import type { Auth } from "./modules/auth";
+import type { HostedAccounts } from "./modules/hosted-accounts";
 import type { Media } from "./modules/media";
 import type { Realtime } from "./modules/realtime";
 import { attachmentDataLength, auditQuery, bytesPerMiB, httpBodies, id, maxSupportedAttachmentMiB, payloads, version } from "./protocol";
@@ -16,7 +17,15 @@ const normalizeIp = (address: string) => {
 // Allow worst-case JSON escaping of the caption, formatting and filename.
 const attachmentBodyLimit = (bytes: number) => attachmentDataLength(bytes) + 262144;
 
-export function createApp(config: Config, auth: Auth, media: Media, realtime: Realtime, info: { serverId: string; fingerprint?: string }) {
+const hostedAccountPath = "/api/v1/hosted-account/";
+const hostedCredentials = {
+  username: t.String({ pattern: "^[a-z0-9][a-z0-9_.-]{3,31}$" }),
+  credential: t.String({ pattern: "^[A-Za-z0-9_-]{43}$" }),
+};
+const encryptedData = t.String({ pattern: "^[A-Za-z0-9_-]+$", minLength: 40, maxLength: 65536 });
+
+export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAccounts, media: Media, realtime: Realtime,
+  info: { serverId: string; fingerprint?: string }) {
   const upgrades = new RateLimit(config.limits.upgrades_per_minute);
   const authentication = new RateLimit(config.limits.auth_per_minute);
   const registration = new RateLimit(config.limits.registration_per_minute);
@@ -86,7 +95,15 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
       set.headers["cache-control"] = "no-store";
       set.headers["x-content-type-options"] = "nosniff";
       const origin = request.headers.get("origin");
-      if (origin && origin !== new URL(request.url).origin) {
+      if (path.startsWith(hostedAccountPath)) {
+        // These routes use explicit credentials and are usable from any Korero client origin.
+        set.headers["access-control-allow-origin"] = "*";
+        if (request.method === "OPTIONS") {
+          set.headers["access-control-allow-methods"] = "POST, OPTIONS";
+          set.headers["access-control-allow-headers"] = "content-type";
+          return new Response(null, { status: 204, headers: set.headers as HeadersInit });
+        }
+      } else if (origin && origin !== new URL(request.url).origin) {
         if (!origins.has(origin)) fail("FORBIDDEN");
         set.headers["access-control-allow-origin"] = origin;
         set.headers.vary = "Origin";
@@ -126,6 +143,21 @@ export function createApp(config: Config, auth: Auth, media: Media, realtime: Re
         udp: config.media.enable_udp, tcp: config.media.enable_tcp, textPersistence: config.messaging.persistence,
         ...(access ? { iceServers: config.media.ice_servers } : {}) };
     })
+    .post(hostedAccountPath + "register", ({ request, body, set }) => {
+      limit(request, true);
+      const account = hostedAccounts.register(body.username, body.credential, body.encryptedData);
+      set.status = 201;
+      return account;
+    }, { body: t.Object({ ...hostedCredentials, encryptedData }, { additionalProperties: false }) })
+    .post(hostedAccountPath + "login", ({ request, body }) => {
+      limit(request);
+      return hostedAccounts.read(body.username, body.credential);
+    }, { body: t.Object(hostedCredentials, { additionalProperties: false }) })
+    .post(hostedAccountPath + "update", ({ request, body }) => {
+      limit(request);
+      return hostedAccounts.update(body.username, body.credential, body.revision, body.encryptedData);
+    }, { body: t.Object({ ...hostedCredentials, encryptedData,
+      revision: t.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER - 1 }) }, { additionalProperties: false }) })
     .post("/api/v1/auth/identity/challenge", ({ request, body }) => {
       limit(request);
       return auth.challengeIdentity(info.serverId, body.operation, body.publicKey, body.deviceName, body.origin);

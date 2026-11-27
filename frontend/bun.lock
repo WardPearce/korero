@@ -15,6 +15,7 @@
         "@internationalized/date": "3.12.4",
         "@lucide/svelte": "^1.80.0",
         "@noble/curves": "2.4.0",
+        "@noble/hashes": "2.4.0",
         "@tiptap/extensions": "3.35.0",
         "@tiptap/starter-kit": "3.35.0",
         "bits-ui": "2.22.0",
@@ -37,6 +38,7 @@
         "@types/bun": "1.4.5",
         "electron": "45.5.0",
         "electron-builder": "26.18.0",
+        "smol-toml": "1.9.1",
         "svelte-check": "4.7.8",
         "tailwind-variants": "^3.3.0",
         "tailwindcss": "^4.3.5",
@@ -964,6 +966,8 @@
     "sisteransi": ["sisteransi@1.0.5", "", {}, "sha512-bLGGlR1QxBcynn2d5YmDX4MGjlZvy2MRBDRNHLJ8VI6l6+9FUiyTFNJ0IveOSP0bcXgVDPRcfGqA0pjaqUpfVg=="],
 
     "slice-ansi": ["slice-ansi@4.0.0", "", { "dependencies": { "ansi-styles": "^4.0.0", "astral-regex": "^2.0.0", "is-fullwidth-code-point": "^3.0.0" } }, "sha512-qMCMfhY040cVHT43K9BFygqYbUPFZKHOg7K73mtTWJRb8pyP3fzf4Ixd5SzdEJQ6MRUg/WBnOLxghZtKKurENQ=="],
+
+    "smol-toml": ["smol-toml@1.9.1", "", {}, "sha512-j7WyPdf0CJoutMzMoPLF/bVXHtKZIT9Rb4eGeEbWw8X2t5oirjPgpL+OpaENZrILYaXqYwnVH+qgUwVbl+pUJQ=="],
 
     "source-map": ["source-map@0.6.1", "", {}, "sha512-UjgapumWlbMhkBgzT7Ykc5YXUT46F0iKu8SGXq0bcwP5dz/h0Plj6enJqjz1Zbq2l5WaqYnrVbwWOWMyF3F47g=="],
 

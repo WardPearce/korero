@@ -65,6 +65,18 @@ async fn main() -> Result<()> {
                         voice.add_producer(payload["producerId"].as_str().context("Invalid media event")?).await?;
                     } else if event["type"] == "media.producerClosed" {
                         voice.remove_producer(payload["producerId"].as_str().context("Invalid media event")?).await?;
+                    } else if event["type"] == "state.invalidated" {
+                        let state = connection.wire.rpc("state.get", json!({})).await?;
+                        let bitrate = state["channels"].as_array().and_then(|channels| {
+                            channels.iter().find(|entry| entry["id"] == joined["channelId"])
+                        }).and_then(|entry| entry["audioBitrate"].as_u64())
+                            .or_else(|| state["targetAudioBitrate"].as_u64());
+                        if let Some(bitrate) = bitrate {
+                            let bitrate = u32::try_from(bitrate)?;
+                            voice.set_bitrate(bitrate).await?;
+                            voice.set_sending(true).await?;
+                            say(json!({"bitrate": bitrate}));
+                        }
                     }
                 }
                 _ = samples.tick(), if !reported => {

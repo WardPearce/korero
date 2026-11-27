@@ -12,7 +12,7 @@
     "electron:dev": "bun run electron:build:service && node scripts/electron-dev.mjs",
     "electron:build:service": "bun run prepare:media --if-needed && cargo build --locked --manifest-path native/Cargo.toml --features desktop --bin desktop-client",
     "electron:start": "electron .",
-    "electron:pack": "bun run build && bun run prepare:media --if-needed && cargo build --locked --release --manifest-path native/Cargo.toml --features desktop --bin desktop-client && electron-builder --linux --publish never",
+    "electron:pack": "bun run build && bun run prepare:media --if-needed && cargo build --locked --release --manifest-path native/Cargo.toml --features desktop --bin desktop-client && electron-builder --linux --x64 --publish never",
     "mobile:sync": "bun run build && cap sync",
     "mobile:android": "cap open android",
     "mobile:ios": "cap open ios"
@@ -28,6 +28,7 @@
     "@internationalized/date": "3.12.4",
     "@lucide/svelte": "^1.80.0",
     "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
     "@tiptap/extensions": "3.35.0",
     "@tiptap/starter-kit": "3.35.0",
     "bits-ui": "2.22.0",
@@ -50,6 +51,7 @@
     "@types/bun": "1.4.5",
     "electron": "45.5.0",
     "electron-builder": "26.18.0",
+    "smol-toml": "1.9.1",
     "svelte-check": "4.7.8",
     "tailwind-variants": "^3.3.0",
     "tailwindcss": "^4.3.5",
@@ -58,6 +60,7 @@
     "vite": "7.3.8"
   },
   "main": "electron/main.mjs",
+  "desktopName": "korero-chat-frontend.desktop",
   "productName": "Korero.chat",
   "description": "Korero.chat voice and chat client",
   "homepage": "https://github.com/WardPearce/korero",

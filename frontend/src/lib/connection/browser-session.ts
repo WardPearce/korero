@@ -1,4 +1,4 @@
-import { offline, requestError, messageFrom, type DirectMessage, type DirectOperation, type Member, type MemberRequest, type Message, type RelayResponse, type ScreenShare, type Snapshot, type VoiceState } from "./client";
+import { offline, requestError, messageFrom, type DirectMessage, type DirectOperation, type Member, type MemberRequest, type Message, type Poke, type RelayResponse, type ScreenShare, type Snapshot, type VoiceState } from "./client";
 import { MobileCallAudio } from "../media/mobile-call-audio";
 import { WebVoice } from "../media/web-voice";
 import { mobileApp, voiceApp } from "./platform";
@@ -32,6 +32,7 @@ class BrowserSession {
   private snapshot: Snapshot | null = null;
   private messages: Message[] = [];
   private directMessages: DirectMessage[] = [];
+  private lastPoke?: Poke;
   private historyRequest = 0;
   private deletedDuringHistory?: Set<string>;
 
@@ -225,7 +226,7 @@ class BrowserSession {
 
   private show() {
     this.update({ ...offline, phase: "online", snapshot: this.snapshot, messages: this.messages, directMessages: this.directMessages,
-      voice: this.voice?.voice ?? "idle", voiceError: this.voice?.error ?? null });
+      lastPoke: this.lastPoke, voice: this.voice?.voice ?? "idle", voiceError: this.voice?.error ?? null });
   }
 
   private event({ type, payload }: Reply) {
@@ -256,6 +257,11 @@ class BrowserSession {
       if (this.directMessages.some(({ id }) => id === message.id)) return;
       this.directMessages = [...this.directMessages, message].slice(-50);
       this.show();
+    } else if (type === "direct.poked") {
+      const poke = payload as Poke;
+      if (poke.recipientId !== snapshot.account.id) return;
+      this.lastPoke = poke;
+      this.show();
     } else if (type === "message.deleted") {
       const { messageId } = payload as { messageId: string };
       this.deletedDuringHistory?.add(messageId);
@@ -269,8 +275,12 @@ class BrowserSession {
       const share = payload as ScreenShare & { channelId: string };
       if (share.channelId !== snapshot.channelId) return;
       const source = type.startsWith("media.camera") ? "cameras" : "screens";
-      const shares = (snapshot[source] ?? []).filter(({ producerId }) => producerId !== share.producerId);
-      if (type.endsWith("Available")) shares.push(share);
+      const shares = [...(snapshot[source] ?? [])];
+      const index = shares.findIndex(({ producerId }) => producerId === share.producerId);
+      if (type.endsWith("Available")) {
+        if (index === -1) shares.push(share);
+        else shares[index] = share;
+      } else if (index !== -1) shares.splice(index, 1);
       this.showSnapshot({ ...snapshot, [source]: shares });
     }
   }
@@ -343,6 +353,7 @@ class BrowserSession {
     this.snapshot = null;
     this.messages = [];
     this.directMessages = [];
+    this.lastPoke = undefined;
     this.historyRequest++;
     this.deletedDuringHistory = undefined;
     clearInterval(this.heartbeat);

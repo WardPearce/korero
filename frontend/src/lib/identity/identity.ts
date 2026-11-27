@@ -1,46 +1,25 @@
 import { call, desktopApp, requestError, type RelayResponse } from "../connection/client";
-import { browserIdentity, exportBrowserIdentity, importBrowserIdentity, signIdentity } from "./browser-identity";
+import { exportBrowserIdentity, signIdentity } from "./browser-identity";
 import { browserSession } from "../connection/browser-session";
-import { preferences, type DeviceIdentity } from "../preferences";
+import type { DeviceIdentity } from "../preferences";
 
+let activeIdentity: DeviceIdentity | undefined;
 export function getIdentity() {
-  return preferences.identities.get("default");
+  return activeIdentity;
 }
 
-async function saveIdentity(identity: DeviceIdentity, replace = false) {
-  return preferences.transaction("rw", preferences.identities, async () => {
-    const existing = await getIdentity();
-    if (existing && !replace) {
-      if (existing.publicKey !== identity.publicKey) {
-        throw new Error("Confirm replacement of this device’s existing identity.");
-      }
-      return existing;
-    }
-    const record = { id: "default", ...identity } as const;
-    await preferences.identities.put(record);
-    return record;
-  });
+export function setIdentity(identity?: DeviceIdentity) {
+  activeIdentity = identity;
 }
 
-export async function generateIdentity() {
-  return saveIdentity(await (desktopApp() ? call<DeviceIdentity>("generate_identity") : browserIdentity()));
-}
-
-export async function importIdentity(file: File, passphrase: string, replace = false) {
-  if (file.size > 1024) throw new Error("Invalid Korero.chat identity export.");
-  const blob = await file.text();
-  const identity = await (desktopApp() ? call<DeviceIdentity>("import_identity", { blob, passphrase }) : importBrowserIdentity(blob, passphrase));
-  return saveIdentity(identity, replace);
-}
-
-async function requireIdentity() {
-  const identity = await getIdentity();
-  if (!identity) throw new Error("Generate or import an identity first.");
+function requireIdentity() {
+  const identity = getIdentity();
+  if (!identity) throw new Error("Sign in to your Korero.chat account first.");
   return identity;
 }
 
 export async function exportIdentity(passphrase: string) {
-  const { privateKey } = await requireIdentity();
+  const { privateKey } = requireIdentity();
   return desktopApp() ? call<string>("export_identity", { privateKey, passphrase }) : exportBrowserIdentity(privateKey, passphrase);
 }
 
@@ -50,7 +29,7 @@ type IdentityAction =
   | { operation: "bootstrap"; displayName: string; token: string; password?: string };
 
 export async function authenticateIdentity(origin: string, serverId: string, deviceName: string, action: IdentityAction) {
-  const identity = await requireIdentity();
+  const identity = requireIdentity();
   if (desktopApp()) {
     return call<RelayResponse>("authenticate_identity", { origin, serverId, deviceName, privateKey: identity.privateKey, action });
   }

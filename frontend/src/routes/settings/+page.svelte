@@ -1,7 +1,8 @@
 <script lang="ts">
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
-  import { ArrowDownLeft, UserRound } from "@lucide/svelte";
+  import { asset, resolve } from "$app/paths";
+  import { ArrowDownLeft, LogOut, UserRound } from "@lucide/svelte";
   import { apiFor, messageFrom, requestError } from "#lib/connection/client";
   import { getWorkspace } from "#lib/workspace";
 
@@ -9,6 +10,7 @@
   let account = $derived(workspace.view.snapshot?.account);
   let accountName = $derived(account?.displayName ?? "");
   let status = $state("");
+  let signOutError = $state("");
   let saving = $state(false);
 
   async function save(event: SubmitEvent) {
@@ -30,6 +32,11 @@
   async function disconnect() {
     if (!await workspace.disconnect()) status = workspace.actionError;
   }
+
+  async function signOut() {
+    signOutError = "";
+    if (!await workspace.signOut()) signOutError = workspace.actionError;
+  }
 </script>
 
 <svelte:head>
@@ -42,8 +49,21 @@
     <div class="flex-content">
           <h1>Account settings</h1>
     </div>
+    <Button variant="ghost" href={resolve("/")} aria-label="Korero.chat workspace">
+      <svg viewBox="2 0 126 29" class="size-auto w-20" aria-hidden="true"><use href={asset("/korero-logo.svg") + "#wordmark"} /></svg>
+    </Button>
   </header>
   <div class="workspace">
+    {#if workspace.identity?.provider}
+      <section class="dialog-form settings-card" aria-label="Hosted account">
+        <strong>{workspace.identity.username}</strong>
+        <p class="field-hint">{new URL(workspace.identity.provider).host}</p>
+        <Button variant="outline" class="fit-action" disabled={Boolean(workspace.pending)} onclick={signOut}>
+          <LogOut size={16} /> Sign out
+        </Button>
+        {#if signOutError}<p class="form-error" role="alert">{signOutError}</p>{/if}
+      </section>
+    {/if}
     {#if account}
       <form class="dialog-form settings-card" onsubmit={save}>
         <p class="form-status">{workspace.serverTitle}</p>
@@ -55,7 +75,7 @@
         </div>
       </form>
     {:else}
-      <p class="notice">Connect to a server to manage your account.</p>
+      <p class="notice">Connect to a voice server to change your display name there.</p>
     {/if}
   </div>
 </main>

@@ -3,6 +3,7 @@
   import { onMount, tick } from "svelte";
   import ChatMessage from "./ChatMessage.svelte";
   import IconButton from "#lib/components/IconButton.svelte";
+  import Modal from "#lib/components/Modal.svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
   import { Textarea } from "#lib/components/ui/textarea/index.js";
@@ -21,9 +22,11 @@
   const canSend = $derived(canSendDirectMessages && (online || policy.persistent));
   let peer = $state.raw<DirectPeer>();
   let conversation = $state.raw<Awaited<ReturnType<typeof directConversation>>>();
-  let mode = $state<"loading" | "verify" | "verified" | "error">("loading");
+  let mode = $state<"loading" | "unverified" | "verified" | "error">("loading");
   let pinKey = "";
+  let verificationOpen = $state(false);
   let confirmation = $state("");
+  let verificationError = $state("");
   let verificationPending = $state(false);
   let draft = $state("");
   let connectionId = "";
@@ -93,7 +96,7 @@
         throw new Error("This contact’s identity differs from the verified identity on this device.");
       }
       conversation = candidate;
-      mode = pinned ? "verified" : "verify";
+      mode = pinned ? "verified" : "unverified";
       await loadHistory();
     } catch (cause) {
       error = messageFrom(cause);
@@ -101,16 +104,22 @@
     }
   }
 
+  function showVerification() {
+    confirmation = "";
+    verificationError = "";
+    verificationOpen = true;
+  }
+
   async function verifyContact(event: SubmitEvent) {
     event.preventDefault();
-    if (mode !== "verify" || !conversation || verificationPending) return;
+    if (mode !== "unverified" || !conversation || verificationPending) return;
     const code = conversation.safetyCode;
     if (confirmation.replace(/[\s-]/g, "").toLowerCase() !== code) {
-      error = "The safety codes differ. Check the code you received from your contact.";
+      verificationError = "The safety codes differ. Check the code you received from your contact.";
       return;
     }
     verificationPending = true;
-    error = "";
+    verificationError = "";
     try {
       await preferences.transaction("rw", preferences.local, async () => {
         const pinned = await preferences.local.get(pinKey);
@@ -119,9 +128,9 @@
       });
       confirmation = "";
       mode = "verified";
-      await loadHistory();
+      verificationOpen = false;
     } catch (cause) {
-      error = messageFrom(cause);
+      verificationError = messageFrom(cause);
     } finally {
       verificationPending = false;
     }
@@ -151,7 +160,7 @@
 
   async function send(event: SubmitEvent) {
     event.preventDefault();
-    if ((mode !== "verified" && mode !== "verify") || !conversation || !canSend || pending || !draft.trim()) return;
+    if ((mode !== "verified" && mode !== "unverified") || !conversation || !canSend || pending || !draft.trim()) return;
     if (new TextEncoder().encode(draft).length > policy.maxBytes) {
       error = `Messages can use up to ${policy.maxBytes} bytes on this server.`;
       return;
@@ -180,20 +189,19 @@
     <div class="breadcrumb truncate">{workspace.serverTitle} · Direct messages</div>
     <h2 class="truncate">{peer?.displayName ?? "Conversation"}</h2>
   </div>
-  <LockKeyhole size={18} aria-label="End-to-end encryption" />
+  {#if mode === "unverified" || mode === "verified"}
+    <Button variant="outline" aria-haspopup="dialog" onclick={showVerification}>
+      <LockKeyhole size={16} aria-hidden="true" />
+      {mode === "verified" ? "Safety code" : "Verify safety code"}
+    </Button>
+  {:else}
+    <LockKeyhole size={18} aria-label="End-to-end encryption" />
+  {/if}
 </header>
 
-{#if (mode === "verified" || mode === "verify") && conversation}
+{#if (mode === "verified" || mode === "unverified") && conversation}
   <section class="workspace chat-workspace" aria-label="Direct conversation">
     <div class="chat-log" {@attach attachLog} role="log" aria-label="Direct messages">
-      {#if mode === "verify"}
-        <div class="px-3 pt-3 text-sm text-muted-foreground">
-          <p>Messages are end-to-end encrypted. You can compare safety codes to confirm this contact’s identity.</p>
-          <Button variant="outline" onclick={() => { error = ""; mode = "verify"; }}>
-            Compare safety codes
-          </Button>
-        </div>
-      {/if}
       {#if next || historyError}
         <div class="px-3 pt-3">
           {#if historyError}<p class="form-error" role="alert">{historyError}</p>{/if}
@@ -232,6 +240,27 @@
       <Button type="submit" aria-label="Send direct message" disabled={!canSend || pending || !draft.trim()}><Send size={18} /></Button>
     </form>
   </section>
+  <Modal bind:open={verificationOpen} title="Compare safety codes" dismissible={!verificationPending}
+    description={mode === "verified"
+      ? "You verified this contact’s safety code on this device."
+      : `Ask ${peer?.displayName} to open this conversation and share their safety code in person or through a trusted channel.`}>
+    {#snippet icon()}<LockKeyhole size={20} aria-hidden="true" />{/snippet}
+    {#if verificationError}<p class="form-error" role="alert">{verificationError}</p>{/if}
+    <form class="dialog-form" onsubmit={verifyContact}>
+      <p class="key-display font-mono select-all">{safetyCode}</p>
+      {#if mode === "unverified"}
+        <label>Safety code from your contact
+          <Input required bind:value={confirmation} spellcheck={false} autocomplete="off" disabled={verificationPending} />
+        </label>
+      {/if}
+      <div class="dialog-actions">
+        <Button variant="outline" onclick={() => { verificationOpen = false; }} disabled={verificationPending}>Back</Button>
+        {#if mode === "unverified"}
+          <Button type="submit" disabled={verificationPending}>{verificationPending ? "Verifying…" : "Verify safety code"}</Button>
+        {/if}
+      </div>
+    </form>
+  </Modal>
 {:else}
   <div class="workspace">
     {#if error}<p class="form-error" role="alert">{error}</p>{/if}
@@ -239,14 +268,6 @@
       <p role="status">Loading conversation…</p>
     {:else if mode === "error"}
       <Button class="self-start" variant="outline" onclick={open}>Retry</Button>
-    {:else}
-      <form class="dialog-form max-w-xl" onsubmit={verifyContact}>
-        <h3 class="font-semibold">Compare safety codes</h3>
-        <p class="text-sm">Ask {peer?.displayName} to open this conversation and share their safety code with you in person or through a trusted channel.</p>
-        <p class="rounded-lg border p-3 font-mono select-all">{safetyCode}</p>
-        <label>Safety code from your contact <Input required bind:value={confirmation} spellcheck={false} autocomplete="off" /></label>
-        <Button type="submit" class="justify-self-start" disabled={verificationPending}>Verify safety code</Button>
-      </form>
     {/if}
   </div>
 {/if}

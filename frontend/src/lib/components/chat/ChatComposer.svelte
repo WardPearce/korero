@@ -256,8 +256,8 @@
   .formatting { flex-wrap: wrap; }
   .message-actions { margin-inline-start: auto; }
   .formatting :global(.icon-button) { width: 1.8rem; height: 1.8rem; border-color: transparent; background: transparent; }
-  .formatting :global(.icon-button:hover), .formatting :global(.icon-button[aria-pressed="true"]) { background: var(--muted); }
-  .formatting :global(.icon-button[aria-pressed="true"]) { color: var(--primary); }
+  .formatting :global(.icon-button:hover) { background: var(--control-hover); }
+  .formatting :global(.icon-button[aria-pressed="true"]) { background: var(--control-selected); color: var(--primary); }
   .draft-limit { color: var(--destructive); font-size: var(--type-caption); }
   .attachment-draft { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
   .attachment-draft :global(svg) { flex: none; }
@@ -266,7 +266,7 @@
     height: min(360px, 54dvh);
     --background: var(--popover);
     --border-color: var(--border);
-    --button-hover-background: var(--muted);
+    --button-hover-background: var(--control-hover);
     --indicator-color: var(--primary);
     --input-border-color: var(--input);
     --input-font-color: var(--popover-foreground);

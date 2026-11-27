@@ -1,5 +1,35 @@
 # Authentication
 
+## Hosted accounts
+
+Hosted accounts are optional. The app defaults to `voice.korero.chat` in
+production and `localhost` on the configured backend port in development. The
+provider address is editable. A provider accepts new hosted accounts only when
+`server.registration` is `open`. Existing hosted accounts can sign in after
+registration closes. Account providers use HTTPS in production.
+
+The client derives a key from the password using Argon2id. HKDF produces separate
+keys for authentication and AES-256-GCM encryption. The client encrypts the
+Ed25519 private key and saved server list before sending them to the provider.
+The provider stores the username, a verifier for the derived sign-in credential,
+and the encrypted data. The password and encryption key stay in the client.
+Sign in with the same provider address, username, and password to restore the
+data on another device. An encrypted identity export can also restore the key.
+The app saves an encrypted copy of the hosted profile and the keys needed to
+reopen it in device storage. Use **Sign out** in Account settings to clear the
+saved sign-in on that device.
+
+With local setup, the device stores the private key and saved servers. Voice
+server sign-in continues to use Ed25519 challenges in both modes.
+
+Use **Identity** settings to convert a local identity to a hosted account or to
+transfer a hosted identity to another provider. Choose a username and password
+for the destination account. The app encrypts the existing private key and
+saved servers for the destination and switches providers after registration
+succeeds. The original identity remains available from its previous location.
+
+## Voice server accounts
+
 Every server has its own accounts. Registration accepts a display name, a device name,
 and proof of an Ed25519 identity. Names may repeat. The server assigns a random account
 ID, associates it with the public key, and returns device credentials.

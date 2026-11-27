@@ -5,9 +5,10 @@
   import * as DropdownMenu from "#lib/components/ui/dropdown-menu/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
   import SelectField from "#lib/components/fields/SelectField.svelte";
+  import VoiceBitrateField from "#lib/components/fields/VoiceBitrateField.svelte";
   import { Textarea } from "#lib/components/ui/textarea/index.js";
   import {
-    ChevronDown, CircleAlert, DoorOpen, Headphones,
+    ChevronDown, CircleAlert, PhoneOff, Headphones,
     HeadphoneOff, ListTree, LockKeyhole, MessageCircle, Mic, MicOff, Pencil, Plus, Search,
     Download, Mail, Server, Settings2, X,
   } from "@lucide/svelte";
@@ -43,7 +44,6 @@
   let createChannelOpen = $state(false);
   let channelForm = $state<HTMLFormElement>();
   let channelFooter = $state<HTMLDivElement>();
-  let screenShareTarget = $state<HTMLDivElement>();
   let editingChannel = $state.raw<Channel | null>(null);
   let newChannelName = $state("");
   let channelDescription = $state("");
@@ -59,8 +59,9 @@
   let deleteChannelOpen = $state(false);
   let deletingChannel = $state.raw<{ channel: Channel; connectionId: string } | null>(null);
   let search = $state("");
+  let channelSearchOpen = $state(false);
   let collapsed = $state<string[]>([]);
-  let channelAudioKbps = $state<number | undefined>();
+  let channelAudioBitrate = $state<number | null>(null);
   let afkFormOpen = $state(false);
   let afkMessage = $state("");
   let afkFormOrigin = $state("");
@@ -244,7 +245,7 @@
     newChannelName = channel?.name ?? "";
     channelDescription = channel?.description ?? "";
     channelCapacity = channel?.capacity ?? undefined;
-    channelAudioKbps = channel?.audioBitrate == null ? undefined : channel.audioBitrate / 1000;
+    channelAudioBitrate = channel?.audioBitrate ?? null;
     parentChannelId = channel?.parentId ?? "";
     newChannelPassword = "";
     removeChannelPassword = false;
@@ -271,8 +272,7 @@
     }
     const payload: Record<string, unknown> = { name: newChannelName.trim(), description: channelDescription };
     if (editingChannel) payload.channelId = editingChannel.id;
-    const bitrate = channelAudioKbps === undefined ? null : Math.round(channelAudioKbps * 1000);
-    if (canSetAudioBitrate && bitrate !== (editingChannel?.audioBitrate ?? null)) payload.audioBitrate = bitrate;
+    if (canSetAudioBitrate && channelAudioBitrate !== (editingChannel?.audioBitrate ?? null)) payload.audioBitrate = channelAudioBitrate;
     if (workspace.channelBackgrounds) payload.backgroundImageUrl = backgroundImageUrl.trim() || null;
     if (canSetChannelAccess) {
       if (parentChannelId !== (editingChannel?.parentId ?? "")) payload.parentId = parentChannelId || null;
@@ -517,7 +517,7 @@
         {ownMember?.afk ? "AFK (away)" : "AFK"} <ChevronDown aria-hidden="true" />
       </DropdownMenu.Trigger>
       <DropdownMenu.Content align="start">
-        <DropdownMenu.Item onSelect={toggleAfk}>{ownMember?.afk ? "Return from AFK" : "Mark as AFK"}</DropdownMenu.Item>
+        <DropdownMenu.Item onSelect={ownMember?.afk ? toggleAfk : showAfkForm}>{ownMember?.afk ? "Return from AFK" : "Mark as AFK"}</DropdownMenu.Item>
         <DropdownMenu.Item onSelect={showAfkForm}>Set AFK message</DropdownMenu.Item>
       </DropdownMenu.Content>
     </DropdownMenu.Root>
@@ -526,24 +526,35 @@
     {/if}
     {#if activeChannel}
       <span class="toolbar-separator"></span>
-      <IconButton label="Leave voice channel" disabled={!canVoice || Boolean(pending)} onclick={async () => { if (await run("leave", "leave_channel")) playUiSound("disconnect"); }}><DoorOpen size={18} aria-hidden="true" /></IconButton>
+      <IconButton label="Leave voice channel" disabled={!canVoice || Boolean(pending)} onclick={async () => { if (await run("leave", "leave_channel")) playUiSound("disconnect"); }}><PhoneOff size={18} aria-hidden="true" /></IconButton>
     {/if}
     {#if workspace.canAdminister}
       <IconButton label="Server settings" disabled={Boolean(pending)} onclick={workspace.showServerSettings}><Settings2 size={18} aria-hidden="true" /></IconButton>
     {/if}
   </div>
   {#if snapshot?.directMessages && workspace.serverId}
-    <div class="channel-search">
-      <Button variant={workspace.roomView === "directMessages" ? "secondary" : "outline"} class="w-full justify-start"
+    <div class="border-b border-border px-3 py-2.5">
+      <Button variant={workspace.roomView === "directMessages" ? "default" : "secondary"} class="w-full justify-start gap-2.5 font-semibold"
         aria-pressed={workspace.roomView === "directMessages"} onclick={() => workspace.showDirectMessages()}>
-        <Mail size={16} /> Direct messages
-        {#if workspace.unreadDirectAccounts.size}<span class="ms-auto">{workspace.unreadDirectAccounts.size}<span class="sr-only"> unread conversations</span></span>{/if}
+        <Mail size={16} aria-hidden="true" /> Direct messages
+        {#if workspace.unreadDirectAccounts.size}
+          <span class="ms-auto min-w-5 rounded-full bg-background px-1.5 text-center text-xs text-foreground">
+            {workspace.unreadDirectAccounts.size}<span class="sr-only"> unread conversations</span>
+          </span>
+        {/if}
       </Button>
     </div>
   {/if}
-  <div class="channel-search">
-    <Search class="pointer-events-none absolute start-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} aria-hidden="true" />
-    <Input class="ps-8" aria-label="Find a channel" placeholder="Find a channel" bind:value={search} disabled={!snapshot?.channels.length} />
+  <div class="channel-search flex items-center gap-2">
+    {#if channelSearchOpen}
+      <Search class="pointer-events-none absolute start-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} aria-hidden="true" />
+      <Input class="ps-8" aria-label="Find a channel" placeholder="Find a channel" bind:value={search} disabled={!snapshot?.channels.length} />
+      <IconButton label="Close channel search" onclick={() => { channelSearchOpen = false; search = ""; }}><X size={16} aria-hidden="true" /></IconButton>
+    {:else}
+      <Button variant="outline" class="w-full justify-start" disabled={!snapshot?.channels.length} onclick={() => { channelSearchOpen = true; }}>
+        <Search size={16} aria-hidden="true" /> Search channels
+      </Button>
+    {/if}
   </div>
   <div class="channel-scroll">
     <span id="joined-channel-description" class="sr-only">Joined</span>
@@ -569,6 +580,7 @@
     <Button variant="outline" title="Create channel" disabled={!canCreate || Boolean(pending)} onclick={() => showChannelForm()}>
       <Plus size={18} aria-hidden="true" /> Channel
     </Button>
+    <div class="contents" bind:this={workspace.screenShareControlsTarget}></div>
   </div>
 </aside>
 
@@ -586,7 +598,7 @@
     {/if}
     {#if currentChannel}
       <Button variant="outline" onclick={() => isInRoom ? leaveChannel() : joinChannel(currentChannel!)} disabled={!online || Boolean(pending)}>
-        {#if isInRoom}<DoorOpen size={16} /> {voiceAvailable ? "Leave voice" : "Leave channel"}
+        {#if isInRoom}<PhoneOff size={16} /> {voiceAvailable ? "Leave voice" : "Leave channel"}
         {:else}<Headphones size={16} /> {voiceAvailable ? "Join voice" : "Join channel"}{/if}
       </Button>
     {/if}
@@ -605,9 +617,9 @@
     {#if online && snapshot?.channelId && channelFooter}
       {#key snapshot.connectionId + "/" + snapshot.channelId}
         <ScreenSharing {snapshot} controlsTarget={channelFooter} visible={Boolean(activeChannel)} source="camera" />
-        <ScreenSharing {snapshot} controlsTarget={channelFooter} visible={Boolean(activeChannel)} source="screen" />
       {/key}
     {/if}
+    <div class="contents" bind:this={workspace.screenShareViewerTarget}></div>
     <section class="chat-pane" aria-label="Channel chat">
       <div class="chat-log" {@attach attachMessageList} role="log" aria-label="Channel messages">
         {#if isInRoom && view.messages.length}
@@ -670,7 +682,7 @@
 <Modal bind:open={afkFormOpen} title="AFK message" description="People who can see your voice channel can read this message while you’re AFK." dismissible={pending !== "afk"}>
   {#if actionError}<p class="form-error" role="alert">{actionError}</p>{/if}
   <form class="dialog-form" onsubmit={saveAfkMessage}>
-    <label>Message <Input type="text" maxlength={120} placeholder="Optional" bind:value={afkMessage} /></label>
+    <label>Message <Input type="text" maxlength={120} placeholder="Optional" autofocus bind:value={afkMessage} /></label>
     <Button variant="default" type="submit" disabled={!canSetAfk || afkFormOrigin !== workspace.serverOrigin}>
       {ownMember?.afk ? "Save message" : "Go AFK"}
     </Button>
@@ -721,10 +733,11 @@
         <Checkbox label="Remove channel password" bind:checked={removeChannelPassword} />
       {/if}
     {/if}
-    {#if canSetAudioBitrate}
-      <label>Voice bitrate (kbps)<Input type="number" min="32" max="128" step="0.001"
-        placeholder={snapshot?.targetAudioBitrate ? `${snapshot.targetAudioBitrate / 1000} (server default)` : "Server default"}
-        bind:value={channelAudioKbps} /></label>
+    {#if canSetAudioBitrate && channelForm}
+      <BitsConfig defaultPortalTo={channelForm}>
+        <VoiceBitrateField label="Voice bitrate" defaultLabel="Server default"
+          defaultBitrate={snapshot?.targetAudioBitrate} savedBitrate={editingChannel?.audioBitrate} bind:value={channelAudioBitrate} />
+      </BitsConfig>
     {/if}
     {#if workspace.channelBackgrounds}
       <label>Background image URL <Input type="url" pattern="https://.+" maxlength={512} placeholder="https://example.com/channel.jpg"

@@ -5,6 +5,7 @@
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
   import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
+  import SelectField from "#lib/components/fields/SelectField.svelte";
   import Modal from "#lib/components/Modal.svelte";
   import {
     applyAppearance, builtInThemes, colorFields, contrast, defaultTheme, parseTheme, playfulThemes, readAppearance,
@@ -16,6 +17,15 @@
   ] as const;
   const themeFilters = [
     ["all", "All themes"], ["dark", "Dark themes"], ["light", "Light themes"], ["playful", "Playful"],
+  ] as const;
+  const schemeOptions = [
+    { value: "dark", label: "Dark" },
+    { value: "light", label: "Light" },
+  ] as const;
+  const densityOptions = [
+    { value: "compact", label: "Compact" },
+    { value: "comfortable", label: "Comfortable" },
+    { value: "spacious", label: "Spacious" },
   ] as const;
 
   let appearance = $state.raw(readAppearance());
@@ -179,7 +189,7 @@
 {/snippet}
 
 {#snippet channelPreview(theme: Theme, showStatuses = false)}
-  <div class="sample" data-glass={appearance.glassmorphism ? "" : undefined} style={themeStyle(theme)} aria-label="Sample channel" role="group">
+  <div class="sample theme-sample" data-glass={appearance.glassmorphism ? "" : undefined} style={themeStyle(theme)} aria-label="Sample channel" role="group">
     <div class="sample-sidebar">
       <strong>Channels</strong>
       <span class="sample-selection"><Hash size={14} aria-hidden="true" /> General</span>
@@ -240,14 +250,8 @@
             <div class="editor-fields">
               <label class="editor-field">Theme name<Input required maxlength={40} bind:value={draft.name} /></label>
               <div class="editor-options">
-                <label class="editor-field">Color scheme
-                  <select bind:value={draft.scheme}><option value="dark">Dark</option><option value="light">Light</option></select>
-                </label>
-                <label class="editor-field">Density
-                  <select bind:value={draft.density}>
-                    <option value="compact">Compact</option><option value="comfortable">Comfortable</option><option value="spacious">Spacious</option>
-                  </select>
-                </label>
+                <SelectField label="Color scheme" options={schemeOptions} bind:value={draft.scheme} />
+                <SelectField label="Density" options={densityOptions} bind:value={draft.density} />
                 <label class="editor-field"><span class="range-label">Corner radius <output>{draft.radius} px</output></span>
                   <input type="range" aria-label="Corner radius" min="0" max="24" bind:value={draft.radius} />
                 </label>
@@ -378,8 +382,8 @@
     font-size: var(--type-small);
     font-weight: 500;
   }
-  .theme-filters button:hover { color: var(--foreground); }
-  .theme-filters button[aria-pressed="true"] { border-color: var(--border); background: var(--card); color: var(--foreground); }
+  .theme-filters button:hover { background: var(--control-hover); color: var(--foreground); }
+  .theme-filters button[aria-pressed="true"] { border-color: var(--primary); background: var(--control-selected); color: var(--foreground); }
   .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 8.25rem), 1fr)); gap: clamp(.6rem, 1.15cqi, 1rem); }
   .theme-tile {
     display: flex;
@@ -391,7 +395,7 @@
     background: var(--glass-card, var(--card));
     text-align: start;
   }
-  .theme-tile:hover { border-color: var(--input); background: var(--muted); }
+  .theme-tile:hover { border-color: var(--input); background: var(--control-hover); }
   .theme-tile[aria-pressed="true"] { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
   .tile-preview {
     display: grid;
@@ -462,7 +466,6 @@
   .editor-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .9fr); align-items: start; gap: 1.1rem; }
   .editor-options, .color-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
   .editor-field { display: grid; gap: .25rem; min-width: 0; }
-  .editor-field select { width: 100%; min-height: var(--control-height); padding-inline: .55rem; border: 1px solid var(--input); border-radius: var(--radius-lg); background: var(--background); }
   .editor-field input[type="range"] { width: 100%; min-height: var(--control-height); accent-color: var(--primary); }
   .range-label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 .3rem; }
   output, .color-field small { color: var(--muted-foreground); font-size: var(--type-caption); }
@@ -491,7 +494,7 @@
   .sample-sidebar > span { font-size: .9em; color: var(--muted-foreground); }
   .sample-sidebar > .sample-selection {
     border-radius: var(--radius);
-    background: color-mix(in srgb, var(--primary) 14%, var(--muted));
+    background: var(--control-selected);
     box-shadow: inset 3px 0 var(--primary);
     color: var(--foreground);
   }

@@ -113,6 +113,7 @@ const channelDetails = {
 };
 const directAccount = { accountId: id };
 const directCursor = object({ id, createdAt: int(1, Number.MAX_SAFE_INTEGER) });
+export const pokeMaxLength = 200;
 const base64url = (minLength: number, maxLength = minLength) => t.String({ minLength, maxLength, pattern: "^[A-Za-z0-9_-]+$" });
 export const payloads = {
   "connection.authenticate": object({ ticket: token, versions: list(int(1, 100000), 16, 1) }),
@@ -149,6 +150,7 @@ export const payloads = {
   "direct.inbox": empty,
   "direct.history": object({ ...directAccount, before: optional(directCursor) }),
   "direct.send": object({ ...directAccount, id, nonce: base64url(16), ciphertext: base64url(23, 10944), signature: base64url(86) }),
+  "direct.poke": object({ ...directAccount, message: optional(t.String({ maxLength: pokeMaxLength, pattern: "^[^\\u0000-\\u001f\\u007f]*$" })) }),
   "media.capabilities": object({ kind: optional(t.Literal("video")) }),
   "media.transport.create": object({ direction: t.UnionEnum(["send", "receive"]), forceTcp: optional(t.Boolean()),
     kind: optional(t.Literal("video")), videoSource: optional(t.Literal("camera")),

@@ -7,12 +7,47 @@ files:
   - dist/**/*
   - electron/**/*
   - "!node_modules"
+toolsets:
+  appimage: "1.0.3"
 extraResources:
   - from: native/target/release/desktop-client
     to: desktop-client
 linux:
-  icon: static/vnx-icon.png
+  icon: static/korero-logo.png
+  syncDesktopName: true
   target:
-    - AppImage
     - deb
-  category: Network
+    - zip
+    - rpm
+    - AppImage
+    - snap
+  category: "GNOME;GTK;AudioVideo;Network;Utility;"
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+    - target: 7z
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+nsis:
+  allowElevation: true
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+mac:
+  target:
+    - target: default
+      arch: universal
+rpm:
+  fpm: ["--rpm-rpmbuild-define=_build_id_links none"]
+deb:
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0

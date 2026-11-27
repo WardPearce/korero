@@ -1,11 +1,14 @@
 import { createContext, type Snippet } from "svelte";
-import type { MemberRequest, VoiceState } from "./connection/client";
+import type { Member, MemberRequest, VoiceState } from "./connection/client";
 
 export type MobilePane = "servers" | "channels" | "room";
 export type RoomView = "chat" | "directMessages" | "channelSettings" | "serverSettings";
 export type ChannelPlacement = "before" | "after" | "inside";
 
 interface Workspace {
+  readonly identity: { provider?: string; username: string; publicKey: string } | undefined;
+  showAccountSetup(): void;
+  signOut(): Promise<boolean>;
   readonly view: VoiceState;
   readonly serverOrigin: string;
   readonly serverId: string;
@@ -18,6 +21,8 @@ interface Workspace {
   readonly richChat: boolean;
   readonly maxWebSocketBytes: number | undefined;
   readonly screenSharing: boolean;
+  screenShareViewerTarget: HTMLElement | undefined;
+  screenShareControlsTarget: HTMLElement | undefined;
   readonly channelAudioQuality: boolean;
   readonly channelWidth: number;
   readonly channelMax: number;
@@ -30,6 +35,7 @@ interface Workspace {
   readonly directAccountId: string | null;
   readonly unreadDirectAccounts: ReadonlySet<string>;
   showDirectMessages(accountId?: string): void;
+  showPoke(member: Pick<Member, "accountId" | "displayName">): void;
   showConnectionInfo(connectionId: string): void;
   showConnect(address?: string): void;
   showServerSettings(): void;
