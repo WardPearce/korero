@@ -10,7 +10,7 @@
 		<nav aria-label="Primary" class="flex items-center gap-6 text-sm text-muted-foreground">
 			<a href="/#features" class="hover:text-foreground max-sm:hidden">Features</a>
 			<a href="/host" class="hover:text-foreground max-sm:hidden">Host a server</a>
-			<a href="/#protocol" class="hover:text-foreground max-sm:hidden">Protocol</a>
+			<a href="/protocol" class="hover:text-foreground max-sm:hidden">Protocol</a>
 			<a
 				href="/#get"
 				class="rounded-lg bg-primary px-3.5 py-1.5 font-medium text-primary-foreground hover:brightness-110"

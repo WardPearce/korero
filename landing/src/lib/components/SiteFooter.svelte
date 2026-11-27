@@ -5,5 +5,6 @@
 		<img src="/korero-logo.svg" alt="Kōrero." class="h-5 opacity-80" />
 		<a href="https://github.com/WardPearce/korero" class="hover:text-foreground">Source on GitHub</a>
 		<a href="/host" class="hover:text-foreground">Host a server</a>
+		<a href="/protocol" class="hover:text-foreground">Protocol</a>
 	</div>
 </footer>

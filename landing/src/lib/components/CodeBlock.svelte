@@ -5,14 +5,15 @@
 	import yaml from '@shikijs/langs/yaml';
 	import toml from '@shikijs/langs/toml';
 	import ini from '@shikijs/langs/ini';
+	import json from '@shikijs/langs/json';
 	import { korero } from '../korero-theme';
 
-	type Lang = 'bash' | 'yaml' | 'toml' | 'ini';
+	type Lang = 'bash' | 'yaml' | 'toml' | 'ini' | 'json';
 	let { code, lang, label }: { code: string; lang: Lang; label?: string } = $props();
 
 	const highlighter = createHighlighterCoreSync({
 		themes: [korero],
-		langs: [bash, yaml, toml, ini],
+		langs: [bash, yaml, toml, ini, json],
 		engine: createJavaScriptRegexEngine()
 	});
 

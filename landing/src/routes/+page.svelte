@@ -18,7 +18,6 @@
 	import Settings2 from '@lucide/svelte/icons/settings-2';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Quote from '@lucide/svelte/icons/quote';
-	import Radio from '@lucide/svelte/icons/radio';
 	import Search from '@lucide/svelte/icons/search';
 	import Send from '@lucide/svelte/icons/send';
 	import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
@@ -36,7 +35,7 @@
 		},
 		{
 			title: 'Screenshare and camera together',
-			body: 'Share a window, tab or whole display at up to 1080p with source audio. Preview locally, then go live when you are ready.'
+			body: 'Share a window, tab or whole display at up to 1440p with source audio. Preview locally, then go live when you are ready.'
 		},
 		{
 			title: 'Direct messages with safety codes',
@@ -88,8 +87,7 @@
 			]
 		},
 		{ name: 'Lobby', active: false, unread: 0, users: [] },
-		{ name: 'clips', active: false, unread: 3, users: [] },
-		{ name: 'music', active: false, unread: 0, users: [] }
+		{ name: 'clips', active: false, unread: 3, users: [] }
 	];
 
 	const mockMessages = [
@@ -107,7 +105,7 @@
 			t: '19:44',
 			body: 'Sharing my screen in Game night now, jump in whenever.'
 		},
-		{ n: 'ensyy', c: 'bg-accent', t: '19:44', body: 'Joining. Can everyone see the 1080p stream?' }
+		{ n: 'ensyy', c: 'bg-accent', t: '19:44', body: 'Joining. Can everyone see the 1440p stream?' }
 	];
 
 	const platforms = ['Linux desktop', 'Android', 'iOS', 'Web browser'];
@@ -117,9 +115,13 @@
 
 <main id="main">
 	<!-- Hero -->
-	<section class="mx-auto grid max-w-6xl items-center gap-12 px-6 py-20 lg:py-24">
+	<section
+		class="mx-auto grid max-w-6xl items-center gap-14 px-6 py-16 sm:py-20 xl:grid-cols-[minmax(0,30rem)_minmax(0,1fr)] xl:gap-12"
+	>
 		<div>
-			<h1 class="text-4xl leading-[1.08] font-semibold sm:text-6xl">Talk on a server you own.</h1>
+			<h1 class="text-4xl leading-[1.08] font-semibold sm:text-5xl lg:text-6xl">
+				Talk on a server you own.
+			</h1>
 			<p class="mt-6 max-w-[34rem] text-lg text-muted-foreground">
 				Kōrero is a voice and chat server you run yourself. Your friends, community or team join
 				with a key, speak in channels, share screens and message each other privately. Nothing
@@ -146,16 +148,16 @@
 
 		<!-- App mock: mirrors the real client layout -->
 		<div
-			class="overflow-hidden rounded-xl border border-border bg-background text-[0.9375rem] shadow-[0_30px_60px_rgb(0_0_0/45%)] lg:col-span-2"
+			class="hero-mock @container/mock overflow-hidden rounded-xl border border-border bg-background text-[0.9375rem] shadow-[0_30px_60px_rgb(0_0_0/45%)] max-md:hidden"
 			role="img"
 			aria-label="Kōrero app showing the Whānau Hangout server with a Lobby channel"
 		>
 			<div
-				class="grid h-[34rem] grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto_auto] md:grid-cols-[13rem_1px_14rem_1px_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] lg:grid-cols-[14.5rem_1px_24.5rem_1px_minmax(0,1fr)]"
+				class="grid h-[38rem] grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto_auto] @lg/mock:grid-cols-[14rem_1px_minmax(0,1fr)] @lg/mock:grid-rows-[minmax(0,1fr)] @4xl/mock:grid-cols-[14rem_1px_18rem_1px_minmax(0,1fr)]"
 				aria-hidden="true"
 			>
 				<!-- Server rail -->
-				<div class="flex min-w-0 flex-col bg-muted max-md:hidden">
+				<div class="hidden min-w-0 flex-col bg-muted @4xl/mock:flex">
 					<div class="flex-1 p-3">
 						<img src="/korero-logo.svg" alt="" class="mb-5 h-7 w-28" />
 						<div
@@ -211,51 +213,29 @@
 						</span>
 					</div>
 				</div>
-				<div class="bg-border max-md:hidden"></div>
+				<div class="hidden bg-border @4xl/mock:block"></div>
 
 				<!-- Channel pane -->
-				<div class="flex min-w-0 flex-col bg-muted max-md:hidden">
-					<div class="border-b border-border px-4 py-4 text-xl">Whānau Hangout</div>
+				<div class="hidden min-w-0 flex-col bg-muted @lg/mock:flex">
+					<div class="truncate border-b border-border px-4 py-4 text-xl">Whānau Hangout</div>
 					<div class="border-b border-border px-4 py-2 text-sm text-muted-foreground">
 						7 total <span class="ml-2 inline-block size-1.5 rounded-full bg-success"></span> 4 online
 					</div>
-					<div class="flex gap-2 overflow-hidden border-b border-border p-2.5 max-lg:hidden">
-						<span class="flex h-9 overflow-hidden rounded-lg border border-border">
-							<span class="grid w-9 place-items-center text-muted-foreground">
-								<Mic size={16} />
-							</span>
-							<span class="grid w-8 place-items-center border-l border-input">
-								<ChevronDown size={16} />
-							</span>
+					<div class="hidden items-center gap-2 border-b border-border p-2.5 @lg/mock:flex">
+						<span
+							class="grid h-9 w-9 place-items-center rounded-lg border border-border text-muted-foreground"
+						>
+							<Mic size={16} />
 						</span>
-						<span class="flex h-9 overflow-hidden rounded-lg border border-border">
-							<span class="grid w-9 place-items-center text-muted-foreground">
-								<Headphones size={16} />
-							</span>
-							<span class="grid w-8 place-items-center border-l border-input">
-								<ChevronDown size={16} />
-							</span>
+						<span
+							class="grid h-9 w-9 place-items-center rounded-lg border border-border text-muted-foreground"
+						>
+							<Headphones size={16} />
 						</span>
 						<span
 							class="flex h-9 items-center gap-1 rounded-lg border border-border px-3 text-sm text-muted-foreground"
 						>
 							AFK <ChevronDown size={14} />
-						</span>
-						<span
-							class="grid h-9 w-9 place-items-center rounded-lg border border-border text-muted-foreground"
-						>
-							<Radio size={16} />
-						</span>
-						<span class="mx-0.5 w-px bg-border"></span>
-						<span
-							class="grid h-9 w-9 place-items-center rounded-lg border border-border text-muted-foreground"
-						>
-							<PhoneOff size={16} />
-						</span>
-						<span
-							class="grid h-9 w-9 place-items-center rounded-lg border border-border text-muted-foreground"
-						>
-							<SlidersHorizontal size={16} />
 						</span>
 					</div>
 					<div class="border-b border-border p-2.5">
@@ -306,7 +286,9 @@
 										</span>
 										<span class="truncate">{u.n}</span>
 										{#if u.role}
-											<span class="rounded border border-primary px-1.5 text-xs text-foreground">
+											<span
+												class="hidden rounded border border-primary px-1.5 text-xs text-foreground @4xl/mock:inline"
+											>
 												{u.role}
 											</span>
 										{/if}
@@ -327,7 +309,7 @@
 						</span>
 					</div>
 				</div>
-				<div class="bg-border max-md:hidden"></div>
+				<div class="hidden bg-border @lg/mock:block"></div>
 
 				<!-- Room pane -->
 				<div class="flex min-w-0 flex-col">
@@ -391,7 +373,7 @@
 				</div>
 
 				<!-- Mobile: voice toolbar + bottom nav -->
-				<div class="flex gap-2 border-t border-border bg-muted p-2 md:hidden">
+				<div class="flex gap-2 border-t border-border bg-muted p-2 @lg/mock:hidden">
 					<span
 						class="grid h-9 w-9 place-items-center rounded-lg border border-border text-muted-foreground"
 					>
@@ -414,7 +396,7 @@
 					</span>
 				</div>
 				<div
-					class="grid grid-cols-4 gap-1 border-t border-border bg-muted px-1 pt-1 pb-1.5 text-xs md:hidden"
+					class="grid grid-cols-4 gap-1 border-t border-border bg-muted px-1 pt-1 pb-1.5 text-xs @lg/mock:hidden"
 				>
 					<span class="flex flex-col items-center gap-0.5 rounded-lg p-1 text-muted-foreground">
 						<Server size={18} /> Servers
@@ -473,7 +455,7 @@
 					in the middle.
 				</p>
 			</div>
-			<div>
+			<div class="min-w-0">
 				<CodeBlock
 					lang="bash"
 					label="Deploy with Docker"
@@ -512,6 +494,12 @@ docker logs korero`}
 					Servers recognise your Ed25519 identity and apply their own registration policies, so one
 					key works across every server you join.
 				</p>
+				<a
+					href="/protocol"
+					class="mt-6 inline-flex rounded-lg border border-border bg-card px-5 py-2.5 font-medium hover:border-input"
+				>
+					Read the protocol docs
+				</a>
 			</div>
 		</div>
 	</section>
@@ -541,3 +529,11 @@ docker logs korero`}
 </main>
 
 <SiteFooter />
+
+<style>
+	@media (min-width: 80rem) {
+		.hero-mock {
+			margin-right: max(-28rem, calc((72rem - 100vw) / 2));
+		}
+	}
+</style>

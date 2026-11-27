@@ -79,3 +79,72 @@ button:focus-visible {
 		animation: none;
 	}
 }
+
+/* Long-form docs pages */
+.docs .lead {
+	margin-top: 1rem;
+	font-size: 1.125rem;
+	color: var(--muted-foreground);
+}
+.docs h2 {
+	margin-top: 3.5rem;
+	padding-top: 1.5rem;
+	border-top: 1px solid var(--border);
+	font-size: 1.75rem;
+	scroll-margin-top: 1rem;
+}
+.docs h3 {
+	margin-top: 2rem;
+	font-size: 1.25rem;
+	scroll-margin-top: 1rem;
+}
+.docs p,
+.docs ul,
+.docs ol,
+.docs table {
+	padding-left: 1.4rem;
+}
+.docs ul {
+	list-style: disc;
+}
+.docs ol {
+	list-style: decimal;
+}
+.docs li {
+	margin-top: 0.5rem;
+	padding-left: 0.25rem;
+}
+.docs a {
+	color: var(--primary);
+	text-underline-offset: 3px;
+}
+.docs a:hover {
+	text-decoration: underline;
+}
+.docs code {
+	font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+	font-size: 0.875em;
+}
+.docs :not(pre) > code {
+	padding: 0.1em 0.35em;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--muted);
+	overflow-wrap: anywhere;
+}
+.docs table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.9375rem;
+}
+.docs th,
+.docs td {
+	padding: 0.6rem 0.75rem;
+	border-bottom: 1px solid var(--border);
+	text-align: left;
+	vertical-align: top;
+}
+.docs th {
+	color: var(--muted-foreground);
+	font-weight: 600;
+}
