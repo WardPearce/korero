@@ -8,7 +8,7 @@ const maxEncryptedLength = 65536;
 const sessionKey = "hosted-account";
 
 export const defaultAccountProvider = import.meta.env.DEV
-  ? import.meta.env.VITE_DEV_ACCOUNT_PROVIDER as string : "voice.korero.chat";
+  ? import.meta.env.VITE_DEV_ACCOUNT_PROVIDER as string : "account.korero.chat";
 
 function parseUrl(value: string) {
   try { return new URL(value); } catch { return null; }

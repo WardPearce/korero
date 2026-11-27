@@ -2,7 +2,7 @@
 
 ## Hosted accounts
 
-Hosted accounts are optional. The app defaults to `voice.korero.chat` in
+Hosted accounts are optional. The app defaults to `account.korero.chat` in
 production and `localhost` on the configured backend port in development. The
 provider address is editable. A provider accepts new hosted accounts only when
 `server.registration` is `open`, up to `limits.hosted_accounts`. When the provider
