@@ -4,6 +4,81 @@ import { join } from "node:path";
 import { fixture, testIdentity, until, type Device, type Snapshot } from "../server";
 import { LOBBY } from "../../src/database";
 
+test("channel permission changes respect the caller's access throughout the affected subtree", async () => {
+  const server = await fixture();
+  try {
+    const owner = await server.owner();
+    const admin = await server.register("Administrator");
+    await server.call("/api/v1/admin/roles", { accountId: admin.account.id, role: "Administrator" }, owner.accessToken, "PATCH");
+    const ownerWs = await server.ws(owner);
+    const adminWs = await server.ws(admin);
+    const { channelId: parent } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Parent" });
+    const { channelId: child } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Child", parentId: parent });
+    const override = (socket: typeof ownerWs, channelId: string, role: string, permission: string, allow: boolean | null) =>
+      socket.rpc("channel.override", { channelId, role, permission, allow });
+
+    for (const permission of ["join", "editChannels", "text"]) {
+      await override(ownerWs, child, "Administrator", permission, false);
+      await expect(override(adminWs, child, "Guest", "text", true)).rejects.toThrow("FORBIDDEN");
+      await override(ownerWs, child, "Administrator", permission, null);
+    }
+    await expect(override(adminWs, child, "Administrator", "text", false)).rejects.toThrow("FORBIDDEN");
+    await override(ownerWs, child, "Administrator", "text", false);
+    await expect(override(adminWs, parent, "Guest", "text", true)).rejects.toThrow("FORBIDDEN");
+    const { channelId: destination } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Destination" });
+    await override(ownerWs, destination, "Guest", "text", true);
+    await expect(adminWs.rpc("channel.edit", { channelId: parent, parentId: destination })).rejects.toThrow("FORBIDDEN");
+    await override(ownerWs, child, "Guest", "text", false);
+    await expect(adminWs.rpc("channel.edit", { channelId: parent, parentId: destination })).resolves.toMatchObject({ channelId: parent });
+    await expect(adminWs.rpc("channel.edit", { channelId: parent, parentId: null })).resolves.toMatchObject({ channelId: parent });
+    await expect(override(adminWs, parent, "Guest", "text", true)).resolves.toEqual({});
+    await expect(override(adminWs, child, "Guest", "text", null)).rejects.toThrow("FORBIDDEN");
+    await override(ownerWs, child, "Guest", "text", true);
+    await expect(override(adminWs, child, "Guest", "speak", true)).rejects.toThrow("FORBIDDEN");
+  } finally { await server.cleanup(); }
+});
+
+test("role administration requires a lower rank and control of current and proposed grants", async () => {
+  const server = await fixture();
+  try {
+    const owner = await server.owner();
+    const admin = await server.register("Administrator");
+    const delegate = await server.register("Delegate");
+    const moderator = await server.register("Moderator");
+    const guest = await server.register("Guest");
+    const roles = "/api/v1/admin/roles";
+    const definition = `${roles}/definition`;
+    const assign = (actor: Device, target: Device, role: string) =>
+      server.fail(roles, { accountId: target.account.id, role }, actor.accessToken, "PATCH");
+    const delegator = { name: "Role manager", permissions: ["join", "manageRoles"] };
+    const reader = { name: "Reader", permissions: ["join"] };
+    expect((await assign(owner, admin, "Administrator")).status).toBe(200);
+    expect((await assign(owner, moderator, "Moderator")).status).toBe(200);
+    expect((await assign(owner, guest, "Guest")).status).toBe(200);
+    expect((await server.fail(roles, delegator, owner.accessToken)).status).toBe(200);
+    expect((await assign(owner, delegate, delegator.name)).status).toBe(200);
+    expect((await assign(delegate, delegate, "Guest")).status).toBe(403);
+    expect((await assign(delegate, moderator, "Guest")).status).toBe(403);
+    expect((await assign(delegate, guest, "Moderator")).status).toBe(403);
+    expect((await server.fail(definition, { ...delegator, permissions: ["join"] }, delegate.accessToken, "PATCH")).status).toBe(403);
+    const delegateWs = await server.ws(delegate);
+    await expect(delegateWs.rpc("role.set", { accountId: moderator.account.id, role: "Guest" })).rejects.toThrow("FORBIDDEN");
+
+    expect((await server.fail(roles, reader, admin.accessToken)).status).toBe(200);
+    const ownerWs = await server.ws(owner);
+    const { channelId } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Restricted text" });
+    await ownerWs.rpc("channel.override", { channelId, role: "Administrator", permission: "text", allow: false });
+    expect((await server.fail(definition, { ...reader, permissions: ["join", "text"] }, admin.accessToken, "PATCH")).status).toBe(403);
+    expect((await assign(admin, guest, reader.name)).status).toBe(200);
+    expect((await assign(owner, guest, "Guest")).status).toBe(200);
+    await ownerWs.rpc("channel.override", { channelId, role: reader.name, permission: "text", allow: true });
+    expect((await assign(admin, guest, reader.name)).status).toBe(403);
+    expect((await server.fail(definition, reader, admin.accessToken, "PATCH")).status).toBe(403);
+    expect((await server.fail(definition, { name: reader.name }, admin.accessToken, "DELETE")).status).toBe(403);
+    expect((await server.fail(definition, { name: reader.name }, owner.accessToken, "DELETE")).status).toBe(200);
+  } finally { await server.cleanup(); }
+});
+
 test("built-in role permissions apply to connected accounts and protect the registration role", async () => {
   const server = await fixture();
   try {
@@ -415,7 +490,7 @@ test("live server preferences and paged audit history enforce role permissions",
   } finally { await server.cleanup(); }
 });
 
-test("invitation links bypass the registration password and honor updated limits and deletion", async () => {
+test("invited identities can sign back in without the password and invitations honor updated limits and deletion", async () => {
   const server = await fixture({ environment: { VOICE_SERVER_REGISTRATION: "invitation" } });
   try {
     const owner = await server.owner();
@@ -441,7 +516,10 @@ test("invitation links bypass the registration password and honor updated limits
     const alice = await register("Alice", payload.token, key);
     expect(alice.response.status).toBe(201);
     expect((await register("Alice", payload.token, key)).response.status).toBe(409);
-    expect((await server.fail("/api/v1/auth/identity/login", await server.proof("login", key))).status).toBe(401);
+    const signIn = async () => server.call<Device>("/api/v1/auth/identity/login", await server.proof("login", key));
+    const login = await signIn();
+    expect(login.response.status).toBe(200);
+    expect(login.payload.account.id).toBe(alice.payload.account.id);
 
     const invitation = `${path}/${payload.id}`;
     expect((await server.fail(invitation, { usesLeft: 10 }, alice.payload.accessToken, "PATCH")).status).toBe(403);
@@ -457,5 +535,11 @@ test("invitation links bypass the registration password and honor updated limits
     expect((await edit({ usesLeft: 1 })).response.status).toBe(404);
     expect((await list()).payload.invitations.map(({ id }) => id)).toEqual([other.id]);
     expect((await register("David", other.token)).response.status).toBe(201);
+    expect((await server.call("/api/v1/admin/password", { password: "replacement phrase" }, owner.accessToken, "PATCH")).response.status).toBe(200);
+    expect((await server.call("/api/v1/auth/logout-all", {}, login.payload.accessToken)).response.status).toBe(200);
+    const reconnected = await signIn();
+    expect(reconnected.response.status).toBe(200);
+    expect(reconnected.payload.account.id).toBe(alice.payload.account.id);
+    expect(reconnected.payload.sessionId).not.toBe(login.payload.sessionId);
   } finally { await server.cleanup(); }
 });

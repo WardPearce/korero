@@ -87,7 +87,7 @@ test("direct messages reach only the two accounts and survive an offline recipie
 });
 
 test("live-only servers queue offline sends until a recipient device acknowledges them", async () => {
-  const server = await fixture();
+  const server = await fixture({ environment: { VOICE_MESSAGING_PERSISTENCE: "false" } });
   try {
     const alice = await server.owner();
     const bob = await server.register("Bobby");
@@ -116,6 +116,21 @@ test("live-only servers queue offline sends until a recipient device acknowledge
     expect(event?.payload.id).toBe(live.id);
     expect(await recipient.rpc<Packet[]>("direct.pending")).toEqual([]);
     expect(await recipient.rpc<Inbox>("direct.inbox")).toEqual([]);
+    expect(await recipient.rpc<Page>("direct.history", { accountId: alice.account.id })).toEqual({ messages: [], next: null });
+
+    for (const original of [queued, live]) {
+      const replacement = { ...envelope(bob.account.id), id: original.id };
+      await sender.rpc("direct.edit", replacement);
+      const edit = await until(() => recipient.received.find(({ type, payload }) => type === "direct.edited" && payload.id === original.id), Boolean);
+      expect(edit?.payload).toMatchObject({ id: original.id, senderId: alice.account.id, recipientId: bob.account.id,
+        ciphertext: replacement.ciphertext, editedAt: expect.any(Number),
+        createdAt: original === queued ? pending[0]!.createdAt : event?.payload.createdAt });
+      await sender.rpc("direct.delete", { accountId: bob.account.id, id: original.id });
+      const deleted = await until(() => recipient.received.find(({ type, payload }) => type === "direct.deleted" && payload.id === original.id), Boolean);
+      expect(deleted?.payload).toEqual({ id: original.id, senderId: alice.account.id, recipientId: bob.account.id });
+      await expect(sender.rpc("direct.edit", replacement)).rejects.toThrow("NOT_FOUND");
+    }
+    expect(await recipient.rpc<Packet[]>("direct.pending")).toEqual([]);
     expect(await recipient.rpc<Page>("direct.history", { accountId: alice.account.id })).toEqual({ messages: [], next: null });
   } finally { await server.cleanup(); }
 });

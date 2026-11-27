@@ -322,6 +322,19 @@
                     }
                   ]
                 },
+                "icon": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "maxLength": 16,
+                      "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "audioBitrate": {
                   "anyOf": [
                     {
@@ -469,6 +482,19 @@
                     {
                       "minLength": 1,
                       "maxLength": 512,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "icon": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "maxLength": 16,
+                      "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
                       "type": "string"
                     },
                     {
@@ -678,22 +704,49 @@
               "const": "channel.move"
             },
             "payload": {
-              "additionalProperties": false,
-              "type": "object",
-              "required": [
-                "connectionId",
-                "channelId"
-              ],
-              "properties": {
-                "connectionId": {
-                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
-                  "type": "string"
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "connectionId",
+                    "channelId"
+                  ],
+                  "properties": {
+                    "connectionId": {
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                      "type": "string"
+                    },
+                    "channelId": {
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                      "type": "string"
+                    }
+                  }
                 },
-                "channelId": {
-                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
-                  "type": "string"
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "connectionIds",
+                    "channelId"
+                  ],
+                  "properties": {
+                    "connectionIds": {
+                      "minItems": 1,
+                      "maxItems": 1024,
+                      "type": "array",
+                      "items": {
+                        "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                        "type": "string"
+                      }
+                    },
+                    "channelId": {
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                      "type": "string"
+                    }
+                  }
                 }
-              }
+              ]
             }
           }
         },

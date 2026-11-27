@@ -108,6 +108,26 @@ test("live attachment quotas apply per sender and release capacity on deletion",
   } finally { await server.cleanup(); }
 });
 
+test("live channel messages can be edited and deleted without entering history", async () => {
+  const server = await fixture({ environment: { VOICE_MESSAGING_PERSISTENCE: "false" } });
+  try {
+    const moderator = await server.ws(await server.owner());
+    const sender = await server.ws(await server.register("Alice"));
+    for (const socket of [moderator, sender]) await socket.rpc("channel.join", { channelId: LOBBY });
+
+    const sent = await sender.rpc<{ messageId: string }>("message.send", { channelId: LOBBY, text: "Original" });
+    await sender.rpc("message.edit", { ...sent, text: "Updated" });
+    const edit = await until(() => moderator.received.find(({ type }) => type === "message.edited"), Boolean);
+    expect(edit?.payload).toEqual({ ...sent, text: "Updated", editedAt: expect.any(Number) });
+    expect(await sender.rpc<unknown[]>("message.history", { channelId: LOBBY })).toEqual([]);
+
+    await moderator.rpc("message.delete", sent);
+    const deletion = await until(() => sender.received.find(({ type }) => type === "message.deleted"), Boolean);
+    expect(deletion?.payload).toEqual(sent);
+    await expect(sender.rpc("message.edit", { ...sent, text: "Restored" })).rejects.toThrow("NOT_FOUND");
+  } finally { await server.cleanup(); }
+});
+
 test("WebSocket upgrades share a rate limit across route forms and pending slots are released", async () => {
   const server = await fixture({ environment: { VOICE_LIMITS_PENDING_CONNECTIONS_PER_IP: "1", VOICE_LIMITS_UPGRADES_PER_MINUTE: "3" } });
   try {
@@ -146,6 +166,14 @@ test("channels, inheritance, password membership, moderation and text are permis
     await adminWs.rpc("channel.edit", { channelId: parent.channelId, backgroundImageUrl: null });
     expect((await aliceWs.rpc<Snapshot>("state.get")).channels).toContainEqual(expect.objectContaining({
       id: parent.channelId, backgroundImageUrl: null,
+    }));
+    const icon = "🎮";
+    await adminWs.rpc("channel.edit", { channelId: parent.channelId, icon });
+    expect((await aliceWs.rpc<Snapshot>("state.get")).channels).toContainEqual(expect.objectContaining({ id: parent.channelId, icon }));
+    await expect(adminWs.rpc("channel.edit", { channelId: parent.channelId, icon: " " })).rejects.toThrow("INVALID_REQUEST");
+    await adminWs.rpc("channel.edit", { channelId: parent.channelId, icon: null });
+    expect((await aliceWs.rpc<Snapshot>("state.get")).channels).toContainEqual(expect.objectContaining({
+      id: parent.channelId, icon: null,
     }));
     await expect(aliceWs.rpc("role.set", { accountId: alice.account.id, role: "Owner" })).rejects.toThrow("FORBIDDEN");
     await expect(adminWs.rpc("role.set", { accountId: owner.account.id, role: "Member" })).rejects.toThrow("FORBIDDEN");
@@ -190,6 +218,56 @@ test("channels, inheritance, password membership, moderation and text are permis
     await adminWs.rpc("moderation.kick", { accountId: bob.account.id });
     expect((await bobWs.closed).code).toBe(4403);
     await expect(server.ws(bob)).rejects.toThrow("FORBIDDEN");
+  } finally { await server.cleanup(); }
+});
+
+test("member moves enforce channel permissions and capacity for the whole group", async () => {
+  const server = await fixture();
+  try {
+    const owner = await server.owner();
+    const moderator = await server.register("Moderator");
+    const aliceWs = await server.ws(await server.register("Alice"));
+    const bobWs = await server.ws(await server.register("Bobby"));
+    const adminWs = await server.ws(owner);
+    const moderatorWs = await server.ws(moderator);
+    await adminWs.rpc("role.set", { accountId: moderator.account.id, role: "Moderator" });
+    const create = (payload: object) => adminWs.rpc<{ channelId: string }>("channel.create", payload);
+    const source = await create({ name: "Source" });
+    const destination = await create({ name: "Destination", capacity: 1, password: "private phrase" });
+    const alice = await aliceWs.rpc<Snapshot>("channel.join", { channelId: source.channelId });
+    const bob = await bobWs.rpc<Snapshot>("channel.join", { channelId: LOBBY });
+    const payload = { channelId: destination.channelId, connectionIds: [alice.connectionId, bob.connectionId] };
+    const move = () => moderatorWs.rpc("channel.move", payload);
+    const channelOf = async (ws: typeof aliceWs) => (await ws.rpc<Snapshot>("state.get")).channelId;
+    expect((await moderatorWs.rpc<Snapshot>("state.get")).channels).toContainEqual(
+      expect.objectContaining({ id: destination.channelId, canMove: true }));
+    await expect(aliceWs.rpc("channel.move", payload)).rejects.toThrow("FORBIDDEN");
+    await expect(move()).rejects.toThrow("LIMIT");
+    expect(await channelOf(aliceWs)).toBe(source.channelId);
+    expect(await channelOf(bobWs)).toBe(LOBBY);
+
+    await adminWs.rpc("channel.edit", { channelId: destination.channelId, capacity: 2 });
+    await adminWs.rpc("channel.override", { channelId: LOBBY, role: "Moderator", permission: "move", allow: false });
+    expect((await moderatorWs.rpc<Snapshot>("state.get")).channels).toContainEqual(
+      expect.objectContaining({ id: LOBBY, canMove: false }));
+    await expect(move()).rejects.toThrow("FORBIDDEN");
+    expect(await channelOf(aliceWs)).toBe(source.channelId);
+    expect(await channelOf(bobWs)).toBe(LOBBY);
+    await adminWs.rpc("channel.override", { channelId: LOBBY, role: "Moderator", permission: "move", allow: null });
+    await adminWs.rpc("channel.override", { channelId: destination.channelId, role: "Member", permission: "join", allow: false });
+    await expect(move()).rejects.toThrow("FORBIDDEN");
+    expect(await channelOf(aliceWs)).toBe(source.channelId);
+    expect(await channelOf(bobWs)).toBe(LOBBY);
+    await adminWs.rpc("channel.override", { channelId: destination.channelId, role: "Member", permission: "join", allow: null });
+
+    await move();
+    expect(await channelOf(aliceWs)).toBe(destination.channelId);
+    expect(await channelOf(bobWs)).toBe(destination.channelId);
+    expect(bobWs.received).toContainEqual(expect.objectContaining({
+      type: "channel.changed", payload: { channelId: destination.channelId },
+    }));
+    await moderatorWs.rpc("channel.move", { channelId: LOBBY, connectionId: alice.connectionId });
+    expect(await channelOf(aliceWs)).toBe(LOBBY);
   } finally { await server.cleanup(); }
 });
 

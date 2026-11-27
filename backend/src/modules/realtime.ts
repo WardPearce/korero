@@ -11,6 +11,7 @@ import { sanitizeChatHtml } from "../security/html";
 import { PasswordWork } from "../security/work";
 import { Auth, isBanned, type Account, type Session } from "./auth";
 import { DirectMessages } from "./direct-messages";
+import { LiveMessageIndex, liveMessageLifetime } from "./live-message-index";
 import { Media, type VideoSource, type WhisperRoute } from "./media";
 
 type Channel = typeof channels.$inferSelect;
@@ -21,7 +22,8 @@ type Peer = { id: string; socket: Socket; source: string; session: Session | nul
   muted: boolean; deafened: boolean; adminMuted: boolean; adminDeafened: boolean; deadline: number; closed: boolean; pending: number;
   queue: Promise<void>; latest: number; replayBytes: number; replies: Map<number, { digest: string; reply: string; size: number }> };
 type AttachmentData = { name: string; size: number; data: Buffer };
-type LiveAttachment = { message: typeof messages.$inferSelect; file: AttachmentData; expiresAt: number };
+type MessageReference = Pick<typeof messages.$inferSelect, "id" | "channelId" | "senderId" | "recipientId">;
+type LiveAttachment = { message: MessageReference; file: AttachmentData; expiresAt: number };
 type ChannelChange = Extract<Request, { type: "channel.edit" | "channel.create" }>["payload"];
 const compareChannels = (a: Channel, b: Channel) =>
   a.position - b.position || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
@@ -48,6 +50,7 @@ export class Realtime {
   private readonly roleGrants = new Map<Role, Set<Permission>>();
   private readonly customRoles = new Map<Role, number>();
   private readonly overrides = new Map<string, Map<string, boolean>>();
+  private readonly liveText = new LiveMessageIndex<MessageReference>();
   private readonly liveAttachments = new Map<string, LiveAttachment>();
   private readonly liveAttachmentBytesByAccount = new Map<string, number>();
   private liveAttachmentBytes = 0;
@@ -208,6 +211,7 @@ export class Realtime {
       const expired = this.db.select({ id: messages.id }).from(messages).where(lt(messages.createdAt, this.retentionCutoff())).limit(1000);
       this.db.delete(messages).where(inArray(messages.id, expired)).run();
       this.directMessages.prune();
+      this.liveText.prune(now);
       for (const [id, entry] of this.liveAttachments) {
         if (entry.expiresAt <= now) this.removeLiveAttachment(id);
       }
@@ -327,13 +331,18 @@ export class Realtime {
   }
   private roleAllowed(role: Role, permission: Permission, channel?: Channel) {
     if (role === "Owner") return true;
-    let current = channel;
+    return this.channelOverride(role, permission, channel) ?? this.roleGrants.get(role)?.has(permission) ?? false;
+  }
+  private channelOverride(role: Role, permission: Permission, channel?: Channel) {
+    if (!channel) return undefined;
+    const key = `${role}/${permission}`;
+    let current: Channel | undefined = channel;
     while (current) {
-      const override = this.overrides.get(current.id)?.get(`${role}/${permission}`);
+      const override = this.overrides.get(current.id)?.get(key);
       if (override !== undefined) return override;
       current = current.parentId ? this.catalog.get(current.parentId) : undefined;
     }
-    return this.roleGrants.get(role)?.has(permission) ?? false;
+    return undefined;
   }
   private require(account: Account, permission: Permission, channel?: Channel) {
     if (!this.allowed(account, permission, channel)) fail("FORBIDDEN");
@@ -349,9 +358,25 @@ export class Realtime {
     const rank = roles.findIndex((name) => name === role);
     return rank < 0 ? fail("NOT_FOUND") : rank;
   }
-  private canAssign(actor: Account, role: Role) {
-    return this.rank(role) < this.rank(actor.role) &&
-      [...this.roleGrants.get(role) ?? []].every((permission) => this.allowed(actor, permission));
+  private holdsServerGrants(actor: Account, grants?: ReadonlySet<Permission>) {
+    return [...grants ?? []].every((permission) => this.allowed(actor, permission));
+  }
+  private holdsRoleGrants(actor: Account, role: Role, grants = this.roleGrants.get(role)) {
+    if (actor.role === "Owner") return true;
+    if (!this.holdsServerGrants(actor, grants)) return false;
+    // Effective grants can only differ from their parent where either role has an override.
+    for (const [channelId, overrides] of this.overrides) {
+      for (const permission of channelPermissions) {
+        if (!overrides.has(`${role}/${permission}`) && !overrides.has(`${actor.role}/${permission}`)) continue;
+        const channel = this.channel(channelId);
+        const granted = this.channelOverride(role, permission, channel) ?? grants?.has(permission);
+        if (granted && !this.allowed(actor, permission, channel)) return false;
+      }
+    }
+    return true;
+  }
+  private canManageRole(actor: Account, role: Role) {
+    return this.rank(role) < this.rank(actor.role) && this.holdsRoleGrants(actor, role);
   }
   private lowerRoles(actor: Account) {
     return [...roles, ...this.customRoles.keys()].filter((role) => this.rank(role) < this.rank(actor.role));
@@ -361,15 +386,20 @@ export class Realtime {
     const rows = this.db.select({ id: accounts.id, displayName: accounts.displayName, badge: accounts.badge, role: accountRoles.role })
       .from(accounts).innerJoin(accountRoles, eq(accounts.id, accountRoles.accountId))
       .where(after ? gt(accounts.id, after) : undefined).orderBy(accounts.id).limit(51).all();
+    const manageable = new Set(this.lowerRoles(actor).filter((role) => this.holdsRoleGrants(actor, role)));
+    const actorCanBan = this.allowed(actor, "ban");
     const accountsPage = rows.slice(0, 50).map((account) => ({
-      ...account, editable: account.id !== actor.id && this.rank(account.role) < this.rank(actor.role),
+      ...account,
+      editable: manageable.has(account.role),
+      bannable: actorCanBan && this.canBan(actor, account),
+      banned: isBanned(this.db, account.id),
     }));
     const canDefineRoles = this.rank(actor.role) >= this.rank("Administrator");
     const customRoles = [...this.customRoles.keys()];
     return { accounts: accountsPage, next: rows.length > 50 ? accountsPage.at(-1)!.id : null,
-      roles: this.lowerRoles(actor).filter((role) => this.canAssign(actor, role)),
+      roles: [...manageable],
       builtInRoles: canDefineRoles ? roles.map((name) => ({ name, permissions: [...this.roleGrants.get(name) ?? []],
-        editable: configurableRoles.has(name), defaultPermissions: [...defaultPermissions[name]] })) : [],
+        editable: configurableRoles.has(name) && manageable.has(name), defaultPermissions: [...defaultPermissions[name]] })) : [],
       customRoles: canDefineRoles ? customRoles.map((name) => ({ name, permissions: [...this.roleGrants.get(name) ?? []] })) : [],
       assignablePermissions: canDefineRoles ? permissions.filter((permission) => this.allowed(actor, permission)) : [],
       canDefineRoles, defaultRole: this.defaultRole, registrationPermissions: [...registrationGrants] };
@@ -377,8 +407,7 @@ export class Realtime {
   setRole(actor: Account, accountId: string, role: Role) {
     this.require(actor, "manageRoles");
     const target = this.auth.account(accountId);
-    this.subordinate(actor, target);
-    if (!this.canAssign(actor, role)) fail("FORBIDDEN");
+    if (!this.canManageRole(actor, target.role) || !this.canManageRole(actor, role)) fail("FORBIDDEN");
     if (target.role === role) return;
     this.db.transaction((tx) => {
       tx.update(accountRoles).set({ role }).where(eq(accountRoles.accountId, accountId)).run();
@@ -411,8 +440,9 @@ export class Realtime {
       if (roles.some((role) => role === name)) fail("FORBIDDEN");
       fail("NOT_FOUND");
     }
+    if (!create && !this.canManageRole(actor, name)) fail("FORBIDDEN");
     const unique = new Set(grants);
-    for (const permission of unique) this.require(actor, permission);
+    if (!this.holdsRoleGrants(actor, name, unique)) fail("FORBIDDEN");
     if (name === this.defaultRole && [...unique].some((permission) => !registrationGrants.has(permission))) {
       throw new ProtocolError("CONFLICT", "Choose a different default role before granting elevated permissions to this role.");
     }
@@ -439,6 +469,7 @@ export class Realtime {
     const actor = this.authorize(accountId, "manageRoles");
     if (this.rank(actor.role) < this.rank("Administrator")) fail("FORBIDDEN");
     if (!this.customRoles.has(name)) fail("NOT_FOUND");
+    if (!this.canManageRole(actor, name)) fail("FORBIDDEN");
     if (this.defaultRole === name) throw new ProtocolError("CONFLICT", "Choose a different default role before deleting this role.");
     this.db.transaction((tx) => {
       if (tx.select().from(accountRoles).where(eq(accountRoles.role, name)).limit(1).get()) {
@@ -492,7 +523,7 @@ export class Realtime {
     const actor = this.authorize(accountId, "manageSettings");
     const canSetDefaultRole = this.allowed(actor, "manageRoles");
     return { motd: this.motd, defaultRole: this.defaultRole, canSetDefaultRole,
-      defaultRoles: canSetDefaultRole ? this.registrationRoles().filter((role) => this.canAssign(actor, role)) : [],
+      defaultRoles: canSetDefaultRole ? this.registrationRoles().filter((role) => this.canManageRole(actor, role)) : [],
       defaultAudioBitrate: this.defaultAudioBitrate, configuredAudioBitrate: this.config.media.target_audio_bitrate,
       audioBitrateLocked: process.env.VOICE_MEDIA_TARGET_AUDIO_BITRATE !== undefined,
       maxAttachmentMiB: this.maxAttachmentMiB, maxSupportedAttachmentMiB };
@@ -505,7 +536,7 @@ export class Realtime {
     const attachmentMiB = changes.maxAttachmentMiB ?? this.maxAttachmentMiB;
     if (defaultRole !== this.defaultRole) {
       this.require(actor, "manageRoles");
-      if (!this.registrationRoles().includes(defaultRole) || !this.canAssign(actor, defaultRole)) fail("FORBIDDEN");
+      if (!this.registrationRoles().includes(defaultRole) || !this.canManageRole(actor, defaultRole)) fail("FORBIDDEN");
     }
     if (bitrate !== this.defaultAudioBitrate && process.env.VOICE_MEDIA_TARGET_AUDIO_BITRATE !== undefined) fail("FORBIDDEN");
     this.db.transaction((tx) => {
@@ -576,6 +607,10 @@ export class Realtime {
   private subordinate(actor: Account, target: Account) {
     if (target.id === actor.id || this.rank(actor.role) <= this.rank(target.role)) fail("FORBIDDEN");
   }
+  /** Banning is reserved for accounts that cannot themselves ban other users. */
+  private canBan(actor: Account, target: { id: string; role: Role }) {
+    return target.id !== actor.id && this.rank(target.role) < this.rank(actor.role) && !this.roleAllowed(target.role, "ban");
+  }
   private channel(id: string) { return this.catalog.get(id) ?? fail("NOT_FOUND"); }
   private channelMember(peer: Peer) { return peer.channelId ? this.channel(peer.channelId) : fail("FORBIDDEN"); }
   private peer(id: string) {
@@ -620,17 +655,19 @@ export class Realtime {
       canUseCamera: canSpeak && this.allowed(account, "useCamera", joinedChannel),
       channels: visible.sort(compareChannels).map(
         (channel) => {
-          const { id, name, parentId, description, position, capacity, temporary, passwordHash, backgroundImageUrl } = channel;
+          const { id, name, parentId, description, position, capacity, temporary, passwordHash, backgroundImageUrl, icon } = channel;
           const canEdit = this.allowed(account, "editChannels", channel);
           return { id, name, parentId: parentId && visibleIds.has(parentId) ? parentId : null, description, position, capacity,
-            temporary, passwordRequired: !!passwordHash, backgroundImageUrl: this.visibleImage(backgroundImageUrl), audioBitrate: channel.audioBitrate,
+            temporary, passwordRequired: !!passwordHash, backgroundImageUrl: this.visibleImage(backgroundImageUrl), icon, audioBitrate: channel.audioBitrate,
             canWhisperTo: id !== peer.channelId && canWhisper && this.allowed(account, "speak", channel) &&
               this.allowed(account, "whisper", channel),
             canSetAudioBitrate: this.allowed(account, "manageSettings") && canEdit,
+            canDeleteMessages: this.allowed(account, "deleteChannels", channel),
             canEdit, canReparent: canEdit && id !== LOBBY,
             canDelete: id !== LOBBY && !parentIds.has(id) && this.allowed(account, "removeChannels", channel),
             canSetPassword: id !== LOBBY && canEdit,
-            canMute: this.allowed(account, "mute") && this.allowed(account, "mute", channel) };
+            canMute: this.allowed(account, "mute") && this.allowed(account, "mute", channel),
+            canMove: this.allowed(account, "move", channel) };
         }),
       presence: [...this.online.values()].map((connections) => {
         const { id, displayName, avatarId } = connections.values().next().value!.account!;
@@ -641,7 +678,7 @@ export class Realtime {
         [id, [...this.memberships.get(id)!].map((member) => this.treeMember(member, id))])),
       serverPermissions: [...this.roleGrants.get(account.role) ?? []],
       lowerRoles,
-      assignableRoles: this.allowed(account, "manageRoles") ? lowerRoles.filter((role) => this.canAssign(account, role)) : [],
+      assignableRoles: this.allowed(account, "manageRoles") ? lowerRoles.filter((role) => this.holdsRoleGrants(account, role)) : [],
       bannerImageUrl: this.bannerImageUrl,
       motd: this.motd,
       targetAudioBitrate: this.targetAudioBitrate,
@@ -666,10 +703,14 @@ export class Realtime {
       if (this.catalog.get(channelId)?.temporary) this.removeChannel(channelId);
     }
   }
+  private requireChannelCapacity(channel: Channel, incoming: number) {
+    if (incoming && (this.memberships.get(channel.id)?.size ?? 0) + incoming >
+      Math.min(channel.capacity ?? Infinity, this.config.limits.users_per_channel)) fail("LIMIT");
+  }
   private join(peer: Peer, channel: Channel) {
     if (peer.channelId === channel.id) return;
+    this.requireChannelCapacity(channel, 1);
     const members = this.memberships.get(channel.id) ?? new Set<Peer>();
-    if (members.size >= Math.min(channel.capacity ?? Infinity, this.config.limits.users_per_channel)) fail("LIMIT");
     this.leave(peer);
     if (peer.closed || !this.catalog.has(channel.id)) fail("CONFLICT");
     peer.channelId = channel.id;
@@ -719,6 +760,7 @@ export class Realtime {
       this.event(peer, "channel.changed", { channelId: null });
     }
     this.media.releaseRoom(id);
+    this.liveText.removeMatching((message) => message.channelId === id);
     for (const [messageId, entry] of this.liveAttachments) {
       if (entry.message.channelId === id) this.removeLiveAttachment(messageId);
     }
@@ -771,9 +813,7 @@ export class Realtime {
     for (const role of [...roles, ...this.customRoles.keys()]) {
       for (const permission of channelPermissions) {
         if (this.roleAllowed(role, permission, current) === this.roleAllowed(role, permission, moved)) continue;
-        this.require(actor, "manageRoles");
-        this.require(actor, permission);
-        if (this.rank(role) >= this.rank(actor.role)) fail("FORBIDDEN");
+        this.authorizeRolePermissionChange(actor, current, role, permission, true);
       }
     }
   }
@@ -795,6 +835,33 @@ export class Realtime {
       if (child.id === id && depth + descendantDepth >= 16) fail("CONFLICT");
     }
   }
+  private authorizeRolePermissionChange(actor: Account, channel: Channel, role: Role, permission: Permission, affectsDescendants: boolean) {
+    this.require(actor, "manageRoles");
+    this.require(actor, permission);
+    if (this.rank(role) >= this.rank(actor.role) || !this.holdsServerGrants(actor, this.roleGrants.get(role))) fail("FORBIDDEN");
+    if (actor.role === "Owner") return;
+
+    const requireScope = (scope: Channel) => {
+      this.require(actor, "join", scope);
+      this.require(actor, "editChannels", scope);
+      this.require(actor, permission, scope);
+      for (const grant of channelPermissions) {
+        if (this.roleAllowed(role, grant, scope)) this.require(actor, grant, scope);
+      }
+    };
+    requireScope(channel);
+    if (!affectsDescendants) return;
+
+    // A nearer override shields its channel and subtree from this change.
+    const key = `${role}/${permission}`;
+    for (const descendant of this.catalog.values()) {
+      let current = descendant;
+      while (current !== channel && current.parentId && !this.overrides.get(current.id)?.has(key)) {
+        current = this.channel(current.parentId);
+      }
+      if (current === channel && descendant !== channel) requireScope(descendant);
+    }
+  }
   private async changeChannel(peer: Peer, payload: ChannelChange) {
     const id = "channelId" in payload ? payload.channelId : randomUUID();
     const current = "channelId" in payload ? this.channel(id) : undefined;
@@ -814,6 +881,7 @@ export class Realtime {
     authorize();
     const image = payload.backgroundImageUrl;
     const backgroundImageUrl = image === undefined ? current?.backgroundImageUrl ?? null : image === null ? null : this.imageUrl(image);
+    const icon = payload.icon === undefined ? current?.icon ?? null : payload.icon?.trim() || null;
     const passwordHash = payload.password === undefined ? current?.passwordHash ?? null : payload.password === null ? null :
       await this.password(peer.account!.id, () => Bun.password.hash(payload.password!, { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 }));
     const { actor, parentId } = authorize();
@@ -821,7 +889,7 @@ export class Realtime {
     const channel = {
       id, parentId, name: payload.name?.trim() ?? current!.name, description: payload.description ?? current?.description ?? "",
       position: payload.position ?? current?.position ?? 0, capacity: payload.capacity !== undefined ? payload.capacity : current?.capacity ?? null,
-      temporary: "temporary" in payload ? !!payload.temporary : current?.temporary ?? false, passwordHash, backgroundImageUrl,
+      temporary: "temporary" in payload ? !!payload.temporary : current?.temporary ?? false, passwordHash, backgroundImageUrl, icon,
       audioBitrate: payload.audioBitrate !== undefined ? payload.audioBitrate : current?.audioBitrate ?? null,
     };
     if (channel.temporary && !current) this.require(actor, "join", channel);
@@ -875,15 +943,18 @@ export class Realtime {
         tx.insert(messages).values(message).run();
         tx.insert(attachments).values({ messageId: message.id, ...file }).run();
       }, { behavior: "immediate" });
-    } else if (file) {
-      const usedByAccount = this.liveAttachmentBytesByAccount.get(senderId) ?? 0;
-      if (this.liveAttachmentBytes + file.size > Math.max(liveAttachmentLimit, this.maxAttachmentBytes * 4) ||
-          usedByAccount + file.size > Math.max(liveAttachmentLimitPerAccount, this.maxAttachmentBytes)) {
-        fail("LIMIT");
-      }
-      this.liveAttachments.set(message.id, { message, file, expiresAt: message.createdAt + 3600000 });
-      this.liveAttachmentBytes += file.size;
-      this.liveAttachmentBytesByAccount.set(senderId, usedByAccount + file.size);
+    } else {
+      const reference = { id: message.id, channelId: channel.id, senderId, recipientId: null };
+      if (file) {
+        const usedByAccount = this.liveAttachmentBytesByAccount.get(senderId) ?? 0;
+        if (this.liveAttachmentBytes + file.size > Math.max(liveAttachmentLimit, this.maxAttachmentBytes * 4) ||
+            usedByAccount + file.size > Math.max(liveAttachmentLimitPerAccount, this.maxAttachmentBytes)) {
+          fail("LIMIT");
+        }
+        this.liveAttachments.set(message.id, { message: reference, file, expiresAt: message.createdAt + liveMessageLifetime });
+        this.liveAttachmentBytes += file.size;
+        this.liveAttachmentBytesByAccount.set(senderId, usedByAccount + file.size);
+      } else this.liveText.add(reference);
     }
     const event = this.messagePayload(message, file && { name: file.name, size: file.size });
     this.broadcast([...(this.memberships.get(channel.id) ?? [])].filter((peer) => this.allowed(peer.account!, "text", channel)), "message.created", event);
@@ -916,8 +987,8 @@ export class Realtime {
   downloadAttachment(session: Session, connectionId: string, messageId: string) {
     const peer = this.attachmentPeer(session, connectionId);
     const { id: channelId } = this.textChannel(peer, peer.channelId ?? fail("FORBIDDEN"));
-    const live = this.liveAttachments.get(messageId);
-    if (live && live.expiresAt > Date.now() && live.message.channelId === channelId) {
+    const live = this.liveAttachment(messageId);
+    if (live?.message.channelId === channelId) {
       this.attachmentDownloadRate.take(session.accountId, live.file.size);
       return { data: live.file.data.toString("base64") };
     }
@@ -940,6 +1011,11 @@ export class Realtime {
     if (remaining) this.liveAttachmentBytesByAccount.set(senderId, remaining);
     else this.liveAttachmentBytesByAccount.delete(senderId);
     this.liveAttachments.delete(id);
+  }
+
+  private liveAttachment(id: string) {
+    const entry = this.liveAttachments.get(id);
+    if (entry && entry.expiresAt > Date.now()) return entry;
   }
 
   private async dispatch(peer: Peer, request: Request) {
@@ -1035,18 +1111,24 @@ export class Realtime {
       }
       case "channel.leave": this.leave(peer); return this.snapshot(peer);
       case "channel.move": {
-        const target = this.peer(request.payload.connectionId);
-        const channel = this.channel(request.payload.channelId);
+        const { payload } = request;
+        const ids = "connectionIds" in payload ? new Set(payload.connectionIds) : [payload.connectionId];
+        const targets = Array.from(ids, (id) => this.peer(id));
+        const channel = this.channel(payload.channelId);
         this.require(actor, "move", channel);
-        if (target.channelId) this.require(actor, "move", this.channelMember(target));
-        this.subordinate(actor, target.account!);
-        this.require(target.account!, "join", channel);
-        const previousChannelId = target.channelId;
-        this.join(target, channel);
-        if (previousChannelId !== channel.id) {
-          audit(this.db, actor.id, "channel.moved", target.account!.id, { channelId: channel.id, channelName: channel.name });
+        for (const target of targets) {
+          if (target.channelId) this.require(actor, "move", this.channelMember(target));
+          this.subordinate(actor, target.account!);
+          this.require(target.account!, "join", channel);
         }
-        this.event(target, "channel.changed", { channelId: channel.id });
+        this.requireChannelCapacity(channel, targets.filter((target) => target.channelId !== channel.id).length);
+        for (const target of targets) {
+          if (target.channelId !== channel.id) {
+            this.join(target, channel);
+            audit(this.db, actor.id, "channel.moved", target.account!.id, { channelId: channel.id, channelName: channel.name });
+          }
+          this.event(target, "channel.changed", { channelId: channel.id });
+        }
         break;
       }
       case "presence.set": {
@@ -1069,10 +1151,9 @@ export class Realtime {
       case "channel.override": {
         const { channelId, role, permission, allow } = request.payload;
         const channel = this.channel(channelId);
-        this.require(actor, "manageRoles");
         this.require(actor, "editChannels");
-        this.require(actor, permission);
-        if (this.rank(role) >= this.rank(actor.role)) fail("FORBIDDEN");
+        const nextGrant = allow ?? this.roleAllowed(role, permission, channel.parentId ? this.channel(channel.parentId) : undefined);
+        this.authorizeRolePermissionChange(actor, channel, role, permission, this.roleAllowed(role, permission, channel) !== nextGrant);
         if (role === this.defaultRole && allow && !registrationGrants.has(permission)) {
           throw new ProtocolError("CONFLICT", "Choose a different default role before granting elevated permissions to this role.");
         }
@@ -1125,7 +1206,9 @@ export class Realtime {
       case "moderation.unban": {
         const { accountId } = request.payload;
         this.require(actor, request.type === "moderation.kick" ? "kick" : "ban");
-        this.subordinate(actor, this.auth.account(accountId));
+        const target = this.auth.account(accountId);
+        if (request.type === "moderation.kick") this.subordinate(actor, target);
+        else if (!this.canBan(actor, target)) fail("FORBIDDEN");
         if (request.type === "moderation.ban") {
           const seconds = request.payload.expiresInSeconds;
           this.auth.ban(actor.id, accountId, seconds ? Date.now() + seconds * 1000 : null);
@@ -1239,34 +1322,41 @@ export class Realtime {
       case "message.edit": {
         const { messageId, text, html } = request.payload;
         this.messageRate.take(actor.id);
-        const live = this.liveAttachments.get(messageId);
-        const message = live?.message ?? this.db.select().from(messages).where(eq(messages.id, messageId)).get() ?? fail("NOT_FOUND");
+        const attachment = this.liveAttachment(messageId);
+        const live = attachment?.message ?? this.liveText.get(messageId);
+        const stored = this.config.messaging.persistence
+          ? this.db.select().from(messages).where(eq(messages.id, messageId)).get()
+          : undefined;
+        const message = live ?? stored ?? fail("NOT_FOUND");
         if (!message.channelId || message.senderId !== actor.id) fail("NOT_FOUND");
         const channel = this.textChannel(peer, message.channelId);
-        const hasFile = Boolean(live) || Boolean(this.db.select({ id: attachments.messageId }).from(attachments).where(eq(attachments.messageId, messageId)).get());
+        const hasFile = Boolean(attachment) || Boolean(stored &&
+          this.db.select({ id: attachments.messageId }).from(attachments).where(eq(attachments.messageId, messageId)).get());
         if (text.length > this.config.messaging.max_length || (!hasFile && !text.trim())) fail("INVALID_REQUEST");
-        const edited = { ...message, text, html: text.trim() && html ? sanitizeChatHtml(html) : null, editedAt: Date.now() };
-        if (live) live.message = edited;
-        if (this.config.messaging.persistence) {
-          this.db.update(messages).set({ text: edited.text, html: edited.html, editedAt: edited.editedAt }).where(eq(messages.id, messageId)).run();
+        const edited = { text, html: text.trim() && html ? sanitizeChatHtml(html) : null, editedAt: Date.now() };
+        if (stored) {
+          this.db.update(messages).set(edited).where(eq(messages.id, messageId)).run();
         }
         this.broadcast([...(this.memberships.get(channel.id) ?? [])].filter((member) => this.allowed(member.account!, "text", channel)),
           "message.edited", { messageId, text: edited.text, html: edited.html ?? undefined, editedAt: edited.editedAt });
         break;
       }
       case "message.delete": {
-        const live = this.liveAttachments.get(request.payload.messageId);
-        const message = live?.message ?? this.db.select().from(messages).where(eq(messages.id, request.payload.messageId)).get() ?? fail("NOT_FOUND");
+        const { messageId } = request.payload;
+        const attachment = this.liveAttachment(messageId);
+        const live = attachment?.message ?? this.liveText.get(messageId);
+        const message = live ?? this.db.select().from(messages).where(eq(messages.id, messageId)).get() ?? fail("NOT_FOUND");
         if (message.channelId) {
           const channel = this.channel(message.channelId);
           if (peer.channelId !== channel.id || !this.allowed(actor, "join", channel)) fail("NOT_FOUND");
           if (message.senderId !== actor.id) this.require(actor, "deleteChannels", channel);
         } else if (message.senderId !== actor.id) fail("NOT_FOUND");
         this.db.transaction((tx) => {
-          tx.delete(messages).where(eq(messages.id, message.id)).run();
+          if (!live) tx.delete(messages).where(eq(messages.id, message.id)).run();
           audit(tx, actor.id, "message.deleted", message.id);
         }, { behavior: "immediate" });
-        if (live) this.removeLiveAttachment(message.id);
+        if (attachment) this.removeLiveAttachment(message.id);
+        else this.liveText.delete(message.id);
         const event = { messageId: message.id };
         if (message.channelId) this.broadcast(this.memberships.get(message.channelId), "message.deleted", event);
         else {

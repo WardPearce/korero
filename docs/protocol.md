@@ -27,7 +27,7 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | GET `/api/v1/server/info` | Public | — | `serverId, name, version, protocolVersions, registration, setupRequired, passwordRequired, invitationPasswordBypass, serverAdministration, bannerImageUrl, richChat?, maxWebSocketBytes?, profilePictures?, fingerprint?` |
 | GET `/api/v1/server/capabilities` | Optional | — | `protocolVersions, websocketPath, audio, targetAudioBitrate, heartbeatSeconds, maxWebSocketBytes, udp, tcp, textPersistence, iceServers?` |
 | POST `/api/v1/auth/identity/challenge` | Public | `operation, publicKey, deviceName, origin` | Single-use challenge |
-| POST `/api/v1/auth/identity/login` | Signed login challenge and server password where required | `id, signature, password?` | Account and new session |
+| POST `/api/v1/auth/identity/login` | Signed login challenge and configured server password for accounts created without an invitation | `id, signature, password?` | Account and new session |
 | POST `/api/v1/admin/bootstrap` | Setup token, signed bootstrap challenge, and server password when configured | `token, displayName, deviceName, identity, password?` | Account and session |
 | POST `/api/v1/auth/register` | Signed registration challenge, registration policy, and server password when configured for registration without an invitation | `displayName, deviceName, identity, invitation?, password?` | Account and session |
 | POST `/api/v1/auth/refresh` | Refresh token in body | `refreshToken` | Rotated session credentials |
@@ -91,11 +91,13 @@ entry has `name, permissions, editable, defaultPermissions`. Role grants apply t
 connected accounts immediately and trigger `state.invalidated`.
 
 Role changes require the actor to rank above both the account’s current role and
-its new role and to hold the new role’s permissions. Custom roles share a rank
-between Moderator and Administrator. Channel ordering requires permission to see and
-edit both channels. `inside` appends the moved channel and its subtree to the target's
-children. `before` and `after` order siblings. To use either across levels, send the
-target's `parentId`, using `null` for the top level. A move to a new parent also
+its new role and to hold both roles’ server-wide and effective channel permissions.
+Editing or deleting a role requires a higher rank and the role’s existing grants.
+New role grants must stay within the actor’s permissions at every scope where they apply.
+Custom roles share a rank between Moderator and Administrator. Channel ordering
+requires permission to see and edit both channels. `inside` appends the moved channel
+and its subtree to the target's children. `before` and `after` order siblings. To use
+either across levels, send the target's `parentId`, using `null` for the top level. A move to a new parent also
 requires permission to see and edit that parent. Invitation expiration can use either a future Unix
 timestamp in milliseconds or a lifetime in seconds. Omitting both leaves the
 invitation without an expiration. Omitting `uses` allows unlimited registrations.
@@ -103,8 +105,10 @@ Invitation updates leave omitted fields as they are and use `null` to remove an
 expiry or use limit. Setting `usesLeft` replaces the number of remaining uses.
 Invitation listings and update responses contain metadata only. When
 `invitationPasswordBypass` is advertised, a valid invite satisfies the shared
-password requirement for account creation. The server password is read-only in
-the API when the host sets `VOICE_SERVER_PASSWORD`.
+password requirement for account creation. An account created with an invitation
+can later sign in using proof of the same identity. Invitation expiry, deletion,
+and use limits apply to new registrations. The server password is read-only in the
+API when the host sets `VOICE_SERVER_PASSWORD`.
 
 For `login`, `register`, or `bootstrap`, request a challenge for the raw 32-byte
 Ed25519 public key encoded in base64url without padding. Verify the returned server
@@ -169,7 +173,8 @@ Extended administration adds `motd` and the effective server `targetAudioBitrate
 in bits per second. Changes to either value trigger `state.invalidated`.
 `lowerRoles` lists roles below the caller in the server hierarchy. `assignableRoles`
 lists roles the caller can assign to a subordinate account. The channel list has
-`id, parentId, name, description, position, capacity, temporary, passwordRequired, canMute, canReparent, canDelete`.
+`id, parentId, name, description, position, capacity, temporary, passwordRequired, canDeleteMessages, canMute, canMove, canReparent, canDelete`.
+`canMove` reports the caller's effective `move` permission in that channel.
 Invisible parents are represented as null. Members have `connectionId, accountId,
 displayName, role, badge, muted, deafened, adminMuted, adminDeafened` and cover the socket's
 current channel. Presence entries have
@@ -199,12 +204,12 @@ password or permission-override fields.
 | `connection.renew` | `ticket` for the same device | `{expiresAt}` |
 | `heartbeat` | — | `{time, sessionExpiresAt}` |
 | `state.get` | — | Snapshot |
-| `channel.create` | `name, description?, parentId?, position?, capacity?, password?, backgroundImageUrl?, audioBitrate?, temporary?` | `{channelId, state}` |
+| `channel.create` | `name, description?, parentId?, position?, capacity?, password?, backgroundImageUrl?, icon?, audioBitrate?, temporary?` | `{channelId, state}` |
 | `channel.edit` | `channelId` and editable creation fields other than `temporary` | `{channelId, state}` |
 | `channel.delete` | `channelId` | `{}` |
 | `channel.join` | `channelId, password?` | Snapshot |
 | `channel.leave` | — | Snapshot |
-| `channel.move` | `connectionId, channelId` | `{}` |
+| `channel.move` | `channelId` and either `connectionId` or `connectionIds` | `{}` |
 | `presence.set` | `muted?, deafened?, afk?, afkMessage?` | Member |
 | `role.set` | `accountId, role` | `{}` |
 | `channel.override` | `channelId, role, permission, allow` | `{}` |
@@ -222,16 +227,33 @@ password or permission-override fields.
 | `admin.audit` | `before?` audit ID | Latest 100 matching audit records |
 | `message.send` | `channelId, text, html?` | `{messageId}` |
 | `message.history` | `channelId` and optional `before` timestamp | Up to 100 channel messages in descending time order |
+| `message.edit` | `messageId, text, html?` | `{}` |
 | `message.delete` | `messageId` | `{}` |
 | `direct.peer` | `accountId` | `accountId, displayName, publicKey, ownPublicKey` |
 | `direct.inbox` | — | Up to 50 recent contacts with `accountId, displayName, lastMessageAt` |
 | `direct.history` | `accountId, before?: {createdAt, id}` | `{messages, next}` |
 | `direct.send` | `accountId, id, nonce, ciphertext, signature` | `{messageId}` |
+| `direct.edit` | `accountId, id, nonce, ciphertext, signature` | `{}` |
+| `direct.delete` | `accountId, id` | `{}` |
 | `direct.poke` | `accountId, message?` | `{}` |
+
+`channel.override` requires `manageRoles`, server-wide `editChannels`, and the
+permission being changed at server scope. The actor must also rank above the target
+role and hold its server-wide grants. In the target channel and every descendant
+whose effective permission changes, the actor needs `join`, `editChannels`, the
+permission being changed, and the target role’s effective channel permissions.
+Moving a channel applies the same role and scope checks to changes in inherited
+permissions.
 
 `channel.delete` requires the effective `removeChannels` permission. The Lobby
 and channels with children cannot be deleted. Deleting another member’s channel
 message still requires `deleteChannels`.
+
+`channel.move` accepts one connection ID or an array of 1–1024 connection IDs.
+The caller needs `move` in the destination and each source channel. Each target
+must rank below the caller and have `join` in the destination. The server checks
+all targets and available capacity before moving the group. Duplicate IDs count
+once. A moderator can move a member into a password-protected channel.
 
 Registration and `server.max_users` are host-only settings: change them in TOML or
 with `VOICE_SERVER_REGISTRATION` / `VOICE_SERVER_MAX_USERS`, not through `server.settings`.
@@ -244,8 +266,15 @@ Kicking closes all account connections. Banning also
 revokes all device sessions. Temporary rooms are joined on creation and disappear
 when empty. Channel history requires current channel membership and text permission.
 History is empty when text persistence is disabled. Current live text still works.
-Message objects contain `id, channelId, recipientId, senderId, createdAt, text`
+Message objects contain `id, channelId, recipientId, senderId, createdAt, editedAt, text`
 and may include `html` and attachment metadata as `attachment: {name, size}`.
+`editedAt` is null until the sender replaces the message text. Editing keeps the
+original ID, `createdAt` and attachment, and broadcasts `message.edited` to members
+who can read the channel. Only the sender can edit a channel message. The sender or
+a member with `deleteChannels` in that channel can delete it.
+With persistence disabled, the server keeps ownership records for the most recent
+10,000 live channel text messages in memory for up to one hour to authorize edits
+and deletes. The server relays edits without retaining the original or updated text.
 When server info advertises `richChat`, clients may send an optional `html`
 representation of the same content, up to 32,768 characters. The server strips
 markup outside the formatting allowlist (`p, br, strong, b, em, i, u, s, del, code,
@@ -290,6 +319,16 @@ recipient with an enrolled identity. The server derives the sender from the
 authenticated socket and delivers `direct.created` to both accounts’ active
 devices. Packets include `id, senderId, recipientId, createdAt, nonce, ciphertext,
 signature`. The server supplies `createdAt` and uses it for retention and history order.
+
+Senders edit and delete their own packets. `direct.edit` replaces the ciphertext,
+nonce and signature for an existing ID without changing `createdAt`, sets `editedAt`
+and broadcasts `direct.edited`. Recipients verify the new signature before applying
+the edit. `direct.delete` removes the packet from history and broadcasts
+`direct.deleted`. With persistence disabled, edits and deletes can still update the
+offline queue. For delivered packets, the server keeps ownership records for the
+most recent 10,000 in memory for up to one hour. Changing one of these packets
+requires a connected recipient and a matching ownership record. Otherwise the
+server returns `NOT_FOUND`.
 
 The recipient can be offline when the server accepts a packet. `direct.send` returns
 `{messageId, queued}`, where `queued` is true when no recipient device was connected.
@@ -419,8 +458,11 @@ in `cameras` or through `media.cameraAvailable`.
 | `state.invalidated` | `{}`, re-fetch snapshot |
 | `server.changed` | `name, registration` |
 | `message.created` | Message |
+| `message.edited` | `messageId, text, html?, editedAt` |
 | `message.deleted` | `messageId` |
 | `direct.created` | Encrypted direct message packet |
+| `direct.edited` | Encrypted direct message packet with `editedAt` |
+| `direct.deleted` | `id, senderId, recipientId` |
 | `direct.poked` | `id, senderId, senderName, recipientId, message?` |
 | `media.producerAvailable` | `channelId, producerId, connectionId` |
 | `media.producerClosed` | `channelId, producerId` |

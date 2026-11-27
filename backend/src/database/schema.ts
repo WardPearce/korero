@@ -32,6 +32,7 @@ export const accountIdentities = sqliteTable("account_identities", {
   accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
   publicKey: text("public_key").unique().notNull(),
   origin: text().notNull(),
+  joinedViaInvitation: integer("joined_via_invitation", { mode: "boolean" }).notNull().default(false),
 });
 export const sessions = sqliteTable("sessions", {
   id: text().primaryKey(), accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
@@ -55,7 +56,7 @@ export const channels = sqliteTable("channels", {
   id: text().primaryKey(), parentId: text("parent_id").references((): AnySQLiteColumn => channels.id),
   name: text().notNull(), description: text().notNull().default(""), position: integer().notNull().default(0), capacity: integer(),
   temporary: integer({ mode: "boolean" }).notNull().default(false), passwordHash: text("password_hash"),
-  backgroundImageUrl: text("background_image_url"),
+  backgroundImageUrl: text("background_image_url"), icon: text(),
   audioBitrate: integer("audio_bitrate"),
 }, (table) => [index("channels_parent").on(table.parentId, table.position)]);
 export const channelOverrides = sqliteTable("channel_overrides", {

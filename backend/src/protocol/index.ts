@@ -105,6 +105,7 @@ const transportId = object({ transportId: id });
 const producerId = object({ producerId: id });
 const consumerId = object({ consumerId: id });
 const channelId = object({ channelId: id });
+const channelIcon = t.String({ minLength: 1, maxLength: 16, pattern: "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$" });
 const channelDetails = {
   name: displayName,
   description: optional(text(1000, 0)),
@@ -113,6 +114,7 @@ const channelDetails = {
   capacity: optional(nullable(int(1, 1024))),
   password: optional(nullable(text(128))),
   backgroundImageUrl: optional(nullable(text(512))),
+  icon: optional(nullable(channelIcon)),
   audioBitrate: optional(nullable(int(32000, 128000))),
 };
 const directAccount = { accountId: id };
@@ -129,7 +131,10 @@ export const payloads = {
   "channel.delete": channelId,
   "channel.join": object({ channelId: id, password: optional(text(128)) }),
   "channel.leave": empty,
-  "channel.move": object({ connectionId: id, channelId: id }),
+  "channel.move": t.Union([
+    object({ connectionId: id, channelId: id }),
+    object({ connectionIds: list(id, 1024, 1), channelId: id }),
+  ]),
   "presence.set": object({ muted: optional(t.Boolean()), deafened: optional(t.Boolean()), afk: optional(t.Boolean()),
     afkMessage: optional(t.String({ maxLength: 120, pattern: "^[^\\u0000-\\u001f\\u007f]*$" })) }),
   "role.set": object({ accountId: id, role: roleName }),

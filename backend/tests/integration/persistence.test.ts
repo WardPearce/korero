@@ -14,6 +14,7 @@ test("Drizzle migrations, server ID, account and channels survive restart and a 
   const directory = join(root, "data");
   const backup = join(root, "backup");
   const backgroundImageUrl = "https://images.example/saved.jpg";
+  const icon = "🎮";
   try {
     const original = await fixture({ directory });
     const key = testIdentity();
@@ -24,7 +25,7 @@ test("Drizzle migrations, server ID, account and channels survive restart and a 
       id = info.payload.serverId;
       user = await original.owner(key);
       const ws = await original.ws(user);
-      await ws.rpc("channel.create", { name: "Saved room", backgroundImageUrl });
+      await ws.rpc("channel.create", { name: "Saved room", backgroundImageUrl, icon });
       const settings = await original.call("/api/v1/admin/preferences", {
         motd: "Saved welcome", defaultRole: "Guest", defaultAudioBitrate: 128000, maxAttachmentMiB: 12,
       }, user.accessToken, "PATCH");
@@ -51,7 +52,7 @@ test("Drizzle migrations, server ID, account and channels survive restart and a 
       expect(signedIn.response.status).toBe(200);
       expect(signedIn.payload.account.id).toEqual(user.account.id);
       const ws = await restored.ws(signedIn.payload);
-      expect(ws.state.channels).toContainEqual(expect.objectContaining({ name: "Saved room", backgroundImageUrl }));
+      expect(ws.state.channels).toContainEqual(expect.objectContaining({ name: "Saved room", backgroundImageUrl, icon }));
       expect(ws.state).toMatchObject({ motd: "Saved welcome", targetAudioBitrate: 128000, maxAttachmentBytes: 12 * 1024 * 1024 });
       expect((await restored.register("New guest")).account.role).toBe("Guest");
       const audit = await restored.call("/api/v1/admin/audit?prefix=server", undefined, user.accessToken);

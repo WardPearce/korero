@@ -118,8 +118,10 @@ that password. The bootstrap route returns `NOT_FOUND` once an Owner exists.
 Regular identities can enroll before the owner claims the server if registration
 permits it. A valid setup token can promote an existing identity to first Owner.
 
-An Owner or Administrator can require a shared password for identity login and
-registration. A valid invitation replaces the shared password for that registration.
-Registration mode and proof of identity still apply. A later sign-in to an existing
-account requires the shared password when configured. The server stores its Argon2id
-hash. Existing sessions continue until they expire or are revoked.
+An Owner or Administrator can require a shared password for identity sign-in and
+registration. When registration policy permits it, a valid invitation lets a new
+member register and sign in again using the same identity without the shared password.
+That access continues when the invitation expires, is used up, or is deleted, and
+when the server password changes. Account bans still apply. The server stores an
+Argon2id hash of the shared password. Existing sessions continue until they expire
+or are revoked.

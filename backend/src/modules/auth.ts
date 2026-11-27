@@ -235,7 +235,7 @@ export class Auth {
         if (row.usesLeft !== null) tx.update(invitations).set({ usesLeft: row.usesLeft - 1 }).where(eq(invitations.id, row.id)).run();
       }
       const role = tx.select({ value: settings.value }).from(settings).where(eq(settings.key, DEFAULT_ROLE_KEY)).get()?.value ?? INITIAL_ROLE;
-      const result = this.createAccount(tx, name, device, role, identity);
+      const result = this.createAccount(tx, name, device, role, identity, invitationId !== null);
       audit(tx, result.account.id, "account.registered", result.account.id, { role, invitationId });
       return result;
     }, { behavior: "immediate" });
@@ -243,7 +243,8 @@ export class Auth {
     return result;
   }
 
-  private createAccount(db: Queries, name: string, device: string, role: Role, { publicKey, origin }: IdentityChallenge) {
+  private createAccount(db: Queries, name: string, device: string, role: Role, { publicKey, origin }: IdentityChallenge,
+    joinedViaInvitation = false) {
     const length = Array.from(name).length;
     if (length < 4 || length > 32) fail("INVALID_REQUEST");
     if (db.select().from(accountIdentities).where(eq(accountIdentities.publicKey, publicKey)).get()) fail("CONFLICT");
@@ -251,7 +252,7 @@ export class Auth {
     const createdAt = Date.now();
     db.insert(accounts).values({ id, displayName: name, createdAt }).run();
     db.insert(accountRoles).values({ accountId: id, role }).run();
-    db.insert(accountIdentities).values({ accountId: id, publicKey, origin }).run();
+    db.insert(accountIdentities).values({ accountId: id, publicKey, origin, joinedViaInvitation }).run();
     audit(db, id, "identity.attached", id);
     return { account: { id, displayName: name, role, createdAt, badge: null, avatarId: null }, ...this.createSession(db, id, device) };
   }
@@ -294,13 +295,14 @@ export class Auth {
   async loginIdentity(client: string, serverId: string, id: string, signature: string, password?: string) {
     const { publicKey, deviceName } = this.proveIdentity(serverId, "login", id, signature);
     // Look the identity up first so a throwaway key cannot be used to test server passwords.
-    if (!this.db.select({ accountId: accountIdentities.accountId }).from(accountIdentities)
-      .where(eq(accountIdentities.publicKey, publicKey)).get()) fail("NOT_FOUND");
-    const hash = await this.verifyPassword(client, password);
+    const identity = this.db.select({ joinedViaInvitation: accountIdentities.joinedViaInvitation }).from(accountIdentities)
+      .where(eq(accountIdentities.publicKey, publicKey)).get();
+    if (!identity) fail("NOT_FOUND");
+    const hash = identity.joinedViaInvitation ? undefined : await this.verifyPassword(client, password);
     return this.db.transaction((tx) => {
-      if (this.passwordHash() !== hash) fail("CONFLICT");
       const row = tx.select().from(accountIdentities).where(eq(accountIdentities.publicKey, publicKey)).get();
       if (!row) fail("NOT_FOUND");
+      if (!row.joinedViaInvitation && this.passwordHash() !== hash) fail("CONFLICT");
       if (isBanned(tx, row.accountId)) fail("FORBIDDEN");
       return { account: getAccount(tx, row.accountId), ...this.createSession(tx, row.accountId, deviceName) };
     }, { behavior: "immediate" });

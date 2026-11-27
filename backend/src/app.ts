@@ -176,7 +176,7 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
     })
     .get("/api/v1/server/info", () => ({ ...info, name: config.server.name, version: serverVersion, protocolVersions: [version],
       registration: config.server.registration, setupRequired: !auth.hasOwner(), identityAuthentication: true,
-      identityEnrollment: true, channelBackgrounds: true, serverAdministration: true, extendedServerAdministration: true,
+      identityEnrollment: true, channelBackgrounds: true, channelIcons: true, serverAdministration: true, extendedServerAdministration: true,
       passwordRequired: auth.passwordRequired(),
       invitationPasswordBypass: true, bannerImageUrl: realtime.bannerImageUrl,
       screenSharing: true, richChat: true, channelAudioQuality: true, profilePictures: true,

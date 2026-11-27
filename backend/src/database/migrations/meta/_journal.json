@@ -120,6 +120,20 @@
       "when": 1795777110694,
       "tag": "0016_message_edits",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1795784361891,
+      "tag": "0017_channel_icons",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1795784649015,
+      "tag": "0018_invitation_sign_in",
+      "breakpoints": true
     }
   ]
 }

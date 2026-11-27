@@ -38,8 +38,9 @@ public_addresses = []
 # Valid: up to 32 IP literals; wildcard addresses ("::", "0.0.0.0") are rejected.
 # Required to be non-empty when tls.mode = "proxy".
 trusted_proxies = []
-# Optional shared password required for new sign-ins/registrations. Valid: string up to 128
-# characters; "" disables it. Stored as an Argon2id hash.
+# Optional shared password for sign-in and registration. An invitation grants password-free
+# access to the identity that registers with it. Use up to 128 characters or "" to disable it.
+# Stored as an Argon2id hash.
 password = ""
 # Hosts allowed in the server banner and channel background image URLs. Clients load
 # these images directly, so the image host learns their IP addresses. Valid: up to 256
