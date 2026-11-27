@@ -1,6 +1,7 @@
 import * as Tone from "tone";
 
-type Sound = "channel" | "connect" | "disconnect" | "mute" | "unmute" | "deafen" | "undeafen" | "message" | "directMessage" | "poke" | "afk" | "back";
+type Sound = "channel" | "connect" | "disconnect" | "mute" | "unmute" | "deafen" | "undeafen" | "message" | "directMessage"
+  | "poke" | "afk" | "back" | "screenShareStart" | "screenShareStop" | "cameraStart" | "cameraStop";
 
 const notes: Record<Sound, [number, number, number]> = {
   channel: [520, 660, 0.12],
@@ -15,6 +16,10 @@ const notes: Record<Sound, [number, number, number]> = {
   poke: [960, 570, 0.25],
   afk: [660, 520, 0.2],
   back: [520, 660, 0.2],
+  screenShareStart: [440, 880, 0.18],
+  screenShareStop: [880, 440, 0.18],
+  cameraStart: [520, 780, 0.18],
+  cameraStop: [780, 520, 0.18],
 };
 
 let synth: Tone.Synth | undefined;

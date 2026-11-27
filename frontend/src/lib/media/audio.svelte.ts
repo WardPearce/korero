@@ -1,13 +1,12 @@
 import { createContext } from "svelte";
 import { watchDesktop } from "../connection/platform";
 import { call, messageFrom, desktopApp } from "../connection/client";
+import type { DesktopVoice } from "./desktop-voice";
 import { defaultAudio, preferences, type AudioPreferences } from "../preferences";
 import { globalTalkShortcut, isTypingTalkShortcut, matchesTalkShortcut, releasesTalkShortcut } from "./talk-shortcut";
 
 interface AudioDevice { id: string; label: string }
-interface AudioDevices { input: AudioDevice[]; output: AudioDevice[]; micTest: boolean }
-interface MicrophoneResult { gatePeak: number; recording: string }
-interface MicrophoneSample { gatePeak: number; recording: Blob }
+interface AudioDevices { input: AudioDevice[]; output: AudioDevice[] }
 
 export class AudioSettings {
   readonly available = desktopApp();
@@ -16,27 +15,17 @@ export class AudioSettings {
   error = $state("");
   deviceError = $state("");
   applying = $state(false);
-  testing = $state(false);
-  sample = $state.raw<MicrophoneSample | null>(null);
   talking = $state(false);
   globalActive = $state(false);
   shortcutError = $state("");
   #loading?: Promise<void>;
   #enumerating?: Promise<void>;
-  #talkTimer?: ReturnType<typeof setInterval>;
-  #talkCommand = Promise.resolve();
-  #talkGeneration = 0;
   #talkContext?: { connectionId: string; channelId: string };
-  #renewing = false;
   #pressed = false;
   #globalKey: string | null = null;
   #unlisten?: () => void;
 
-  private configureMicrophone(profile: AudioPreferences) {
-    const { talkShortcut: _shortcut, globalTalkShortcut: _global, ...nativeProfile } = profile;
-    const transmitMode = profile.transmitMode === "toggleToTalk" ? "pushToTalk" : profile.transmitMode;
-    return call("configure_audio", { profile: { ...nativeProfile, transmitMode } });
-  }
+  constructor(readonly voice: DesktopVoice) {}
 
   private async registerShortcut() {
     const { profile } = this;
@@ -68,7 +57,7 @@ export class AudioSettings {
         const result = await preferences.local.get("audio");
         this.profile = { ...defaultAudio, ...(result?.value as Partial<AudioPreferences> | undefined) };
         if (this.available) {
-          await this.configureMicrophone(this.profile);
+          await this.voice.configure(this.profile);
           await this.registerShortcut();
         }
       } catch (error) {
@@ -79,47 +68,40 @@ export class AudioSettings {
 
   refreshDevices() {
     if (!this.available) return;
-    this.#enumerating ??= call<AudioDevices>("get_audio_devices")
-      .then((devices) => { this.devices = devices; this.deviceError = ""; })
+    this.#enumerating ??= navigator.mediaDevices.enumerateDevices()
+      .then((devices) => {
+        const list = (kind: MediaDeviceKind, label: string) => devices
+          .filter(({ kind: type, deviceId }) => type === kind && deviceId && !["default", "communications"].includes(deviceId))
+          .map(({ deviceId, label: name }, index) => ({ id: deviceId, label: name || `${label} ${index + 1}` }));
+        this.devices = { input: list("audioinput", "Microphone"), output: list("audiooutput", "Playback device") };
+        this.deviceError = "";
+      })
       .catch((error) => { this.deviceError = messageFrom(error); })
       .finally(() => { this.#enumerating = undefined; });
     return this.#enumerating;
   }
 
   async update<K extends keyof AudioPreferences>(key: K, value: AudioPreferences[K]) {
-    if (!this.available || this.applying || this.testing) return;
+    if (!this.available || this.applying) return;
     this.applying = true;
     this.error = "";
     try {
       await this.load();
       const profile = { ...this.profile, [key]: value };
       this.resetTalk();
-      await this.configureMicrophone(profile);
+      try {
+        await this.voice.configure(profile);
+      } catch (error) {
+        await this.voice.configure(this.profile).catch(() => {});
+        throw error;
+      }
       this.profile = profile;
       if (key === "transmitMode" || key === "talkShortcut" || key === "globalTalkShortcut") await this.registerShortcut();
-      this.sample = null;
       await preferences.local.put({ key: "audio", value: profile });
     } catch (error) {
       this.error = messageFrom(error);
     } finally {
       this.applying = false;
-    }
-  }
-
-  async test() {
-    if (!this.devices?.micTest || this.testing || this.applying) return;
-    this.testing = true;
-    this.sample = null;
-    this.error = "";
-    try {
-      await this.load();
-      const { gatePeak, recording } = await call<MicrophoneResult>("microphone_test");
-      const pcm = Uint8Array.from(atob(recording), (byte) => byte.charCodeAt(0));
-      this.sample = { gatePeak, recording: new Blob([pcm], { type: "audio/wav" }) };
-    } catch (error) {
-      this.error = messageFrom(error);
-    } finally {
-      this.testing = false;
     }
   }
 
@@ -137,29 +119,12 @@ export class AudioSettings {
     this.#pressed = true;
     if (this.talking && transmitMode === "toggleToTalk") return this.stopTalking();
     this.talking = true;
-    const generation = ++this.#talkGeneration;
-    const renew = () => {
-      if (this.#renewing) return;
-      this.#renewing = true;
-      void this.sendTalkState(true, generation).finally(() => { this.#renewing = false; });
-    };
-    renew();
-    this.#talkTimer = setInterval(renew, 200);
+    this.voice.setTalking(true);
   }
 
   private release() {
     this.#pressed = false;
     if (this.profile.transmitMode === "pushToTalk") this.stopTalking();
-  }
-
-  private sendTalkState(pressed: boolean, generation: number) {
-    this.#talkCommand = this.#talkCommand.then(async () => {
-      if (pressed && generation !== this.#talkGeneration) return;
-      await call("push_to_talk", { pressed, ...this.#talkContext });
-    }).catch(() => {
-      if (pressed && generation === this.#talkGeneration) this.stopTalking();
-    });
-    return this.#talkCommand;
   }
 
   talkKeyDown = (event: KeyboardEvent) => {
@@ -182,9 +147,7 @@ export class AudioSettings {
   private stopTalking() {
     if (!this.talking) return;
     this.talking = false;
-    clearInterval(this.#talkTimer);
-    this.#talkTimer = undefined;
-    this.sendTalkState(false, ++this.#talkGeneration);
+    this.voice.setTalking(false);
   }
 
   resetTalk() {
@@ -194,6 +157,7 @@ export class AudioSettings {
 
   dispose() {
     this.setTalkContext();
+    this.voice.close();
     this.#unlisten?.();
     if (this.#globalKey) void call("configure_talk_shortcut", { shortcut: null }).catch(() => {});
   }

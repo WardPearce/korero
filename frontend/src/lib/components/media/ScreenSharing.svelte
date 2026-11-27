@@ -1,7 +1,7 @@
 <script lang="ts">
   import { BitsConfig, Portal } from "bits-ui";
   import { Monitor, MonitorUp, Square, Video, VideoOff, X } from "@lucide/svelte";
-  import { onDestroy, untrack } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
@@ -11,6 +11,9 @@
   import ScreenShareViewer from "./ScreenShareViewer.svelte";
   import { messageFrom, type ScreenShare, type Snapshot } from "#lib/connection/client";
   import { chooseScreen, ScreenMedia, supportsWebRtc, type ScreenSettings, type ScreenSubscription, type VideoSource } from "#lib/media/screen-media";
+  import {
+    defaultCameraCapture, defaultScreenCapture, getCapturePreferences, saveCapturePreferences, type CapturePreferences,
+  } from "#lib/preferences";
 
   let { snapshot, visible, controlsTarget, inlineTarget, source = "screen" }: {
     snapshot: Snapshot; visible: boolean; controlsTarget?: HTMLElement; inlineTarget?: HTMLElement; source?: VideoSource;
@@ -48,9 +51,11 @@
   let switchingCamera = $state(false);
   let error = $state("");
   let setupError = $state("");
-  let resolution = $state(untrack(() => source === "camera" ? "720" : "1080"));
-  let frameRate = $state("30");
-  let videoKbps = $state<number | undefined>(untrack(() => source === "camera" ? 2000 : 6000));
+  const initialCapture = untrack(() => source === "camera" ? defaultCameraCapture : defaultScreenCapture);
+  let captureDefaults = $state.raw<CapturePreferences>(initialCapture);
+  let resolution = $state(String(initialCapture.resolution ?? 0));
+  let frameRate = $state(String(initialCapture.frameRate));
+  let videoKbps = $state<number | undefined>(initialCapture.videoBitrate / 1000);
   let shareAudio = $state(false);
   let audioKbps = $state("128");
   let sourceHasAudio = $state(false);
@@ -145,6 +150,18 @@
     }
   });
 
+  onMount(() => {
+    void getCapturePreferences(source).then((saved) => {
+      if (destroyed) return;
+      captureDefaults = saved;
+      if (!setupOpen && !publishing && !editing) {
+        resolution = String(saved.resolution ?? 0);
+        frameRate = String(saved.frameRate);
+        videoKbps = saved.videoBitrate / 1000;
+      }
+    }).catch(() => {});
+  });
+
   onDestroy(() => {
     destroyed = true;
     clearDraft();
@@ -180,9 +197,9 @@
     setupError = "";
     editing = entry;
     draft = entry?.capture;
-    resolution = entry ? String(entry.settings.resolution ?? 0) : camera ? "720" : "1080";
-    frameRate = String(entry?.settings.frameRate ?? 30);
-    videoKbps = entry ? entry.settings.videoBitrate / 1000 : camera ? 2000 : 6000;
+    resolution = entry ? String(entry.settings.resolution ?? 0) : String(captureDefaults.resolution ?? 0);
+    frameRate = String(entry?.settings.frameRate ?? captureDefaults.frameRate);
+    videoKbps = entry ? entry.settings.videoBitrate / 1000 : captureDefaults.videoBitrate / 1000;
     shareAudio = entry?.settings.audio ?? false;
     audioKbps = String((entry?.settings.audioBitrate ?? 128000) / 1000);
     requestedAudio = entry?.requestedAudio ?? false;
@@ -251,6 +268,10 @@
           return;
         }
       }
+      captureDefaults = {
+        resolution: settings.resolution, frameRate: settings.frameRate, videoBitrate: settings.videoBitrate,
+      };
+      void saveCapturePreferences(source, captureDefaults).catch(() => {});
       setupOpen = false;
     } catch (failure) {
       setupError = messageFrom(failure);

@@ -6,7 +6,7 @@
   import { Input } from "#lib/components/ui/input/index.js";
   import SelectField from "#lib/components/fields/SelectField.svelte";
   import { getAudioSettings } from "#lib/media/audio.svelte";
-  import { call, messageFrom } from "#lib/connection/client";
+  import { messageFrom } from "#lib/connection/client";
   import IconButton from "#lib/components/IconButton.svelte";
   import Modal from "#lib/components/Modal.svelte";
   import { preferences } from "#lib/preferences";
@@ -33,17 +33,17 @@
   let wanted = $state.raw<Route | null>(null);
   let busy = $state(false);
   let routed: Route | null = null;
-  let lease: ReturnType<typeof setInterval> | undefined;
   let acknowledged = false;
   let fields = $state<HTMLElement>();
-  const snapshot = $derived(workspace.view.snapshot);
+  const view = $derived(workspace.activeVoice?.view ?? workspace.view);
+  const snapshot = $derived(view.snapshot);
   const ownMember = $derived(snapshot?.members.find((member) => member.connectionId === snapshot?.connectionId));
   const channels = $derived(snapshot?.channels.filter((channel) => channel.canWhisperTo) ?? []);
   const target = $derived(channels.find((channel) => channel.id === targetId));
-  const canTalk = $derived(workspace.view.phase === "online" && workspace.view.voice === "active" &&
+  const canTalk = $derived(view.phase === "online" && view.voice === "active" &&
     Boolean(snapshot?.channelId) && !ownMember?.muted && !ownMember?.deafened && !ownMember?.adminMuted &&
     !ownMember?.adminDeafened && !ownMember?.afk);
-  const activeTarget = $derived(workspace.view.whisperChannelId);
+  const activeTarget = $derived(view.whisperChannelId);
   const channelOptions = $derived([
     { value: "", label: "Choose a channel" },
     ...channels.map((channel) => ({
@@ -82,12 +82,6 @@
     saveSettings();
   }
 
-  function stopLease() {
-    clearInterval(lease);
-    lease = undefined;
-    void call("whisper_to_talk", { pressed: false }).catch(() => {});
-  }
-
   async function routeVoice() {
     if (busy) return;
     busy = true;
@@ -96,27 +90,20 @@
         const next = wanted;
         if (next) {
           try {
-            await call("whisper_to_talk", { pressed: true });
-            if (wanted !== next) {
-              stopLease();
-              continue;
-            }
-            lease = setInterval(() => {
-              void call("whisper_to_talk", { pressed: true }).catch(stop);
-            }, 200);
-            await call("set_whisper", { ...next, password: next.password ?? null });
+            audio.voice.setWhisperTalking(true);
+            await audio.voice.setWhisper(next.connectionId, next.channelId, next.targetId, next.password);
             routed = next;
           } catch (failure) {
             error = messageFrom(failure);
             wanted = null;
-            stopLease();
+            audio.voice.setWhisperTalking(false);
           }
         } else if (routed) {
           const { connectionId, channelId } = routed;
           routed = null;
           acknowledged = false;
           try {
-            await call("set_whisper", { connectionId, channelId, targetId: null, password: null });
+            await audio.voice.setWhisper(connectionId, channelId);
           } catch (failure) {
             if (snapshot?.connectionId === connectionId && snapshot.channelId === channelId) error = messageFrom(failure);
           }
@@ -138,7 +125,7 @@
   function stop() {
     if (!wanted && !routed && !busy) return;
     wanted = null;
-    stopLease();
+    audio.voice.setWhisperTalking(false);
     void routeVoice();
   }
 

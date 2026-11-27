@@ -63,6 +63,36 @@ export function forgetPassword(origin: string, serverId: string, channelId = "",
   return records.and(({ password }) => rejectedPassword === undefined || rejectedPassword === password).delete();
 }
 
+export interface CapturePreferences {
+  /** null shares the source's native resolution. */
+  resolution: number | null;
+  frameRate: number;
+  videoBitrate: number;
+}
+
+export const defaultScreenCapture: CapturePreferences = { resolution: 1080, frameRate: 30, videoBitrate: 6_000_000 };
+export const defaultCameraCapture: CapturePreferences = { resolution: 720, frameRate: 30, videoBitrate: 2_000_000 };
+
+export async function getCapturePreferences(source: "screen" | "camera"): Promise<CapturePreferences> {
+  const fallback = source === "camera" ? defaultCameraCapture : defaultScreenCapture;
+  const { value } = await preferences.local.get(`capture:${source}`) ?? {};
+  if (!value || typeof value !== "object") return fallback;
+  const saved = value as Partial<CapturePreferences>;
+  const resolutions = source === "camera" ? [360, 480, 720, 1080] : [360, 480, 720, 1080, 1440];
+  const resolution = saved.resolution === null ? null
+    : resolutions.includes(saved.resolution as number) ? saved.resolution! : fallback.resolution;
+  const frameRate = [5, 15, 30, 60].includes(saved.frameRate as number) ? saved.frameRate! : fallback.frameRate;
+  const minimum = source === "camera" ? 200_000 : 500_000;
+  const maximum = source === "camera" ? 6_000_000 : 12_000_000;
+  const videoBitrate = typeof saved.videoBitrate === "number" && Number.isFinite(saved.videoBitrate) &&
+    saved.videoBitrate >= minimum && saved.videoBitrate <= maximum ? saved.videoBitrate : fallback.videoBitrate;
+  return { resolution, frameRate, videoBitrate };
+}
+
+export function saveCapturePreferences(source: "screen" | "camera", value: CapturePreferences) {
+  return preferences.local.put({ key: `capture:${source}`, value });
+}
+
 export const defaultMemberVolume = 100;
 export const maxMemberVolume = 400;
 

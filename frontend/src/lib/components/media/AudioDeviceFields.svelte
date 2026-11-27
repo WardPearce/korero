@@ -12,7 +12,7 @@
   let devices = $derived(audio.devices?.[direction] ?? []);
   let selected = $derived(audio.profile[direction]);
   let unavailable = $derived(Boolean(selected && !devices.some(({ id }) => id === selected)));
-  let disabled = $derived(!audio.available || audio.applying || audio.testing);
+  let disabled = $derived(!audio.available || audio.applying);
 
   let options = $derived.by(() => {
     const choices = [{ id: "", label: systemDefault, value: defaultDeviceValue, disabled: false }];
@@ -40,7 +40,7 @@
 <div class="audio-fields">
   <SelectField label={`${label} device`} {options} disabled={disabled || (!devices.length && !selected)}
     bind:value={() => selectedValue, selectDevice} />
-  {#if audio.devices && !devices.length}<small>The native engine uses the system default for this device.</small>{/if}
+  {#if audio.devices && !devices.length}<small>Using the system default.</small>{/if}
   {#if audio.devices && unavailable}<small>Using the system default until the saved device returns.</small>{/if}
   <AudioLevel setting={levelKey} label={direction === "input" ? "Input level (%)" : "Output level (%)"} />
 </div>

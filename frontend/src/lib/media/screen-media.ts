@@ -45,7 +45,7 @@ export class ScreenMedia {
   private request<T>(kind: string, payload: Record<string, unknown>) {
     const { connectionId, channelId } = this;
     return desktopApp()
-      ? call<T>("screen_request", { connectionId, channelId, kind, payload })
+      ? call<T>("media_request", { connectionId, channelId, kind, payload })
       : browserSessions.screenRequest<T>(connectionId, channelId, kind, payload);
   }
 

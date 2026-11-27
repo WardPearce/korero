@@ -1,11 +1,23 @@
 import type { Consumer, ConsumerOptions, Producer, RtpCapabilities, Transport, TransportOptions } from "mediasoup-client/types";
 import type { Snapshot, VoiceState } from "../connection/client";
+import type { AudioPreferences } from "../preferences";
+import { microphoneProcessor, openMicrophone } from "./desktop-audio";
 import type { MobileCallAudio } from "./mobile-call-audio";
 import type { MediaRequest } from "./screen-media";
 
 interface Source {
   producerId: string;
   connectionId: string;
+}
+
+export interface VoiceEvent extends Partial<Source> {
+  channelId?: string;
+  transportId?: string;
+}
+
+interface WhisperRoute {
+  targetId: string;
+  password?: string;
 }
 
 interface RemoteAudio {
@@ -29,6 +41,12 @@ export class WebVoice {
   private producer?: Producer;
   private receiver?: Transport;
   private microphone?: MediaStreamTrack;
+  private capture?: { source: MediaStreamAudioSourceNode; processor: AudioWorkletNode; track: MediaStreamTrack };
+  private output: GainNode;
+  private talking = false;
+  private whisperTalking = false;
+  private whisper?: WhisperRoute;
+  private talkLease?: ReturnType<typeof setInterval>;
   private sources = new Set<string>();
   private remote = new Map<string, RemoteAudio>();
   private subscribing = new Set<string>();
@@ -39,23 +57,92 @@ export class WebVoice {
 
   constructor(
     readonly channelId: string,
-    private readonly connectionId: string,
+    readonly connectionId: string,
     private readonly audio: AudioContext,
     private readonly callAudio: MobileCallAudio,
     private readonly request: MediaRequest,
     private readonly changed: () => void,
-    private readonly volumes: Record<string, number>,
-  ) {}
+    private volumes: Record<string, number>,
+    private profile?: AudioPreferences,
+  ) {
+    this.output = audio.createGain();
+    this.output.gain.value = (profile?.outputLevel ?? 100) / 100;
+    this.output.connect(audio.destination);
+  }
 
   get error() {
     return this.sendError ?? this.receiveError;
+  }
+
+  get whisperChannelId() {
+    return this.publishing ? this.whisper?.targetId : undefined;
+  }
+
+  async configure(profile: AudioPreferences) {
+    const previous = this.profile;
+    this.profile = profile;
+    this.output.gain.value = profile.outputLevel / 100;
+    this.updateTransmission();
+    if (previous && (["input", "echoCancellation", "noiseSuppression", "automaticGain"] as const)
+      .some((key) => previous[key] !== profile[key])) {
+      this.whisper = undefined;
+      this.whisperTalking = false;
+      await this.restartSending();
+      if (this.sendError) throw new Error(this.sendError);
+    } else {
+      this.setCaptureProfile();
+    }
+  }
+
+  setTalking(pressed: boolean) {
+    this.talking = pressed;
+    this.updateTransmission();
+  }
+
+  setWhisperTalking(pressed: boolean) {
+    this.whisperTalking = pressed;
+    this.updateTransmission();
+  }
+
+  async setWhisper(route?: WhisperRoute) {
+    if (route && (!this.canSend || !this.publishing)) throw new Error("The microphone is unavailable.");
+    if (!route && !this.whisper) return;
+    this.whisper = route;
+    this.talking = false;
+    if (!route) this.whisperTalking = false;
+    await this.restartSending();
+    if (route && this.sendError && this.whisper === route) {
+      const error = this.sendError;
+      await this.setWhisper();
+      throw new Error(error);
+    }
+    if (route && route !== this.whisper) throw new Error("The whisper ended before it connected.");
+  }
+
+  private updateTransmission() {
+    clearInterval(this.talkLease);
+    const capture = this.capture;
+    if (!capture) return;
+    const mode = this.profile?.transmitMode;
+    const keyed = mode === "pushToTalk" || mode === "toggleToTalk";
+    const pressed = this.whisper ? this.whisperTalking : !this.whisperTalking && this.talking;
+    capture.track.enabled = this.whisper || keyed ? pressed : !this.whisperTalking;
+    capture.processor.port.postMessage(pressed);
+    // Keep the audio thread muted if the renderer stops processing the held shortcut.
+    if (pressed && (keyed || this.whisper)) {
+      this.talkLease = setInterval(() => capture.processor.port.postMessage(true), 200);
+    }
+  }
+
+  private setCaptureProfile() {
+    if (this.capture && this.profile) this.capture.processor.port.postMessage(this.profile);
   }
 
   get voice(): VoiceState["voice"] {
     if (this.error) return "error";
     if (!this.canReceive) return "deafened";
     if (!this.canSend) return "muted";
-    return this.publishing ? "active" : "idle";
+    return this.publishing || this.whisper ? "active" : "idle";
   }
 
   update(snapshot: Snapshot) {
@@ -75,11 +162,21 @@ export class WebVoice {
     }
     if (send !== this.canSend) {
       this.canSend = send;
+      if (!send) {
+        this.whisper = undefined;
+        this.talking = false;
+        this.whisperTalking = false;
+        this.releaseMicrophoneMode();
+      }
       this.restartSending();
-      if (!send) this.releaseMicrophoneMode();
     } else if (send && bitrateChanged) {
       this.updateSendBitrate();
     }
+  }
+
+  setVolumes(volumes: Record<string, number>) {
+    this.volumes = volumes;
+    for (const { accountId, gain } of this.remote.values()) gain.gain.value = (volumes[accountId] ?? 100) / 100;
   }
 
   setVolume(accountId: string, level: number) {
@@ -88,12 +185,23 @@ export class WebVoice {
     }
   }
 
-  event(type: string, payload: Partial<Source> & { channelId?: string }) {
+  event(type: string, payload: VoiceEvent) {
     if (payload.channelId && payload.channelId !== this.channelId) return;
     if (type === "media.reset") {
       this.device = undefined;
+      this.whisper = undefined;
+      this.whisperTalking = false;
       this.restartReceiving();
       this.restartSending();
+      return;
+    }
+    if (type === "media.whisperEnded" && this.whisper && payload.transportId === this.sender?.id) {
+      void this.setWhisper();
+      return;
+    }
+    if (type === "media.transportFailed" && payload.transportId) {
+      if (payload.transportId === this.sender?.id) this.restartSending();
+      if (payload.transportId === this.receiver?.id) this.restartReceiving();
       return;
     }
     const { producerId, connectionId } = payload;
@@ -111,19 +219,22 @@ export class WebVoice {
 
   private async load() {
     const { Device } = await import("mediasoup-client");
-    const capabilities = await this.request<RtpCapabilities & { iceServers?: RTCIceServer[] }>("media.capabilities", { kind: "video" });
+    const { iceServers, ...routerRtpCapabilities } = await this.request<RtpCapabilities & { iceServers?: RTCIceServer[] }>("media.capabilities", { kind: "video" });
     const device = await Device.factory();
-    await device.load({ routerRtpCapabilities: capabilities });
-    return { device, iceServers: capabilities.iceServers };
+    await device.load({ routerRtpCapabilities });
+    return { device, iceServers };
   }
 
-  private async open(direction: "send" | "receive", current: () => boolean) {
-    const { device, iceServers } = await (this.device ??= this.load().catch((error) => {
-      this.device = undefined;
+  private async open(direction: "send" | "receive", current: () => boolean, route?: WhisperRoute) {
+    const loading = this.device ??= this.load();
+    const { device, iceServers } = await loading.catch((error) => {
+      if (this.device === loading) this.device = undefined;
       throw error;
-    }));
+    });
     if (!current()) return;
-    const options = await this.request<TransportOptions>("media.transport.create", { direction });
+    const options = await this.request<TransportOptions>("media.transport.create", {
+      direction, ...(route && { whisperChannelId: route.targetId, whisperPassword: route.password }),
+    });
     if (!current()) {
       await this.closeServerTransport(options.id);
       return;
@@ -143,14 +254,16 @@ export class WebVoice {
     transport.on("connectionstatechange", (state) => {
       if (!current() || state !== "failed") return;
       const message = "The voice connection failed. Rejoin the channel to try again.";
-      if (direction === "send") this.failSending(message);
-      else this.failReceiving(message);
+      if (direction === "send") {
+        if (route) void this.setWhisper();
+        else void this.failSending(message);
+      } else this.failReceiving(message);
     });
-    return { device, transport };
+    return { transport };
   }
 
   private closeServerTransport(transportId: string) {
-    return this.request("media.transport.close", { transportId }).catch(() => {});
+    return this.request<void>("media.transport.close", { transportId }).catch(() => {});
   }
 
   private stopTransport(transport?: Transport) {
@@ -170,17 +283,38 @@ export class WebVoice {
       await this.playback;
       await this.callAudio.setMode("play-and-record", current);
       if (!current()) return;
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-      const track = stream.getAudioTracks()[0];
-      if (!track) throw new Error("No microphone is available.");
-      if (!current()) {
-        track.stop();
-        return;
+      const route = this.whisper;
+      const profile = this.profile;
+      const processor = profile && await microphoneProcessor(this.audio, profile, Boolean(route));
+      try {
+        if (!current()) return;
+        const stream = profile ? await openMicrophone(profile) : await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        const microphone = stream.getAudioTracks()[0];
+        if (!microphone) throw new Error("No microphone is available.");
+        if (!current()) {
+          microphone.stop();
+          return;
+        }
+        this.microphone = microphone;
+        microphone.addEventListener("ended", () => {
+          if (current()) void this.failSending("The microphone disconnected. Rejoin the channel to try again.");
+        }, { once: true });
+        if (processor) {
+          const source = this.audio.createMediaStreamSource(stream);
+          const destination = new MediaStreamAudioDestinationNode(this.audio, { channelCount: 1 });
+          const track = destination.stream.getAudioTracks()[0];
+          if (!track) throw new Error("Could not create the microphone track.");
+          this.capture = { source, processor, track };
+          this.setCaptureProfile();
+          this.updateTransmission();
+          source.connect(processor).connect(destination);
+        }
+      } finally {
+        if (this.capture?.processor !== processor) processor?.port.close();
       }
-      this.microphone = track;
-      const opened = await this.open("send", current);
+      const opened = await this.open("send", current, route);
       if (!opened) return;
       const { transport } = opened;
       this.sender = transport;
@@ -189,7 +323,7 @@ export class WebVoice {
           .then(accept, reject);
       });
       const producer = await transport.produce({
-        track,
+        track: this.capture?.track ?? this.microphone,
         encodings: [{ maxBitrate: this.bitrate }],
         codecOptions: { opusDtx: true, opusFec: true, opusStereo: false, opusMaxAverageBitrate: 128000, opusPtime: 20 },
       });
@@ -198,8 +332,9 @@ export class WebVoice {
       this.publishing = true;
       this.changed();
     }).catch((error) => {
-      if (current()) this.failSending(error instanceof Error ? error.message : String(error));
+      if (current()) return this.failSending(error instanceof Error ? error.message : String(error));
     });
+    return this.sending;
   }
 
   private updateSendBitrate() {
@@ -227,8 +362,17 @@ export class WebVoice {
   }
 
   private stopSending() {
+    clearInterval(this.talkLease);
     this.microphone?.stop();
     this.microphone = undefined;
+    if (this.capture) {
+      const { source, processor, track } = this.capture;
+      track.stop();
+      source.disconnect();
+      processor.disconnect();
+      processor.port.close();
+      this.capture = undefined;
+    }
     this.producer = undefined;
     this.publishing = false;
     const stopping = this.stopTransport(this.sender);
@@ -239,9 +383,10 @@ export class WebVoice {
   private failSending(message: string) {
     this.sendGeneration++;
     this.sendError = message;
-    void this.stopSending();
+    const stopping = this.stopSending();
     this.releaseMicrophoneMode();
     this.changed();
+    return stopping;
   }
 
   private releaseMicrophoneMode() {
@@ -317,7 +462,7 @@ export class WebVoice {
       const node = this.audio.createMediaStreamSource(new MediaStream([consumer.track]));
       const gain = this.audio.createGain();
       gain.gain.value = (this.volumes[options.accountId] ?? 100) / 100;
-      node.connect(gain).connect(this.audio.destination);
+      node.connect(gain).connect(this.output);
       this.remote.set(producerId, { consumer, node, gain, accountId: options.accountId });
       consumer = undefined;
       consumerId = undefined;
@@ -344,5 +489,6 @@ export class WebVoice {
     this.restartSending();
     this.restartReceiving();
     this.sources.clear();
+    this.output.disconnect();
   }
 }

@@ -2,10 +2,11 @@
   import { Button } from "#lib/components/ui/button/index.js";
   import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
   import SelectField from "#lib/components/fields/SelectField.svelte";
-  import { AudioLines, Headphones, Mic, Radio, SlidersHorizontal } from "@lucide/svelte";
+  import { AudioLines, Headphones, Radio, SlidersHorizontal } from "@lucide/svelte";
   import { onMount } from "svelte";
   import AudioDeviceFields from "#lib/components/media/AudioDeviceFields.svelte";
   import AudioLevel from "#lib/components/media/AudioLevel.svelte";
+  import AudioMeter from "#lib/components/media/AudioMeter.svelte";
   import TalkKey from "#lib/components/media/TalkKey.svelte";
   import { getAudioSettings } from "#lib/media/audio.svelte";
   import { getWorkspace } from "#lib/workspace";
@@ -13,7 +14,7 @@
   const audio = getAudioSettings();
   const workspace = getWorkspace();
   let inVoice = $derived(Boolean(workspace.view.snapshot?.channelId));
-  let disabled = $derived(!audio.available || audio.applying || audio.testing);
+  let disabled = $derived(!audio.available || audio.applying);
   const inputModes = [
     { mode: "open", value: "Open microphone", label: "Open microphone" },
     { mode: "activity", value: "Voice activity", label: "Voice activity" },
@@ -25,6 +26,8 @@
   let monitorContext: AudioContext | undefined = $state();
   let liveLevel = $state(0);
   let liveTransmitting = $state(false);
+  let thresholdPreview = $state<number>();
+  let activityThreshold = $derived(thresholdPreview ?? audio.profile.activityThreshold);
   let monitorError = $state("");
   let monitorFrame = 0;
   let belowSince = 0;
@@ -54,7 +57,7 @@
           throw new Error(workspace.actionError || "Could not mute your voice channel microphone.");
         }
       }
-      // The monitor plays its own input, which echo cancellation can suppress.
+      // The monitor plays its own input, which echo cancellation would suppress.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           deviceId: audio.profile.input ? { exact: audio.profile.input } : undefined,
@@ -64,6 +67,13 @@
         },
       });
       const context = new AudioContext();
+      if (audio.profile.output) {
+        try {
+          await (context as AudioContext & { setSinkId?: (sinkId: string) => Promise<void> })
+            .setSinkId?.(audio.profile.output);
+        } catch { /* Fall back to the system output. */ }
+      }
+      await context.resume();
       const source = context.createMediaStreamSource(stream);
       const analyser = context.createAnalyser();
       analyser.fftSize = 512;
@@ -125,7 +135,7 @@
     <section class="settings-card audio-card" aria-labelledby="audio-devices">
       <div class="audio-card-heading">
         <h2 id="audio-devices"><Headphones size={16} /> Devices</h2>
-        <Button variant="outline" disabled={!audio.available || audio.testing} onclick={() => audio.refreshDevices()}>Refresh devices</Button>
+        <Button variant="outline" disabled={!audio.available} onclick={() => audio.refreshDevices()}>Refresh devices</Button>
       </div>
       <div class="audio-device-grid">
         <AudioDeviceFields direction="input" />
@@ -134,7 +144,14 @@
     </section>
 
     <section class="settings-card audio-card audio-fields" aria-labelledby="audio-transmission">
-      <h2 id="audio-transmission"><Radio size={16} /> Transmission</h2>
+      <div class="audio-card-heading">
+        <h2 id="audio-transmission"><Radio size={16} /> Transmission</h2>
+        <Button variant="outline" disabled={disabled || typeof navigator === "undefined" || !navigator.mediaDevices} onclick={toggleMonitor}>
+          <AudioLines size={15} /> {monitorStream ? "Stop listening" : "Listen to microphone"}
+        </Button>
+      </div>
+      {#if inVoice}<small>Your voice channel microphone will be muted while previewing.</small>{/if}
+      {#if monitorError}<p class="field-hint" role="alert">{monitorError}</p>{/if}
       <SelectField label="Input mode" options={[...inputModes]} {disabled}
         bind:value={() => inputMode, selectInputMode} />
       {#if audio.profile.transmitMode === "pushToTalk" || audio.profile.transmitMode === "toggleToTalk"}
@@ -149,21 +166,36 @@
           <p class="field-hint" role="status">Transmitting microphone audio</p>
         {/if}
       {:else if audio.profile.transmitMode === "activity"}
-        <AudioLevel setting="activityThreshold" label="Microphone activation level (%)" min={1} />
-        <AudioLevel setting="activityHoldMs" label="Voice activity hold" max={1000} step={10} unit="ms" />
-        <div class="live-preview" aria-live="polite">
-          <div class="peak-reading"><span>Live microphone preview</span><span>{monitorStream ? `${liveLevel}%` : "Not listening"}</span></div>
-          <meter min="0" max="100" value={liveLevel} aria-label="Live microphone level"></meter>
-          <small>{monitorStream
-            ? liveTransmitting ? "Above threshold · voice activity open" : "Below threshold · voice activity closed"
-            : "Start the microphone monitor below to preview voice activity while adjusting the threshold."}</small>
-          {#if !monitorStream}
-            <Button variant="outline" disabled={disabled || typeof navigator === "undefined" || !navigator.mediaDevices} onclick={toggleMonitor}>
-              <AudioLines size={15} /> Listen to microphone
-            </Button>
+        <AudioLevel setting="activityThreshold" label="Microphone activation level (%)" min={1} variant="threshold"
+          level={monitorStream ? liveLevel : undefined}
+          onpreview={(value) => { thresholdPreview = value; }} />
+        <div class="threshold-legend" aria-hidden="true">
+          <span><i data-tone="warning"></i>Cut off below {activityThreshold}%</span>
+          <span><i data-tone="success"></i>Transmitting above {activityThreshold}%</span>
+        </div>
+        <div class="activity-preview">
+          {#if monitorStream}
+            <p class="peak-reading">
+              <span class="live-state"><i class="live-dot" class:open={liveTransmitting}></i>Live {liveLevel}%</span>
+              <span role="status" aria-live="polite">{liveTransmitting ? "Above threshold · voice activity open" : "Below threshold · voice activity closed"}</span>
+            </p>
+          {:else}
+            <p class="field-hint">Use “Listen to microphone” above to preview your live level on the bar.</p>
           {/if}
         </div>
+        <AudioLevel setting="activityHoldMs" label="Voice activity hold" max={1000} step={10} unit="ms" />
         <small>Keep transmitting briefly after your level falls below the activation threshold.</small>
+      {/if}
+      {#if monitorStream && audio.profile.transmitMode !== "activity"}
+        <div class="activity-preview">
+          <p class="peak-reading">
+            <span class="live-state"><i class="live-dot" class:open={liveTransmitting}></i>Live {liveLevel}%</span>
+            <span role="status" aria-live="polite">{audio.profile.transmitMode === "open"
+              ? "Open microphone · transmitting"
+              : audio.talking ? "Talk control active · transmitting" : "Talk control inactive · cutoff"}</span>
+          </p>
+          <AudioMeter level={liveLevel} active={liveTransmitting} label="Live microphone level" />
+        </div>
       {/if}
     </section>
 
@@ -193,34 +225,26 @@
       {/each}
     </section>
 
-    <section class="settings-card audio-card audio-fields" aria-labelledby="audio-test">
-      <div class="audio-card-heading">
-        <h2 id="audio-test"><Mic size={16} /> Microphone monitor</h2>
-        <Button variant="outline" disabled={disabled || typeof navigator === "undefined" || !navigator.mediaDevices} onclick={toggleMonitor}>
-          <AudioLines size={15} /> {monitorStream ? "Stop listening" : "Listen to microphone"}
-        </Button>
-      </div>
-      <small role="status">{inVoice ? "Your voice channel microphone will be muted while previewing." : "Listen to your microphone in real time and watch its level and voice activity state."}</small>
-      {#if monitorStream}
-        <div class="recording-result">
-          <div class="peak-reading" role="status">
-            <span>Input level</span>
-            <span>{liveLevel}%</span>
-          </div>
-          <meter min="0" max="100" value={liveLevel} aria-label="Live microphone level"></meter>
-          <p class="field-hint" role="status">{audio.profile.transmitMode === "activity"
-            ? liveTransmitting ? "Voice activity · transmitting" : "Below activation threshold · cutoff"
-            : audio.profile.transmitMode === "open" ? "Open microphone · transmitting" : audio.talking ? "Talk control active · transmitting" : "Talk control inactive · cutoff"}</p>
-        </div>
-      {/if}
-      {#if monitorError}<p class="field-hint" role="alert">{monitorError}</p>{/if}
-    </section>
   </div>
 </main>
 
 <style>
-  .gate-fields, .recording-result, .live-preview { display: grid; width: 100%; gap: 8px; }
+  .gate-fields, .activity-preview { display: grid; width: 100%; gap: 8px; }
   .gate-fields { margin-block-start: 8px; padding-inline-start: 12px; border-inline-start: 1px solid var(--border); }
   .peak-reading { display: flex; justify-content: space-between; gap: 12px; font-size: var(--type-small); }
-  meter, audio { width: 100%; }
+  .live-state { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .live-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--warning); }
+  .live-dot.open { background: var(--success); }
+  .threshold-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin-block-start: -4px;
+    color: var(--muted-foreground);
+    font-size: var(--type-caption);
+  }
+  .threshold-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .threshold-legend i { width: 8px; height: 8px; border-radius: 999px; }
+  .threshold-legend i[data-tone="warning"] { background: var(--warning); }
+  .threshold-legend i[data-tone="success"] { background: var(--success); }
 </style>
