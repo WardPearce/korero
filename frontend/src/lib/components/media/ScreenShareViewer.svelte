@@ -1,12 +1,13 @@
 <script lang="ts">
   import { Portal } from "bits-ui";
   import { ExternalLink, Maximize, Minimize, PanelTop, Pencil, Play, Square, Volume2, VolumeX, X } from "@lucide/svelte";
-  import { onDestroy, tick } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
   import { Button } from "#lib/components/ui/button/index.js";
   import * as ContextMenu from "#lib/components/ui/context-menu/index.js";
   import { Root as Slider } from "#lib/components/ui/slider/index.js";
   import { openScreenPopout, type ScreenPlayback } from "#lib/media/screen-popout";
+  import { defaultScreenPlayback, getScreenPlayback, saveScreenPlayback } from "#lib/preferences";
 
   interface Share {
     id: string;
@@ -55,7 +56,7 @@
   const popouts = new SvelteMap<string, NonNullable<ReturnType<typeof openScreenPopout>> & { stream: MediaStream }>();
   const playback = new SvelteMap<string, ScreenPlayback>();
   const videos = new Map<string, HTMLVideoElement>();
-  const defaultPlayback: ScreenPlayback = { muted: true, volume: 1 };
+  let defaultPlayback = $state<ScreenPlayback>({ ...defaultScreenPlayback });
   const tiles: Tile[] = $derived([
     ...own.map((entry) => ({ id: entry.id, title: entry.title, live: entry.live, stream: entry.stream, own: entry })),
     ...entries.map((share) => ({ id: share.id, title: share.title, live: true, stream: share.stream, share })),
@@ -74,6 +75,16 @@
     if (fullscreen && !stage.length) fullscreen = undefined;
   });
 
+  onMount(() => {
+    let cancelled = false;
+    void getScreenPlayback().then((saved) => {
+      if (cancelled) return;
+      defaultPlayback = saved;
+      applyDefaultPlayback(saved);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  });
+
   onDestroy(() => {
     for (const popup of popouts.values()) popup.close();
   });
@@ -82,15 +93,33 @@
     return playback.get(id) ?? defaultPlayback;
   }
 
-  function updatePlayback(id: string, patch: Partial<ScreenPlayback>) {
-    const next = { ...playbackFor(id), ...patch };
-    playback.set(id, next);
+  function applyPlayback(id: string, settings: ScreenPlayback) {
     const video = videos.get(id);
     if (video) {
-      video.muted = next.muted;
-      video.volume = next.volume;
+      video.muted = settings.muted;
+      video.volume = settings.volume;
     }
-    popouts.get(id)?.setPlayback(next);
+    popouts.get(id)?.setPlayback(settings);
+  }
+
+  function applyDefaultPlayback(settings: ScreenPlayback) {
+    for (const id of videos.keys()) {
+      if (!playback.has(id)) applyPlayback(id, settings);
+    }
+    for (const id of popouts.keys()) {
+      if (!playback.has(id)) applyPlayback(id, settings);
+    }
+  }
+
+  function updatePlayback(id: string, patch: Partial<ScreenPlayback>, persist = true) {
+    const next = { ...playbackFor(id), ...patch };
+    playback.set(id, next);
+    applyPlayback(id, next);
+    if (persist) {
+      defaultPlayback = next;
+      applyDefaultPlayback(next);
+      void saveScreenPlayback(next).catch(() => {});
+    }
   }
 
   function toggleMute(id: string) {
@@ -98,8 +127,8 @@
     updatePlayback(id, muted ? { muted: false, volume: volume || 1 } : { muted: true });
   }
 
-  function changeVolume(id: string, percent: number) {
-    updatePlayback(id, { volume: percent / 100, muted: percent === 0 });
+  function changeVolume(id: string, percent: number, persist = true) {
+    updatePlayback(id, { volume: percent / 100, muted: percent === 0 }, persist);
   }
 
   function attachStream(video: HTMLVideoElement, id: string, stream: MediaStream) {
@@ -108,6 +137,14 @@
     video.volume = settings.volume;
     video.srcObject = stream;
     videos.set(id, video);
+    if (!settings.muted) {
+      void video.play().catch(() => {
+        // Browsers can block audible autoplay. Keep the share playing and reflect the muted state.
+        video.muted = true;
+        playback.set(id, { ...playbackFor(id), muted: true });
+        void video.play().catch(() => {});
+      });
+    }
     return () => {
       video.srcObject = null;
       if (videos.get(id) === video) videos.delete(id);
@@ -231,7 +268,8 @@
         </div>
         <Slider type="single" min={0} max={100} class="min-h-6" thumbLabelledBy={volumeLabelId}
           bind:ref={volumeSlider} value={Math.round(playbackFor(id).volume * 100)}
-          onValueChange={(level) => changeVolume(id, level)} />
+          onValueChange={(level) => changeVolume(id, level, false)}
+          onValueCommit={(level) => changeVolume(id, level)} />
       </ContextMenu.Item>
       {#if tile.share && (stream || tile.share.loading || popup)}
         <ContextMenu.Separator />

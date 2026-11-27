@@ -1,4 +1,5 @@
 import Dexie, { type Table } from "dexie";
+import type { ScreenPlayback } from "./media/screen-popout";
 import type { TalkShortcut } from "./media/talk-shortcut";
 
 export interface SavedServer { origin: string; name: string; passwordRequired?: boolean }
@@ -105,4 +106,18 @@ export async function getMemberVolumes(serverId: string) {
 
 export async function saveMemberVolumes(serverId: string, value: Record<string, number>) {
   await preferences.local.put({ key: `member-volumes:${serverId}`, value });
+}
+
+export const defaultScreenPlayback: ScreenPlayback = { muted: false, volume: 1 };
+
+export async function getScreenPlayback(): Promise<ScreenPlayback> {
+  const { value } = await preferences.local.get("screen-playback") ?? {};
+  const saved = (value && typeof value === "object" ? value : {}) as Partial<ScreenPlayback>;
+  const volume = typeof saved.volume === "number" && Number.isFinite(saved.volume)
+    ? Math.min(1, Math.max(0, saved.volume)) : defaultScreenPlayback.volume;
+  return { muted: typeof saved.muted === "boolean" ? saved.muted : defaultScreenPlayback.muted, volume };
+}
+
+export function saveScreenPlayback(value: ScreenPlayback) {
+  return preferences.local.put({ key: "screen-playback", value: { muted: value.muted, volume: value.volume } });
 }

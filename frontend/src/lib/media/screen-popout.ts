@@ -69,6 +69,13 @@ export function openScreenPopout(
     video.volume = playback.volume;
     video.srcObject = stream;
     doc.body.replaceChildren(header, video);
+    if (!playback.muted) {
+      void video.play().catch(() => {
+        // Browsers can block audible autoplay; fall back to silent playback of the share.
+        video.muted = true;
+        void video.play().catch(() => {});
+      });
+    }
 
     const themeObserver = new MutationObserver(syncTheme);
     themeObserver.observe(appRoot, { attributeFilter: ["style"] });
