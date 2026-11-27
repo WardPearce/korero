@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, LockKeyhole, Mail, Plus, Search, X } from "@lucide/svelte";
+  import { ChevronDown, LockKeyhole, Mail, Plus, Search, Settings2, X } from "@lucide/svelte";
   import ChannelMember from "#lib/components/server/ChannelMember.svelte";
   import ContextActions from "#lib/components/ContextActions.svelte";
   import IconButton from "#lib/components/IconButton.svelte";
@@ -303,6 +303,12 @@
     <div class="shrinkable">
       <h1 class="truncate">{workspace.serverTitle}</h1>
     </div>
+    {#if workspace.canAdminister}
+      <button type="button" class="server-settings-button" aria-label="Server settings" title="Server settings"
+        disabled={Boolean(pending)} onclick={workspace.showServerSettings}>
+        <Settings2 size={18} aria-hidden="true" />
+      </button>
+    {/if}
   </div>
   {#if online && snapshot}
     <div class="server-counts">
@@ -363,6 +369,45 @@
 </aside>
 
 <style>
+  .channel-top { position: relative; }
+  .server-settings-button {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: var(--control-height);
+    height: var(--control-height);
+    margin-inline-start: auto;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+    color: var(--muted-foreground);
+    box-shadow: var(--shadow-raised);
+    cursor: pointer;
+    transition: background-color .15s, border-color .15s, color .15s;
+  }
+  .server-settings-button:hover { background: var(--control-hover); color: var(--foreground); }
+  .server-settings-button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  .server-settings-button:disabled { opacity: .5; cursor: default; }
+  .channel-top:has(.server-banner:not([hidden])) .server-settings-button {
+    position: absolute;
+    top: 10px;
+    inset-inline-end: 10px;
+    z-index: 1;
+    border-color: rgb(255 255 255 / 35%);
+    background: rgb(0 0 0 / 40%);
+    color: #fff;
+    box-shadow: 0 1px 6px rgb(0 0 0 / 25%);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+  }
+  .channel-top:has(.server-banner:not([hidden])) .server-settings-button:hover {
+    border-color: rgb(255 255 255 / 60%);
+    background: rgb(0 0 0 / 60%);
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .channel-top:has(.server-banner:not([hidden])) .server-settings-button { background: rgb(0 0 0 / 70%); }
+  }
   .server-counts {
     display: flex;
     flex-wrap: wrap;

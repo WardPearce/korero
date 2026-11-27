@@ -96,6 +96,9 @@
   <div class="flex-content">
     <div class="breadcrumb">Channel chat</div>
     <h2 class="truncate">{currentChannel?.name ?? "Chats"}</h2>
+    {#if currentChannel?.description?.trim()}
+      <p class="channel-description" title={currentChannel.description}>{currentChannel.description}</p>
+    {/if}
   </div>
   {#if currentChannel?.canEdit}
     <IconButton label="Edit channel" disabled={!online || Boolean(pending)} onclick={() => onedit(currentChannel)}><Pencil size={19} aria-hidden="true" /></IconButton>
@@ -163,6 +166,14 @@
 </div>
 
 <style>
+  .channel-description {
+    margin: 0;
+    overflow: hidden;
+    color: var(--muted-foreground);
+    font-size: var(--type-caption);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .server-motd {
     margin: .5rem .5rem 0;
     padding: .5rem .75rem;

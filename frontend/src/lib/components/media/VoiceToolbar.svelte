@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, HeadphoneOff, Headphones, Mic, MicOff, PhoneOff, Settings2 } from "@lucide/svelte";
+  import { ChevronDown, HeadphoneOff, Headphones, Mic, MicOff } from "@lucide/svelte";
   import { Button, buttonVariants } from "#lib/components/ui/button/index.js";
   import * as DropdownMenu from "#lib/components/ui/dropdown-menu/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
@@ -86,13 +86,6 @@
   </DropdownMenu.Root>
   {#if desktopApp() && snapshot?.whispers}
     <WhisperControls />
-  {/if}
-  {#if activeChannel}
-    <span class="toolbar-separator"></span>
-    <IconButton label="Leave voice channel" disabled={!canVoice || Boolean(pending)} onclick={async () => { if (await workspace.runVoice("leave", "leave_channel")) playUiSound("disconnect"); }}><PhoneOff size={18} aria-hidden="true" /></IconButton>
-  {/if}
-  {#if workspace.canAdminister}
-    <IconButton label="Server settings" disabled={Boolean(pending)} onclick={workspace.showServerSettings}><Settings2 size={18} aria-hidden="true" /></IconButton>
   {/if}
 </div>
 
