@@ -58,6 +58,6 @@ You can preview the production build with `npm run preview`.
 ## Download links
 
 The download dialog resolves platform installers from the latest public release in
-[`WardPearce/korero`](https://github.com/WardPearce/korero/releases) at request time. The
-server caches the GitHub API response for 10 minutes to stay within the unauthenticated
-rate limit. Set `GITHUB_TOKEN` to raise the limit for busier deployments.
+[`WardPearce/korero`](https://github.com/WardPearce/korero/releases) in the browser the
+first time the dialog opens. The response is cached in memory for 10 minutes so visitors
+stay within the unauthenticated GitHub API rate limit (60 requests per hour per IP).

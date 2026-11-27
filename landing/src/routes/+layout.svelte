@@ -3,7 +3,7 @@
 	import DownloadDialog from '#lib/components/DownloadDialog.svelte';
 	import type { LayoutProps } from './$types';
 
-	let { children, data }: LayoutProps = $props();
+	let { children }: LayoutProps = $props();
 </script>
 
 <svelte:head>
@@ -18,4 +18,4 @@
 
 {@render children()}
 
-<DownloadDialog release={data.release} />
+<DownloadDialog />

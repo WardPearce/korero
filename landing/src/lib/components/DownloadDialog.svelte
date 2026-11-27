@@ -8,9 +8,22 @@
 	import Terminal from '@lucide/svelte/icons/terminal';
 	import X from '@lucide/svelte/icons/x';
 	import { closeDownloadDialog, downloadDialogOpen } from '#lib/download-dialog.js';
+	import { getLatestRelease } from '#lib/releases-client.js';
 	import type { LatestRelease, PlatformId } from '#lib/releases.js';
 
-	let { release }: { release: LatestRelease | null } = $props();
+	let release = $state<LatestRelease | null>(null);
+	let releaseRequested = false;
+
+	// Fetch the latest release in the browser the first time the dialog opens.
+	$effect(() => {
+		if (!$downloadDialogOpen || releaseRequested) return;
+
+		releaseRequested = true;
+		void getLatestRelease().then((latest) => {
+			release = latest;
+			if (!latest) releaseRequested = false;
+		});
+	});
 
 	const releaseUrl = $derived(
 		release?.url ?? 'https://github.com/WardPearce/korero/releases/latest'

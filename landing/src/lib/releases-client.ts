@@ -1,26 +1,22 @@
+import { browser } from '$app/environment';
 import { buildLatestRelease, type GithubRelease, type LatestRelease } from '#lib/releases.js';
 
 const repository = 'WardPearce/korero';
 const apiUrl = `https://api.github.com/repos/${repository}/releases/latest`;
 
-// The unauthenticated GitHub API allows 60 requests per hour per IP, so keep
-// responses in memory rather than hitting it on every page view.
+// The unauthenticated GitHub API allows 60 requests per hour per IP. Keep
+// responses in memory so a visitor only hits it once per browser session.
 const cacheTtlMs = 10 * 60 * 1000;
 const failureTtlMs = 60 * 1000;
 
 let cache: { release: LatestRelease | null; expiresAt: number } | null = null;
+let pending: Promise<LatestRelease | null> | null = null;
 
-export async function getLatestRelease(): Promise<LatestRelease | null> {
-	if (cache && Date.now() < cache.expiresAt) return cache.release;
-
+async function fetchLatestRelease(): Promise<LatestRelease | null> {
 	const headers: Record<string, string> = {
 		Accept: 'application/vnd.github+json',
-		'User-Agent': 'korero-landing',
 		'X-GitHub-Api-Version': '2022-11-28'
 	};
-
-	// Optional: a token raises the API rate limit for busy deployments.
-	if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
 
 	try {
 		const response = await fetch(apiUrl, { headers });
@@ -36,4 +32,11 @@ export async function getLatestRelease(): Promise<LatestRelease | null> {
 		cache = { release: cache?.release ?? null, expiresAt: Date.now() + failureTtlMs };
 		return cache.release;
 	}
+}
+
+export async function getLatestRelease(): Promise<LatestRelease | null> {
+	if (!browser) return null;
+	if (cache && Date.now() < cache.expiresAt) return cache.release;
+	if (!pending) pending = fetchLatestRelease().finally(() => (pending = null));
+	return pending;
 }
