@@ -195,7 +195,7 @@ test("identity enrollment, role hierarchy, and server administration are enforce
     expect((await server.fail(roles, { accountId: owner.account.id, role: "Member" }, alice.accessToken, "PATCH")).status).toBe(403);
     const accounts = await server.call("/api/v1/admin/accounts", undefined, alice.accessToken);
     expect(accounts.payload).toMatchObject({ accounts: expect.arrayContaining([{ id: owner.account.id,
-      displayName: "Operator", role: "Owner", badge: null, editable: false }]) });
+      displayName: "Operator", role: "Owner", badge: null, editable: false, bannable: false, banned: false }]) });
 
     const configPath = "/api/v1/admin/configuration";
     const file = join(server.directory, "server.toml");

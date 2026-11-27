@@ -802,8 +802,11 @@ export class Realtime {
   private authorizeReparent(actor: Account, current: Channel, parent: Channel | undefined) {
     const previousParent = current.parentId ? this.channel(current.parentId) : undefined;
     this.require(actor, "join", current);
+    // Leaving or entering the root needs no server-wide grant; the edit grant on the moved channel
+    // and the inherited-permission checks below already cover it.
     for (const scope of [previousParent, parent]) {
-      if (scope) this.require(actor, "join", scope);
+      if (!scope) continue;
+      this.require(actor, "join", scope);
       this.require(actor, "editChannels", scope);
     }
     this.validateChannelParent(current.id, parent, current);

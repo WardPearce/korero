@@ -21,6 +21,12 @@ export type Snapshot = {
 type Failure = { status: number; payload: { error: { code: string; message: string } } };
 type Event = { type: string; payload: Record<string, unknown> };
 const cli = resolve(import.meta.dir, "../src/index.ts");
+// Older Bun releases reject the server's self-signed certificate even when it is passed as `tls.ca`,
+// which surfaces as UNABLE_TO_VERIFY_LEAF_SIGNATURE readiness timeouts. Match the version CI pins.
+const requiredBun = "1.4.5";
+if (Bun.semver.order(Bun.version, requiredBun) < 0) {
+  throw new Error(`Integration tests need Bun ${requiredBun} or newer (running ${Bun.version}); run \`bun upgrade\``);
+}
 export const testIdentity = () => generateKeyPairSync("ed25519");
 
 function freePort() {
