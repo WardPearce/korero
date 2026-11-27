@@ -3,7 +3,7 @@ import { Credentials, randomToken } from "../../src/security/credentials";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadConfig } from "../../src/config";
+import { loadConfig, configToml } from "../../src/config";
 import { extractWorker, sha256 } from "../../src/security/files";
 import { symlink, unlink } from "node:fs/promises";
 import { decode } from "../../src/protocol";
@@ -36,6 +36,41 @@ test("checks the complete TOML configuration before startup", async () => {
     expect(config.server.trusted_proxies).toEqual(["::1"]);
     expect(config.tls.mode).toBe("proxy");
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("accepts an inline TOML document through VOICE_CONFIG", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "voice-inline-"));
+  const previous = process.env.VOICE_CONFIG;
+  try {
+    process.env.VOICE_CONFIG = `# Inline configuration
+[server]
+name = "Inline Server"
+[media]
+port = 9444
+`;
+    const config = await loadConfig({ directory });
+    expect(config.server.name).toBe("Inline Server");
+    expect(config.media.port).toBe(9444);
+    expect(config.file).toBe(join(directory, "server.toml"));
+    expect(await configToml(config)).toBe(process.env.VOICE_CONFIG);
+
+    const path = join(directory, "custom.toml");
+    await Bun.write(path, '[server]\nname = "From Path"');
+    process.env.VOICE_CONFIG = path;
+    const fromPath = await loadConfig({ directory });
+    expect(fromPath.server.name).toBe("From Path");
+    expect(fromPath.inlineConfig).toBeUndefined();
+
+    process.env.VOICE_CONFIG = '[media]\n port = 8443';
+    await expect(loadConfig({ directory })).rejects.toThrow("overlap");
+
+    process.env.VOICE_CONFIG = "[server\nname =";
+    await expect(loadConfig({ directory })).rejects.toThrow("Invalid inline TOML");
+  } finally {
+    if (previous === undefined) delete process.env.VOICE_CONFIG;
+    else process.env.VOICE_CONFIG = previous;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("realtime and attachment rate limits have relaxed defaults and accept host overrides", async () => {

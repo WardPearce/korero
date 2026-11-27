@@ -1,8 +1,10 @@
 # Korero voice server configuration.
 # Every setting is optional; omitted values use the defaults shown below. Each setting can
 # also be supplied as VOICE_<SECTION>_<KEY> (e.g. VOICE_SERVER_PORT), which takes precedence
-# over this file. Unless stated otherwise, lists accept up to 32 strings of at most 2048
-# characters each, and all numbers must be integers within the range shown.
+# over this file. In containers, the whole document can instead be supplied inline through
+# VOICE_CONFIG, for example with a Compose `environment` entry. Unless stated otherwise,
+# lists accept up to 32 strings of at most 2048 characters each, and all numbers must be
+# integers within the range shown.
 # Validate a file with: voice-server --config ./server.toml config validate
 
 # ---------------------------------------------------------------------------

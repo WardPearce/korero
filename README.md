@@ -72,6 +72,9 @@ Set the announced address to a host IP that clients can reach.
 VOICE_MEDIA_ANNOUNCED_ADDRESS=192.168.1.100 docker compose up -d --build
 ```
 
+To keep the full `server.toml` in Compose, set `VOICE_CONFIG` to the TOML document itself
+(it starts with a `[section]` or `#` comment) instead of mounting a file.
+
 See [Deployment](docs/deployment.md) for LAN, IPv6, VPN, NAT and backup instructions.
 
 # Manage a server

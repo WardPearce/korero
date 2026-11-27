@@ -78,27 +78,10 @@
 
 		<h2 id="docker">Deploy with Docker</h2>
 		<p>
-			The image supports AMD64 and ARM64. Start with a <code>server.toml</code> next to your compose
-			file. Every setting is optional, so this one only sets the server name and the public
-			addresses clients use for signalling and media. See
+			The image supports AMD64 and ARM64. Every setting is optional. Put the TOML directly in
+			<code>VOICE_CONFIG</code> so the whole configuration stays in your compose file; this one only
+			sets the server name and the public addresses clients use for signalling and media. See
 			<a href="#configure">Configure</a> for the rest.
-		</p>
-		<CodeBlock
-			lang="toml"
-			label="server.toml"
-			code={`[server]
-name = "My Kōrero server"
-registration = "invitation"
-# The public IP or hostname clients use for HTTPS/WSS.
-public_addresses = ["203.0.113.10"]
-
-[media]
-# The public IP or hostname clients can reach the media port on.
-announced_address = "203.0.113.10"`}
-		/>
-		<p>
-			Then create a <code>compose.yaml</code> that mounts the file read-only and points
-			<code>VOICE_CONFIG</code> at it.
 		</p>
 		<CodeBlock
 			lang="yaml"
@@ -113,17 +96,24 @@ announced_address = "203.0.113.10"`}
       - "8444:8444/tcp"
     volumes:
       - voice-data:/data
-      - ./server.toml:/config/server.toml:ro
     environment:
       VOICE_DATA_DIR: /data
-      VOICE_CONFIG: /config/server.toml
+      VOICE_CONFIG: |
+        [server]
+        name = "My Kōrero server"
+        registration = "invitation"
+        # The public IP or hostname clients use for HTTPS/WSS.
+        public_addresses = ["203.0.113.10"]
+
+        [media]
+        # The public IP or hostname clients can reach the media port on.
+        announced_address = "203.0.113.10"
 volumes:
   voice-data:`}
 		/>
 		<p>
-			The container runs as UID 10001, so the file must be readable by that user. Run
-			<code>chmod 644 server.toml</code> if it isn't. Edit the file and run
-			<code>docker compose restart</code> to apply changes.
+			Inline TOML is recognised when it begins with a section header or comment. Edit the compose
+			file and run <code>docker compose up -d</code> to apply changes.
 		</p>
 		<p>Start the server and read the log for the endpoint, fingerprint and setup token.</p>
 		<CodeBlock
@@ -135,7 +125,7 @@ docker compose logs voice-server`}
 			The named volume keeps the database and TLS identity. The container runs as UID and GID 10001.
 			If you use a bind mount instead, make that user the owner of the directory first. For IPv6,
 			enable it on the host and the Docker network, and set
-			<code>media.announced_ipv6</code> in <code>server.toml</code>.
+			<code>media.announced_ipv6</code> in <code>VOICE_CONFIG</code>.
 		</p>
 		<p>
 			If the setup token expires before you claim the server, stop it, create a new token and start
@@ -240,7 +230,7 @@ journalctl -u korero`}
 
 		<h2 id="configure">Configure</h2>
 		<p>
-			Every setting is optional. Copy
+			Every setting is optional. Start from
 			<a
 				href="https://github.com/WardPearce/korero/blob/main/backend/server.example.toml"
 				target="_blank"
@@ -248,15 +238,23 @@ journalctl -u korero`}
 			>
 				server.example.toml
 			</a>
-			to <code>server.toml</code> in the data directory and edit it. Restart to apply changes.
+			and put the TOML inline in <code>VOICE_CONFIG</code> in Docker. When running the binary, save
+			it as <code>server.toml</code> in the data directory. Restart to apply changes.
 		</p>
 		<p>
 			Any setting can also be an environment variable named <code>
 				VOICE_&lt;SECTION&gt;_&lt;KEY&gt;
-			</code>, such as <code>VOICE_SERVER_PORT</code>. Environment variables win over the file.
-			Check a file before you restart.
+			</code>, such as <code>VOICE_SERVER_PORT</code>. Environment variables win over TOML. Validate
+			the configuration before you restart.
 		</p>
-		<CodeBlock lang="bash" code={`voice-server --config ./server.toml config validate`} />
+		<CodeBlock
+			lang="bash"
+			code={`# Binary
+voice-server --config ./server.toml config validate
+
+# Docker
+docker compose run --rm voice-server config validate`}
+		/>
 		<p>Settings most servers change first:</p>
 		<table>
 			<thead><tr><th>Setting</th><th>What it does</th></tr></thead>

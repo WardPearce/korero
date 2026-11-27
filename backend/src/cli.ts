@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { constants } from "node:crypto";
 import { styleText } from "node:util";
 import { createApp } from "./app";
-import { defaultToml, endpoint, loadConfig, localAddresses, type Config } from "./config";
+import { configToml, defaultToml, endpoint, loadConfig, localAddresses, type Config } from "./config";
 import { lockDirectory, openDatabase, audit, snapshotDatabase, type Store } from "./database";
 import { accounts, hostedAccounts, metadata, settings } from "./database/schema";
 import { Auth } from "./modules/auth";
@@ -127,7 +127,7 @@ async function backup(db: Store, config: Config, destination: string) {
     additional.push(["manual/tls.crt", config.tls.certificate], ["manual/tls.key", config.tls.private_key]);
   }
   const secret = await readPrivate(join(config.directory, "secrets", "credentials.key"));
-  const toml = existsSync(config.file) ? await Bun.file(config.file).text() : defaultToml;
+  const toml = await configToml(config);
   await mkdir(output, { mode: 0o700 });
   snapshotDatabase(db, join(output, "server.db"));
   await chmod(join(output, "server.db"), 0o600);
@@ -227,7 +227,7 @@ export async function cli(args: string[]) {
     if (!auth.passwordLocked && config.server.password) auth.syncConfiguredServerPassword(config.server.password);
     switch (options.command) {
       case "start":
-        if (!existsSync(config.file)) await atomicWrite(config.file, defaultToml);
+        if (config.inlineConfig === undefined && !existsSync(config.file)) await atomicWrite(config.file, defaultToml);
         await start(db, auth, new HostedAccounts(db, credentials, config), config);
         break;
       case "admin setup-token": console.log(formatSetup(auth.issueSetup(true)!)); break;

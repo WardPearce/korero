@@ -1,7 +1,8 @@
 # Deployment
 
 Run the binary on supported Linux or use the container. Persistent data includes
-`server.db`, `server.toml`, `identity/tls.pem`, and `secrets/credentials.key`.
+`server.db`, the file-based `server.toml` when present, `identity/tls.pem`, and
+`secrets/credentials.key`.
 The bundled native SFU is verified and extracted into a versioned workers directory.
 Use a local filesystem with advisory SQLite file locking and executable file support.
 Run one server per data directory under a dedicated system user.
@@ -54,6 +55,11 @@ Start with [server.example.toml](../backend/server.example.toml). Precedence is 
 CLI path or data directory, then `VOICE_CONFIG` or `VOICE_DATA_DIR`, then
 `[storage].directory` if specified in the selected TOML, then `./data`.
 Otherwise the server reads `server.toml` from the selected data directory if it exists.
+`VOICE_CONFIG` may name a file or contain the TOML document itself. Inline content is
+recognised when it starts with a section header or comment, so a container can supply the
+whole configuration through its environment instead of mounting a file. Inline settings
+are not written back to the data directory; a backup stores them as `server.toml` so a
+restored instance starts with the same configuration.
 Ordinary settings use `VOICE_<SECTION>_<KEY>` over TOML over defaults. Supply JSON for
 environment booleans, numbers, lists and tables. Server name can also be persisted
 via the authorised WebSocket API. On restart, that saved value overrides TOML unless
@@ -62,7 +68,8 @@ set them in TOML or with `VOICE_SERVER_REGISTRATION` / `VOICE_SERVER_MAX_USERS`.
 The API cannot change them. Environment-managed values cannot be changed through
 the API.
 
-Edit the TOML on the host and restart to apply it. Set `VOICE_SERVER_PASSWORD` to
+Edit the TOML on the host, or the `VOICE_CONFIG` value in the container environment,
+and restart to apply it. Set `VOICE_SERVER_PASSWORD` to
 manage the shared password on the host. An explicitly empty value disables the shared
 password for that run. Unset the variable to use the TOML or the saved app password again.
 
@@ -100,6 +107,40 @@ voice-server --data-dir ./data
 ```sh
 VOICE_MEDIA_ANNOUNCED_ADDRESS=192.168.1.100 docker compose up --build -d
 docker compose logs voice-server
+```
+
+The image reads `server.toml` from `/data` by default. To keep the whole configuration in
+Compose instead, put the TOML document in `VOICE_CONFIG`; a leading `[section]` or `#`
+comment distinguishes inline TOML from a file path:
+
+```yaml
+services:
+  voice-server:
+    image: wardpearce/korero-server:latest
+    restart: unless-stopped
+    ports:
+      - "8443:8443/tcp"
+      - "8444:8444/udp"
+      - "8444:8444/tcp"
+    volumes:
+      - voice-data:/data
+    environment:
+      VOICE_DATA_DIR: /data
+      VOICE_CONFIG: |
+        [server]
+        name = "Voice Server"
+        public_addresses = ["voice.example.com"]
+        [media]
+        announced_address = "203.0.113.10"
+volumes:
+  voice-data:
+```
+
+Per-setting environment overrides such as `VOICE_MEDIA_ANNOUNCED_ADDRESS` still take
+precedence over `VOICE_CONFIG`. Inline configuration is validated the same way as a file:
+
+```sh
+docker compose run --rm voice-server config validate
 ```
 
 Set the announced address to the address clients use to reach the Docker host.

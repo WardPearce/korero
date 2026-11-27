@@ -48,19 +48,26 @@ const defaults: Settings = {
 export const localAddresses = () => [...new Set(Object.values(networkInterfaces()).flatMap((entries) =>
   (entries ?? []).filter(({ address }) => !address.toLowerCase().startsWith("fe80:")).map(({ address }) => address)))];
 export const endpoint = (host: string, port: number) => `${isIP(host) === 6 ? `[${host}]` : host}:${port}`;
-export type Config = Settings & { directory: string; file: string; mediaAddresses: { ip: string; announcedAddress?: string }[] };
+export type Config = Settings & { directory: string; file: string; inlineConfig?: string; mediaAddresses: { ip: string; announcedAddress?: string }[] };
 const validator = getSchemaValidator(configuration, { normalize: false })!;
 
 function objectValue(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 
+// Inline TOML always starts with a section header or comment; a filesystem path does not.
+const inlineToml = (value: string) => /^\s*(?:\[|#)/.test(value);
+
 export async function loadConfig(options: { file?: string; directory?: string } = {}): Promise<Config> {
   const hint = options.directory ?? process.env.VOICE_DATA_DIR;
   const selected = options.file ?? process.env.VOICE_CONFIG;
-  const file = resolve(selected ?? resolve(hint ?? "./data", "server.toml"));
+  const inlineConfig = options.file === undefined && selected !== undefined && inlineToml(selected) ? selected : undefined;
+  const file = resolve(inlineConfig === undefined && selected !== undefined ? selected : resolve(hint ?? "./data", "server.toml"));
   let raw: unknown = {};
-  if (existsSync(file)) {
+  if (inlineConfig !== undefined) {
+    try { raw = Bun.TOML.parse(inlineConfig); }
+    catch { throw new Error("Invalid inline TOML in VOICE_CONFIG"); }
+  } else if (existsSync(file)) {
     try { raw = Bun.TOML.parse(await Bun.file(file).text()); }
     catch { throw new Error(`Invalid TOML in ${file}`); }
   } else if (selected) throw new Error(`Configuration file does not exist: ${file}`);
@@ -158,7 +165,7 @@ export async function loadConfig(options: { file?: string; directory?: string } 
   for (const entry of media.ice_servers) {
     if (!entry.urls.length || entry.urls.some((url) => !/^(stun|stuns|turn|turns):[^\s]+$/.test(url))) throw new Error("Invalid configured ICE server URL");
   }
-  return { ...settings, directory, file, mediaAddresses };
+  return { ...settings, directory, file, inlineConfig, mediaAddresses };
 }
 
 export const defaultToml = `# Unspecified settings use safe defaults. See docs/deployment.md.
@@ -180,3 +187,8 @@ enable_tcp = true
 [messaging]
 persistence = false
 `;
+
+export async function configToml(config: Config): Promise<string> {
+  if (config.inlineConfig !== undefined) return config.inlineConfig;
+  return existsSync(config.file) ? Bun.file(config.file).text() : defaultToml;
+}
