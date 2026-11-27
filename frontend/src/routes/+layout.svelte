@@ -28,6 +28,7 @@
     apiFor, call, directRequest, messageFrom, desktopApp, offline, requestError, shortHost, startSession, watchVoice,
     type Member, type MemberRequest, type Poke, type ServerInfo, type VoiceState,
   } from "#lib/connection/client";
+  import { mobileApp } from "#lib/connection/platform";
   import { authenticateIdentity, getIdentity, identityError, setIdentity } from "#lib/identity/identity";
   import { HostedAccount } from "#lib/identity/hosted-account";
   import { identityModeKey, readLocalIdentity, rememberIdentityMode, type LocalProfile } from "#lib/identity/local-identity";
@@ -115,7 +116,7 @@
   let memberVolumeUpdate = Promise.resolve(true);
   let actionError = $state("");
   let selectedChannelId = $state<string | null>(null);
-  let mobilePane = $state<MobilePane>("room");
+  let mobilePane = $state<MobilePane>(typeof window !== "undefined" && mobileApp() ? "servers" : "room");
   let roomView = $state<RoomView>("chat");
   let screenShareViewerTarget = $state<HTMLElement>();
   let screenShareControlsTarget = $state<HTMLElement>();
