@@ -47,9 +47,14 @@
     for (const message of workspace.view.directMessages ?? []) {
       if ((message.senderId === accountId && message.recipientId === snapshot.account.id) ||
           (message.recipientId === accountId && message.senderId === snapshot.account.id)) {
-        if (!packets.has(message.id)) packets.set(message.id, message);
+        const known = packets.get(message.id);
+        // A live edit replaces the copy loaded from history.
+        if (!known || (message.editedAt ?? 0) > (known.editedAt ?? 0)) {
+          packets.set(message.id, known ? { ...known, ...message, createdAt: known.createdAt } : message);
+        }
       }
     }
+    for (const id of workspace.view.directDeleted ?? []) packets.delete(id);
     return [...packets.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
   });
 
@@ -168,10 +173,27 @@
     externalUrl = "";
   }
 
+  function fits(content: string) {
+    return new TextEncoder().encode(content).length <= policy.maxBytes;
+  }
+
+  async function edit(message: DirectMessage, text: string) {
+    if (!conversation) throw new Error("The conversation is unavailable.");
+    const content = encodeDirectContent(text);
+    if (!fits(content)) throw new Error(`Messages can use up to ${policy.maxBytes} bytes on this server.`);
+    const packet = await conversation.encrypt(content, message.id);
+    await directRequest(connectionId, "direct.edit", packet);
+  }
+
+  async function remove(message: DirectMessage) {
+    await directRequest(connectionId, "direct.delete", { accountId, id: message.id });
+    history = history.filter(({ id }) => id !== message.id);
+  }
+
   async function send(text: string, html?: string) {
     if ((mode !== "verified" && mode !== "unverified") || !conversation || !canSend || pending || !text) return false;
     const content = encodeDirectContent(text, html);
-    if (new TextEncoder().encode(content).length > policy.maxBytes) {
+    if (!fits(content)) {
       error = `Messages can use up to ${policy.maxBytes} bytes on this server. Shorten this message or remove formatting.`;
       return false;
     }
@@ -222,15 +244,24 @@
       {/if}
       {#each messages as message, index (message.id)}
         {@const name = message.senderId === snapshot.account.id ? snapshot.account.displayName : peer?.displayName ?? "Contact"}
-        <ChatMessage {message} previous={messages[index - 1]} {name}>
-          {#await conversation.decrypt(message)}
+        {@const own = message.senderId === snapshot.account.id}
+        {#await conversation.decrypt(message)}
+          <ChatMessage {message} previous={messages[index - 1]} {name}>
             <p class="text-muted-foreground">Decrypting…</p>
-          {:then content}
-            <RichMessage {...decodeDirectContent(content)} onlink={confirmLink} />
-          {:catch}
+          </ChatMessage>
+        {:then content}
+          {@const decoded = decodeDirectContent(content)}
+          <ChatMessage {message} previous={messages[index - 1]} {name}
+            editText={own && canSendDirectMessages ? decoded.text : undefined} editLimit={policy.maxBytes}
+            onedit={own ? (text) => edit(message, text) : undefined}
+            ondelete={own ? () => remove(message) : undefined}>
+            <RichMessage {...decoded} onlink={confirmLink} />
+          </ChatMessage>
+        {:catch}
+          <ChatMessage {message} previous={messages[index - 1]} {name} ondelete={own ? () => remove(message) : undefined}>
             <p class="form-error">Message could not be verified or decrypted.</p>
-          {/await}
-        </ChatMessage>
+          </ChatMessage>
+        {/await}
       {:else}
         <div class="chat-empty">
           <LockKeyhole size={23} />

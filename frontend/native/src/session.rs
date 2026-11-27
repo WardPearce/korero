@@ -70,6 +70,8 @@ pub struct View {
     pub snapshot: Value,
     pub messages: Vec<Value>,
     pub direct_messages: Vec<Value>,
+    /// Direct messages deleted during this session, so loaded history can drop them.
+    pub direct_deleted: Vec<String>,
     pub last_poke: Option<Value>,
     pub speaking: Vec<String>,
     pub voice: &'static str,
@@ -124,6 +126,8 @@ pub enum Action {
     Talk { connection_id: String, channel_id: String },
     Whisper { connection_id: String, channel_id: String, target_id: Option<String>, password: Option<String> },
     SendMessage { channel_id: Option<String>, text: String, html: Option<String> },
+    EditMessage { message_id: String, text: String },
+    DeleteMessage(String),
     DirectRequest {
         connection_id: String,
         kind: String,
@@ -446,6 +450,12 @@ impl Active {
                 if let Some(html) = html { payload["html"] = json!(html); }
                 self.connection.wire.rpc("message.send", payload).await?;
             }
+            Action::EditMessage { message_id, text } => {
+                self.connection.wire.rpc("message.edit", json!({ "messageId": message_id, "text": text })).await?;
+            }
+            Action::DeleteMessage(message_id) => {
+                self.connection.wire.rpc("message.delete", json!({ "messageId": message_id })).await?;
+            }
             Action::DirectRequest { connection_id, kind, payload, reply } => {
                 let result = if self.view.snapshot["connectionId"] == connection_id {
                     self.connection.wire.rpc(&kind, payload).await
@@ -651,6 +661,24 @@ impl Active {
         }
     }
 
+    /// Applies a replaced ciphertext. A packet loaded from history is not held here, so an
+    /// edit that carries the full packet is kept for the conversation to apply.
+    fn edit_direct_message(&mut self, edit: Value) {
+        let known = self.view.direct_messages.iter_mut().find(|message| {
+            message["id"] == edit["id"] && message["senderId"] == edit["senderId"] && message["recipientId"] == edit["recipientId"]
+        });
+        if let Some(message) = known {
+            for key in ["nonce", "ciphertext", "signature", "editedAt"] {
+                message[key] = edit[key].clone();
+            }
+        } else if !edit["createdAt"].is_null() {
+            self.view.direct_messages.push(edit);
+            if self.view.direct_messages.len() > DIRECT_MESSAGE_LIMIT {
+                self.view.direct_messages.remove(0);
+            }
+        }
+    }
+
     /// Fetches direct messages the server queued while this account was offline,
     /// then acknowledges them so the server stops holding them.
     async fn receive_queued(&mut self) {
@@ -743,6 +771,27 @@ impl Active {
                 payload["recipientId"] == self.view.snapshot["account"]["id"] =>
             {
                 self.add_direct_message(payload.clone());
+            }
+            "message.edited" => {
+                if let Some(message) = self.view.messages.iter_mut().find(|message| message["id"] == payload["messageId"]) {
+                    message["text"] = payload["text"].clone();
+                    message["html"] = payload["html"].clone();
+                    message["editedAt"] = payload["editedAt"].clone();
+                }
+            }
+            "direct.edited" if payload["senderId"] == self.view.snapshot["account"]["id"] ||
+                payload["recipientId"] == self.view.snapshot["account"]["id"] =>
+            {
+                self.edit_direct_message(payload.clone());
+            }
+            "direct.deleted" => {
+                self.view.direct_messages.retain(|message| message["id"] != payload["id"] || message["senderId"] != payload["senderId"]);
+                if let Some(id) = payload["id"].as_str() {
+                    self.view.direct_deleted.push(id.into());
+                    if self.view.direct_deleted.len() > DIRECT_MESSAGE_LIMIT {
+                        self.view.direct_deleted.remove(0);
+                    }
+                }
             }
             "direct.poked" if payload["recipientId"] == self.view.snapshot["account"]["id"] => {
                 self.view.last_poke = Some(payload.clone());

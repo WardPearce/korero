@@ -1,0 +1,17 @@
+import { chromium } from "playwright";
+const b = await chromium.launch();
+const c = await b.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1440, height: 900 } });
+const p = await c.newPage();
+p.on("pageerror", e => console.log("pageerror:", e.message));
+await p.goto("http://localhost:5199");
+await p.getByRole("button", { name: "Continue without an account" }).click();
+await p.getByLabel("Username").fill("Ada");
+await p.getByRole("button", { name: "Continue" }).click();
+await p.waitForTimeout(3000);
+await p.screenshot({ path: "/tmp/korero-demo/shots/p3.png" });
+console.log((await p.locator("body").innerText()).slice(0,600));
+await p.getByRole("button", { name: "Connect to server" }).first().click();
+await p.waitForTimeout(1000);
+await p.screenshot({ path: "/tmp/korero-demo/shots/p4.png" });
+console.log("----\n"+(await p.locator("body").innerText()).slice(-500));
+await b.close();

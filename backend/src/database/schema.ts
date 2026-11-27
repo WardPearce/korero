@@ -70,7 +70,7 @@ export const bans = sqliteTable("bans", {
 export const messages = sqliteTable("messages", {
   id: text().primaryKey(), channelId: text("channel_id").references(() => channels.id, { onDelete: "cascade" }),
   senderId: text("sender_id").notNull().references(() => accounts.id), recipientId: text("recipient_id").references(() => accounts.id),
-  text: text().notNull(), html: text(), createdAt: integer("created_at").notNull(),
+  text: text().notNull(), html: text(), createdAt: integer("created_at").notNull(), editedAt: integer("edited_at"),
 }, (table) => [
   check("message_destination", sql`(${table.channelId} IS NULL) != (${table.recipientId} IS NULL)`),
   index("messages_channel").on(table.channelId, table.createdAt, table.id),
@@ -88,6 +88,8 @@ export const directMessages = sqliteTable("direct_messages", {
   senderId: text("sender_id").notNull().references(() => accounts.id),
   recipientId: text("recipient_id").notNull().references(() => accounts.id),
   createdAt: integer("created_at").notNull(),
+  // Set when the sender replaces the ciphertext.
+  editedAt: integer("edited_at"),
   // Null until a recipient device acknowledges the packet.
   deliveredAt: integer("delivered_at"),
   nonce: text().notNull(),

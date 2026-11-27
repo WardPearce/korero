@@ -862,7 +862,7 @@ export class Realtime {
     this.messageRate.take(senderId);
     if (payload.text.length > this.config.messaging.max_length || (!file && !payload.text.trim())) fail("INVALID_REQUEST");
     const channel = this.textChannel(peer, payload.channelId);
-    const message = { id: randomUUID(), channelId: channel.id, recipientId: null, senderId, createdAt: Date.now(), text: payload.text,
+    const message = { id: randomUUID(), channelId: channel.id, recipientId: null, senderId, createdAt: Date.now(), editedAt: null, text: payload.text,
       html: payload.text.trim() && payload.html ? sanitizeChatHtml(payload.html) : null };
     if (this.config.messaging.persistence) {
       if (!file) this.db.insert(messages).values(message).run();
@@ -1198,6 +1198,24 @@ export class Realtime {
         if (message) this.broadcast([...this.activeDevices(actor.id), ...recipients], "direct.created", message);
         return { messageId: id, queued: !recipients.length };
       }
+      case "direct.edit": {
+        const { accountId } = request.payload;
+        this.require(actor, "sendDirectMessages");
+        this.messageRate.take(actor.id);
+        const recipients = this.activeDevices(accountId);
+        const message = this.directMessages.edit(actor.id, request.payload, recipients.length > 0);
+        this.broadcast([...this.activeDevices(actor.id), ...recipients], "direct.edited", message);
+        return {};
+      }
+      case "direct.delete": {
+        const { accountId, id } = request.payload;
+        this.require(actor, "sendDirectMessages");
+        this.messageRate.take(actor.id);
+        const recipients = this.activeDevices(accountId);
+        this.directMessages.delete(actor.id, accountId, id, recipients.length > 0);
+        this.broadcast([...this.activeDevices(actor.id), ...recipients], "direct.deleted", { id, senderId: actor.id, recipientId: accountId });
+        return {};
+      }
       case "direct.pending": return this.directMessages.pending(actor.id);
       case "direct.ack": {
         this.directMessages.acknowledge(actor.id, request.payload.ids);
@@ -1217,6 +1235,24 @@ export class Realtime {
           message: message?.trim() || undefined,
         });
         return {};
+      }
+      case "message.edit": {
+        const { messageId, text, html } = request.payload;
+        this.messageRate.take(actor.id);
+        const live = this.liveAttachments.get(messageId);
+        const message = live?.message ?? this.db.select().from(messages).where(eq(messages.id, messageId)).get() ?? fail("NOT_FOUND");
+        if (!message.channelId || message.senderId !== actor.id) fail("NOT_FOUND");
+        const channel = this.textChannel(peer, message.channelId);
+        const hasFile = Boolean(live) || Boolean(this.db.select({ id: attachments.messageId }).from(attachments).where(eq(attachments.messageId, messageId)).get());
+        if (text.length > this.config.messaging.max_length || (!hasFile && !text.trim())) fail("INVALID_REQUEST");
+        const edited = { ...message, text, html: text.trim() && html ? sanitizeChatHtml(html) : null, editedAt: Date.now() };
+        if (live) live.message = edited;
+        if (this.config.messaging.persistence) {
+          this.db.update(messages).set({ text: edited.text, html: edited.html, editedAt: edited.editedAt }).where(eq(messages.id, messageId)).run();
+        }
+        this.broadcast([...(this.memberships.get(channel.id) ?? [])].filter((member) => this.allowed(member.account!, "text", channel)),
+          "message.edited", { messageId, text: edited.text, html: edited.html ?? undefined, editedAt: edited.editedAt });
+        break;
       }
       case "message.delete": {
         const live = this.liveAttachments.get(request.payload.messageId);

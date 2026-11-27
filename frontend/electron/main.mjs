@@ -133,7 +133,7 @@ function openWindow() {
     minHeight: 600,
     autoHideMenuBar: true,
     title: "Korero.chat",
-    icon: join(dist, "korero-logo.png"),
+    icon: join(dist, "icon.png"),
     webPreferences: {
       preload: join(directory, "preload.cjs"),
       contextIsolation: true,

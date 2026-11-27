@@ -325,8 +325,16 @@ async fn send_message(origin: String, text: String, html: Option<String>, channe
     dispatch(state, &origin, Action::SendMessage { channel_id, text, html }).await
 }
 
+async fn edit_message(origin: String, message_id: String, text: String, state: &AppState) -> CommandResult<()> {
+    dispatch(state, &origin, Action::EditMessage { message_id, text }).await
+}
+
+async fn delete_message(origin: String, message_id: String, state: &AppState) -> CommandResult<()> {
+    dispatch(state, &origin, Action::DeleteMessage(message_id)).await
+}
+
 async fn direct_request(connection_id: String, kind: String, payload: Value, state: &AppState) -> CommandResult<Value> {
-    if !matches!(kind.as_str(), "direct.peer" | "direct.inbox" | "direct.history" | "direct.send" | "direct.poke") {
+    if !matches!(kind.as_str(), "direct.peer" | "direct.inbox" | "direct.history" | "direct.send" | "direct.edit" | "direct.delete" | "direct.poke") {
         return Err("Unsupported direct message operation".into());
     }
     let controller = state.client.lock().await.controller_for_connection(&connection_id)?;
@@ -682,6 +690,8 @@ async fn handle(state: &Arc<AppState>, command: &str, args: Value) -> CommandRes
         "leave_channel" => run!(leave_channel(origin: String), state),
         "set_presence" => run!(set_presence(origin: String, muted: Option<bool>, deafened: Option<bool>, afk: Option<bool>, afk_message: Option<String>), state),
         "send_message" => run!(send_message(origin: String, text: String, html: Option<String>, channel_id: Option<String>), state),
+        "edit_message" => run!(edit_message(origin: String, message_id: String, text: String), state),
+        "delete_message" => run!(delete_message(origin: String, message_id: String), state),
         "direct_request" => run!(direct_request(connection_id: String, kind: String, payload: Value), state),
         "screen_request" => run!(screen_request(connection_id: String, channel_id: String, kind: String, payload: Value), state),
         "save_channel" => run!(save_channel(origin: String, payload: Value), state),

@@ -169,6 +169,14 @@ test("channels, inheritance, password membership, moderation and text are permis
     expect(messages.find(({ id }) => id === sent.messageId)).toMatchObject({ text: "Hello" });
     expect(messages.find(({ id }) => id === sent.messageId)).not.toHaveProperty("html");
     await expect(aliceWs.rpc("message.send", { ...rich, html: "a".repeat(32769) })).rejects.toThrow("INVALID_REQUEST");
+    await expect(bobWs.rpc("message.edit", { messageId: sent.messageId, text: "Hijacked" })).rejects.toThrow("NOT_FOUND");
+    await aliceWs.rpc("message.edit", { messageId: sent.messageId, text: "Hello again", html: "<p>Hello <em>again</em></p><script>x</script>" });
+    const edited = await until(() => bobWs.received.find((event) => event.type === "message.edited"), Boolean);
+    expect(edited?.payload).toMatchObject({ messageId: sent.messageId, text: "Hello again", html: "<p>Hello <em>again</em></p>" });
+    expect(typeof edited?.payload.editedAt).toBe("number");
+    expect((await bobWs.rpc<Array<{ id: string; text: string; editedAt: number | null }>>("message.history", history))
+      .find(({ id }) => id === sent.messageId)).toMatchObject({ text: "Hello again", editedAt: edited?.payload.editedAt });
+    await expect(aliceWs.rpc("message.edit", { messageId: sent.messageId, text: " " })).rejects.toThrow("INVALID_REQUEST");
     await aliceWs.rpc("message.delete", sentRich);
     await expect(bobWs.rpc("message.delete", sent)).rejects.toThrow("FORBIDDEN");
     await aliceWs.rpc("message.delete", sent);

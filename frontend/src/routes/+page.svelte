@@ -32,6 +32,7 @@
   import ScreenSharing from "#lib/components/media/ScreenSharing.svelte";
   import { downloadAttachment } from "#lib/chat/chat-attachments";
   import { getWorkspace, type ChannelPlacement } from "#lib/workspace";
+  import { maxChatTextLength } from "#lib/chat/rich-chat";
 
   const workspace = getWorkspace();
   const audio = getAudioSettings();
@@ -406,6 +407,11 @@
     void placeChannel(source, channel, placement);
   }
 
+  async function changeMessage(action: string, command: string, args: Record<string, unknown>) {
+    workspace.actionError = "";
+    if (!(await workspace.run(action, command, args))) throw new Error(workspace.actionError || "The request could not be completed.");
+  }
+
   function senderName(id: string) {
     if (id === me?.id) return me.displayName;
     return snapshot?.presence.find((person) => person.accountId === id)?.displayName
@@ -624,7 +630,12 @@
       <div class="chat-log" {@attach attachMessageList} role="log" aria-label="Channel messages">
         {#if isInRoom && view.messages.length}
           {#each view.messages as entry, index (entry.id)}
-            <ChatMessage message={entry} previous={view.messages[index - 1]} name={senderName(entry.senderId)}>
+            {@const own = entry.senderId === me?.id}
+            <ChatMessage message={entry} previous={view.messages[index - 1]} name={senderName(entry.senderId)}
+              editText={own ? entry.text : undefined} editLimit={maxChatTextLength}
+              onedit={own ? (text) => changeMessage("message-edit", "edit_message", { messageId: entry.id, text }) : undefined}
+              ondelete={own || snapshot?.serverPermissions.includes("deleteChannels")
+                ? () => changeMessage("message-delete", "delete_message", { messageId: entry.id }) : undefined}>
               <RichMessage text={entry.text} html={entry.html} />
               {#if entry.attachment && snapshot}
                 {@const connectionId = snapshot.connectionId}

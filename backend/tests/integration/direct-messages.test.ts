@@ -153,3 +153,35 @@ test("offline delivery limits how much one sender can queue for a recipient", as
     expect(await fromCarol.rpc<Receipt>("direct.send", envelope(bob.account.id))).toMatchObject({ queued: true });
   } finally { await server.cleanup(); }
 });
+
+test("senders edit and delete their own direct messages", async () => {
+  const server = await fixture({ environment: { VOICE_MESSAGING_PERSISTENCE: "true" } });
+  try {
+    const alice = await server.owner();
+    const bob = await server.register("Bobby");
+    const sender = await server.ws(alice);
+    const recipient = await server.ws(bob);
+    const original = envelope(bob.account.id);
+    await sender.rpc("direct.send", original);
+    const replacement = { ...envelope(bob.account.id), id: original.id };
+    await expect(recipient.rpc("direct.edit", { ...replacement, accountId: alice.account.id })).rejects.toThrow("NOT_FOUND");
+    await expect(sender.rpc("direct.edit", { ...replacement, id: crypto.randomUUID() })).rejects.toThrow("NOT_FOUND");
+    await sender.rpc("direct.edit", replacement);
+    for (const socket of [sender, recipient]) {
+      const event = await until(() => socket.received.find(({ type }) => type === "direct.edited"), Boolean);
+      expect(event?.payload).toMatchObject({ id: original.id, ciphertext: replacement.ciphertext, senderId: alice.account.id });
+      expect(typeof event?.payload.editedAt).toBe("number");
+    }
+    const stored = await recipient.rpc<Page>("direct.history", { accountId: alice.account.id });
+    expect(stored.messages).toEqual([expect.objectContaining({ id: original.id, ciphertext: replacement.ciphertext, nonce: replacement.nonce })]);
+    expect(stored.messages[0]).toHaveProperty("editedAt");
+
+    await expect(recipient.rpc("direct.delete", { accountId: alice.account.id, id: original.id })).rejects.toThrow("NOT_FOUND");
+    await sender.rpc("direct.delete", { accountId: bob.account.id, id: original.id });
+    for (const socket of [sender, recipient]) {
+      const event = await until(() => socket.received.find(({ type }) => type === "direct.deleted"), Boolean);
+      expect(event?.payload).toEqual({ id: original.id, senderId: alice.account.id, recipientId: bob.account.id });
+    }
+    expect(await recipient.rpc<Page>("direct.history", { accountId: alice.account.id })).toEqual({ messages: [], next: null });
+  } finally { await server.cleanup(); }
+});

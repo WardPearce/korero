@@ -13,7 +13,7 @@ extraResources:
   - from: native/target/release/desktop-client
     to: desktop-client
 linux:
-  icon: static/korero-logo.png
+  icon: static/icon.png
   syncDesktopName: true
   target:
     - deb
@@ -23,6 +23,7 @@ linux:
     - snap
   category: "GNOME;GTK;AudioVideo;Network;Utility;"
 win:
+  icon: static/icon.png
   target:
     - target: nsis
       arch: [x64, arm64]
@@ -35,6 +36,7 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
 mac:
+  icon: static/icon.png
   target:
     - target: default
       arch: universal

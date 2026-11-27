@@ -95,6 +95,7 @@ export interface Message {
   createdAt: number;
   text: string;
   html?: string;
+  editedAt?: number | null;
   attachment?: { name: string; size: number };
 }
 
@@ -103,6 +104,8 @@ export interface DirectMessage {
   senderId: string;
   recipientId: string;
   createdAt: number;
+  /** Set when the sender replaced the ciphertext after sending. */
+  editedAt?: number | null;
   nonce: string;
   ciphertext: string;
   signature: string;
@@ -118,7 +121,7 @@ export interface Poke {
   message?: string;
 }
 
-export type DirectOperation = "direct.peer" | "direct.inbox" | "direct.history" | "direct.send" | "direct.poke";
+export type DirectOperation = "direct.peer" | "direct.inbox" | "direct.history" | "direct.send" | "direct.edit" | "direct.delete" | "direct.poke";
 
 export interface VoiceState {
   /** Server origin of the desktop session that produced this state. */
@@ -127,6 +130,8 @@ export interface VoiceState {
   snapshot: Snapshot | null;
   messages: Message[];
   directMessages?: DirectMessage[];
+  /** IDs of direct messages deleted during this session, so loaded history can drop them. */
+  directDeleted?: string[];
   lastPoke?: Poke | null;
   speaking: string[];
   voice: "idle" | "active" | "muted" | "deafened" | "error";

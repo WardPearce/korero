@@ -6,12 +6,13 @@ import type { Request } from "../protocol";
 import { fail } from "../security/errors";
 
 type Send = Extract<Request, { type: "direct.send" }>["payload"];
+type Edit = Extract<Request, { type: "direct.edit" }>["payload"];
 type Cursor = Extract<Request, { type: "direct.history" }>["payload"]["before"];
 
 const pageSize = 10;
 const pendingPageSize = 100;
-const { id: packetId, senderId: packetSender, recipientId: packetRecipient, createdAt: packetCreated, nonce, ciphertext, signature } = directMessages;
-const packet = { id: packetId, senderId: packetSender, recipientId: packetRecipient, createdAt: packetCreated, nonce, ciphertext, signature };
+const { id: packetId, senderId: packetSender, recipientId: packetRecipient, createdAt: packetCreated, editedAt: packetEdited, nonce, ciphertext, signature } = directMessages;
+const packet = { id: packetId, senderId: packetSender, recipientId: packetRecipient, createdAt: packetCreated, editedAt: packetEdited, nonce, ciphertext, signature };
 const tagBytes = 16;
 
 function byteLength(value: string) {
@@ -76,8 +77,7 @@ export class DirectMessages {
    * until a recipient device fetches and acknowledges it.
    */
   send(senderId: string, { accountId: recipientId, ...packet }: Send, delivered: boolean) {
-    const size = byteLength(packet.ciphertext) - tagBytes;
-    if (size < 1 || size > this.maxBytes || byteLength(packet.nonce) !== 12 || byteLength(packet.signature) !== 64) fail("INVALID_REQUEST");
+    this.validate(packet);
     const createdAt = Date.now();
     const message = { ...packet, senderId, recipientId, createdAt };
     if (!this.config.messaging.persistence && delivered) return message;
@@ -99,6 +99,38 @@ export class DirectMessages {
       return null;
     }
     return message;
+  }
+
+  private validate(packet: Pick<Send, "nonce" | "ciphertext" | "signature">) {
+    const size = byteLength(packet.ciphertext) - tagBytes;
+    if (size < 1 || size > this.maxBytes || byteLength(packet.nonce) !== 12 || byteLength(packet.signature) !== 64) fail("INVALID_REQUEST");
+  }
+
+  /**
+   * Replaces a packet the actor sent and returns the edited packet. Without persistence
+   * the server holds no delivered packets, so it relays the edit when `relay` is true.
+   * The recipient verifies the sender's signature before applying it.
+   */
+  edit(senderId: string, { accountId: recipientId, ...replacement }: Edit, relay: boolean) {
+    this.validate(replacement);
+    const editedAt = Date.now();
+    const { id, nonce: newNonce, ciphertext: newCiphertext, signature: newSignature } = replacement;
+    const scope = and(eq(directMessages.id, id), eq(directMessages.senderId, senderId), eq(directMessages.recipientId, recipientId),
+      gte(directMessages.createdAt, this.cutoff()));
+    const updated = this.db.update(directMessages).set({ nonce: newNonce, ciphertext: newCiphertext, signature: newSignature, editedAt })
+      .where(scope).returning(packet).get();
+    if (updated) return updated;
+    if (this.config.messaging.persistence || !relay) fail("NOT_FOUND");
+    // The server does not know when the original was created, so the packet has no `createdAt`.
+    return { ...replacement, senderId, recipientId, editedAt };
+  }
+
+  /** Removes a packet the actor sent. Without persistence, `relay` lets the delete reach a recipient that already holds it. */
+  delete(senderId: string, recipientId: string, id: string, relay: boolean) {
+    const removed = this.db.delete(directMessages).where(and(eq(directMessages.id, id), eq(directMessages.senderId, senderId),
+      eq(directMessages.recipientId, recipientId))).returning({ id: directMessages.id }).get();
+    if (removed) return;
+    if (this.config.messaging.persistence || !relay) fail("NOT_FOUND");
   }
 
   /** Returns the oldest packets still waiting for one of the actor's devices. */

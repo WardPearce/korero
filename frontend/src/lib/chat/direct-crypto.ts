@@ -61,8 +61,8 @@ export async function directConversation(serverId: string, ownId: string, identi
       shared, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   return {
     safetyCode,
-    async encrypt(text: string): Promise<DirectPacket> {
-      const id = crypto.randomUUID();
+    /** Encrypts a new message, or replacement content for the message `id` when editing. */
+    async encrypt(text: string, id: string = crypto.randomUUID()): Promise<DirectPacket> {
       const iv = crypto.getRandomValues(new Uint8Array(12));
       const fields = context(ownId, peer.accountId, id);
       const additionalData = transcript(fields);

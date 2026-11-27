@@ -783,6 +783,8 @@
       if (command === "leave_channel") return session.leaveChannel();
       if (command === "set_presence") return session.setPresence(args);
       if (command === "send_message") return session.sendMessage(args?.channelId as string, args?.text as string, args?.html as string | undefined);
+      if (command === "edit_message") return session.editMessage(args?.messageId as string, args?.text as string);
+      if (command === "delete_message") return session.deleteMessage(args?.messageId as string);
       throw new Error("Open Korero.chat in the desktop app to use voice.");
     });
   }
