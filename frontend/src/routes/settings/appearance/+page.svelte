@@ -139,14 +139,15 @@
       if (!theme) throw new Error();
       if (!draft) startEditor(theme, importButton);
     } catch {
-      error = "Choose a valid VNX.chat theme JSON file.";
+      error = "Choose a valid Korero.chat theme JSON file.";
     }
   }
 
   async function exportTheme() {
     const theme = parseTheme(active);
     if (!theme) return;
-    const name = theme.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "theme";
+    const name = theme.name.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "theme";
     try {
       await downloadFile(name + ".json", new Blob([JSON.stringify({ version: 1, theme }, null, 2)], { type: "application/json" }));
     } catch (cause) {
@@ -155,7 +156,7 @@
   }
 </script>
 
-<svelte:head><title>Appearance · VNX.chat</title></svelte:head>
+<svelte:head><title>Appearance · Korero.chat</title></svelte:head>
 
 {#snippet themeTile(theme: SavedTheme)}
   <button class="theme-tile" type="button" aria-pressed={active.id === theme.id} onclick={() => select(theme)}>
@@ -316,7 +317,8 @@
   </div>
 </main>
 
-<Modal bind:open={confirmDelete} title="Delete custom theme?" description="This removes the theme from this device. If it is active, the app switches to Dark.">
+<Modal bind:open={confirmDelete} title="Delete custom theme?"
+  description={`This removes the theme from this device. If it is active, the app switches to ${defaultTheme.name}.`}>
   <div class="dialog-actions">
     <Button variant="outline" onclick={() => { confirmDelete = false; }}>Cancel</Button>
     <Button variant="destructive" onclick={deleteTheme}>Delete theme</Button>
@@ -487,7 +489,12 @@
   .sample-sidebar strong { margin: .3em; font-size: .85em; color: var(--muted-foreground); }
   .sample-sidebar > span, .sample-title { display: flex; align-items: center; gap: .35em; padding: .4em .5em; }
   .sample-sidebar > span { font-size: .9em; color: var(--muted-foreground); }
-  .sample-sidebar > .sample-selection { border-radius: var(--radius); background: var(--accent); color: var(--accent-foreground); }
+  .sample-sidebar > .sample-selection {
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--primary) 14%, var(--muted));
+    box-shadow: inset 3px 0 var(--primary);
+    color: var(--foreground);
+  }
   .sample-channel { padding: 0 calc(var(--ui-gap) * .7) calc(var(--ui-gap) * .7); }
   .sample-title {
     min-height: var(--control-height);

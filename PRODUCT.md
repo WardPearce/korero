@@ -8,11 +8,11 @@ web
 
 ## Users
 
-Primary users are members of a self-hosted VNX.chat server who want to start and maintain one-to-one private conversations. They may already know the other person's user ID or need to find them among people on the same server. This audience and job were confirmed in the direct-messaging redesign request.
+Primary users are members of a self-hosted Korero.chat server who want to start and maintain one-to-one private conversations. They may already know the other person's user ID or need to find them among people on the same server. This audience and job were confirmed in the direct-messaging redesign request.
 
 ## Product Purpose
 
-VNX.chat is a self-hosted, voice-first server with public-key accounts, hierarchical channels, moderation, and chat. The SvelteKit client also ships as an Electron desktop app and a Capacitor mobile app. For direct messaging, success means a member can share their own user ID, add someone by that ID, find server members, and reach a verified private conversation without hunting through unrelated UI.
+Korero.chat is a self-hosted, voice-first server with public-key accounts, hierarchical channels, moderation, and chat. The SvelteKit client also ships as an Electron desktop app and a Capacitor mobile app. For direct messaging, success means a member can share their own user ID, add someone by that ID, find server members, and reach a verified private conversation without hunting through unrelated UI.
 
 ## Positioning
 
@@ -34,7 +34,7 @@ Members open direct messages from the channel sidebar or a member's menu. Both a
 
 ## Brand Commitments
 
-The product is called VNX.chat; the repository and server package are named korero. The established app identity stays in place. Product language should stay direct, technical, and privacy-conscious, matching the existing documentation.
+The product is called Korero.chat; the repository and server package are named korero. The established app identity stays in place. Product language should stay direct, technical, and privacy-conscious, matching the existing documentation.
 
 ## Evidence on Hand
 

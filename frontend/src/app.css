@@ -5,26 +5,26 @@
 
 :root {
   color-scheme: dark;
-  --background: #15171d;
-  --foreground: #f1f3fa;
-  --card: #20242e;
+  --background: #101820;
+  --foreground: #f2f6fa;
+  --card: #1e2c38;
   --card-foreground: var(--foreground);
   --popover: var(--card);
   --popover-foreground: var(--card-foreground);
-  --muted: #1b1e26;
-  --muted-foreground: #adb7cb;
-  --primary: #a2bbff;
-  --primary-foreground: #000000;
-  --secondary: #9a95b7;
+  --muted: #16212b;
+  --muted-foreground: #aabac8;
+  --primary: #5ce0cc;
+  --primary-foreground: var(--background);
+  --secondary: #8ea5bc;
   --secondary-foreground: #000000;
-  --accent: #bba7ef;
+  --accent: #b7acf3;
   --accent-foreground: #000000;
   --success: #6fd5a0;
   --destructive: #ff929b;
   --warning: #f6bf74;
   --info: #83d3ee;
-  --border: #363e50;
-  --input: #606e86;
+  --border: #344758;
+  --input: #627c90;
   --ring: var(--foreground);
   --radius: 10px;
   --avatar-radius: min(calc(var(--radius) * 2), 50%);
@@ -143,22 +143,9 @@ body {
 .server-rail, .settings-nav { background: var(--muted); }
 .rail-top { flex: 1; overflow: auto; padding: 16px 12px; }
 .brand {
-  display: flex;
-  align-items: baseline;
-  width: fit-content;
-  gap: 3px;
+  width: 7rem;
   margin: 0 0 20px;
   padding: 2px 0;
-  color: var(--foreground);
-  font: 700 1.05rem/1 var(--font-sans);
-}
-.brand-domain { font-size: .82rem; }
-.brand-logo {
-  display: block;
-  width: 86px;
-  aspect-ratio: 1666 / 477;
-  background: currentColor;
-  mask: var(--brand-logo) center / contain no-repeat;
 }
 [data-slot="button"].rail-connect {
   width: 100%;
@@ -300,8 +287,13 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
 }
-.channel-row:hover, .channel-row[data-selected="true"] { background: var(--background); }
-.channel-row[data-selected="true"] { border-color: var(--accent); box-shadow: inset 3px 0 var(--accent); font-weight: 700; }
+.channel-row:hover { background: var(--background); }
+.channel-row[data-selected="true"] {
+  background: color-mix(in srgb, var(--primary) 14%, var(--muted));
+  border-color: var(--primary);
+  box-shadow: inset 3px 0 var(--primary);
+  font-weight: 700;
+}
 .channel-background, .channel-row::before { border-radius: inherit; }
 .channel-row[data-dragging] { opacity: 0.55; }
 .channel-row[data-drop="before"]::after, .channel-row[data-drop="after"]::after {

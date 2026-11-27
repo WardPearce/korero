@@ -9,7 +9,7 @@ const directory = fileURLToPath(new URL(".", import.meta.url));
 const dist = resolve(directory, "../dist");
 const development = !app.isPackaged && process.argv.includes("--dev");
 const appUrl = development ? "http://127.0.0.1:1420/" : "korero://app/";
-if (development) app.setPath("userData", join(app.getPath("appData"), "VNX.chat Dev"));
+if (development) app.setPath("userData", join(app.getPath("appData"), "Korero.chat Dev"));
 let window;
 let helper;
 
@@ -56,9 +56,9 @@ function startHelper() {
     for (const { reject } of pending.values()) reject(failure);
     pending.clear();
   }
-  processHandle.once("error", (error) => stop(new Error(`Could not start the VNX.chat desktop service. ${error.message}`)));
+  processHandle.once("error", (error) => stop(new Error(`Could not start the Korero.chat desktop service. ${error.message}`)));
   processHandle.once("exit", () => {
-    const error = new Error("The VNX.chat desktop service stopped. Restart the app to reconnect.");
+    const error = new Error("The Korero.chat desktop service stopped. Restart the app to reconnect.");
     stop(error);
     sendToWindow("korero:state", {
       phase: "error", snapshot: null, messages: [], speaking: [], voice: "idle", voiceError: null, error: error.message,
@@ -132,7 +132,7 @@ function openWindow() {
     minWidth: 385,
     minHeight: 600,
     autoHideMenuBar: true,
-    title: "VNX.chat",
+    title: "Korero.chat",
     icon: join(dist, "vnx-icon.png"),
     webPreferences: {
       preload: join(directory, "preload.cjs"),

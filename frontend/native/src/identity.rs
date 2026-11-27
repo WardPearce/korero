@@ -23,12 +23,12 @@ fn stored(key: &[u8]) -> Result<StoredIdentity> {
 }
 
 fn decode(key: &[u8]) -> Result<Ed25519KeyPair> {
-    Ed25519KeyPair::from_pkcs8(key).map_err(|_| anyhow!("Invalid VNX.chat identity key"))
+    Ed25519KeyPair::from_pkcs8(key).map_err(|_| anyhow!("Invalid Korero.chat identity key"))
 }
 
 fn decode_stored(key: &str) -> Result<Zeroizing<Vec<u8>>> {
-    ensure!(key.len() <= 256, "Invalid VNX.chat identity key");
-    Ok(Zeroizing::new(URL_SAFE_NO_PAD.decode(key).context("Invalid VNX.chat identity key")?))
+    ensure!(key.len() <= 256, "Invalid Korero.chat identity key");
+    Ok(Zeroizing::new(URL_SAFE_NO_PAD.decode(key).context("Invalid Korero.chat identity key")?))
 }
 
 pub fn generate() -> Result<StoredIdentity> {
@@ -73,10 +73,10 @@ fn encrypt(key: &[u8], passphrase: &str) -> Result<String> {
 }
 
 fn decrypt(blob: &str, passphrase: &str) -> Result<Zeroizing<Vec<u8>>> {
-    ensure!(blob.len() <= 1024, "Invalid VNX.chat identity export");
-    let bytes = URL_SAFE_NO_PAD.decode(blob.trim()).context("Invalid VNX.chat identity export")?;
+    ensure!(blob.len() <= 1024, "Invalid Korero.chat identity export");
+    let bytes = URL_SAFE_NO_PAD.decode(blob.trim()).context("Invalid Korero.chat identity export")?;
     let parameters = bytes.strip_prefix(HEADER).filter(|value| value.len() > 44)
-        .context("Invalid VNX.chat identity export")?;
+        .context("Invalid Korero.chat identity export")?;
     let mut sealed = Zeroizing::new(parameters[28..].to_vec());
     let opened = wrapping_key(passphrase, &parameters[..16])?.open_in_place(
         aead::Nonce::assume_unique_for_key(parameters[16..28].try_into()?),

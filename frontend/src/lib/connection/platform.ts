@@ -27,11 +27,11 @@ export function voiceApp() {
 export function call<T = void>(command: string, args: Record<string, unknown> = {}) {
   const bridge = desktop();
   if (bridge) return bridge.invoke<T>(command, args);
-  return Promise.reject(new Error("This operation requires the VNX.chat desktop app."));
+  return Promise.reject(new Error("This operation requires the Korero.chat desktop app."));
 }
 
 export async function watchDesktop<T>(event: DesktopEvent, callback: (payload: T) => void) {
   const bridge = desktop();
-  if (!bridge) throw new Error("This operation requires the VNX.chat desktop app.");
+  if (!bridge) throw new Error("This operation requires the Korero.chat desktop app.");
   return bridge.listen(event, callback);
 }

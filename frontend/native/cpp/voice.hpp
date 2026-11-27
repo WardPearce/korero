@@ -35,5 +35,4 @@ void set_push_to_talk(bool pressed) noexcept;
 void set_whisper_to_talk(bool pressed) noexcept;
 rust::String audio_devices();
 MicrophoneSample test_microphone();
-bool initialize_android(size_t env, size_t context) noexcept;
 }  // namespace korero

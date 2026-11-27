@@ -25,21 +25,11 @@
 #include <thread>
 #include <unordered_map>
 
-#ifdef __ANDROID__
-#include "sdk/android/native_api/audio_device_module/audio_device_android.h"
-#include "sdk/android/native_api/jni/class_loader.h"
-#include "sdk/android/native_api/jni/jvm.h"
-#include "sdk/android/src/jni/jvm.h"
-#endif
 
 namespace korero {
 namespace {
 using nlohmann::json;
 using namespace std::chrono_literals;
-#ifdef __ANDROID__
-std::atomic<jobject> application_context{nullptr};
-std::mutex jni_setup;
-#endif
 
 std::string as_string(rust::Str text) {
   return {text.data(), text.size()};
@@ -61,13 +51,7 @@ json audio_profile() {
 }
 
 auto system_audio(const webrtc::Environment& environment) {
-#ifdef __ANDROID__
-  const auto context = application_context.load();
-  if (!context) throw std::runtime_error("Android microphone service has not started");
-  return webrtc::CreateJavaAudioDeviceModule(webrtc::AttachCurrentThreadIfNeeded(), environment, context);
-#else
   return webrtc::CreateAudioDeviceModule(environment, webrtc::AudioDeviceModule::kPlatformDefaultAudio);
-#endif
 }
 
 json list_devices(webrtc::AudioDeviceModule& adm, bool input) {
@@ -599,9 +583,6 @@ void set_whisper_to_talk(bool pressed) noexcept {
 }
 
 rust::String audio_devices() {
-#ifdef __ANDROID__
-  const auto text = json({{"input", json::array()}, {"output", json::array()}, {"micTest", false}}).dump();
-#else
   auto environment = webrtc::CreateEnvironment();
   auto adm = system_audio(environment);
   if (!adm || adm->Init() != 0) throw std::runtime_error("System audio is unavailable");
@@ -610,14 +591,10 @@ rust::String audio_devices() {
   bool recording = !input.empty() || adm->RecordingDevices() > 0;
   adm->Terminate();
   const auto text = json({{"input", input}, {"output", output}, {"micTest", recording}}).dump();
-#endif
   return rust::String(text.data(), text.size());
 }
 
 MicrophoneSample test_microphone() {
-#ifdef __ANDROID__
-  throw std::runtime_error("The microphone test is unavailable on Android");
-#else
   const auto settings = audio_profile();
   auto environment = webrtc::CreateEnvironment();
   MicrophoneRecorder recorder(environment, settings);
@@ -636,24 +613,6 @@ MicrophoneSample test_microphone() {
     throw;
   }
   return recorder.finish();
-#endif
 }
 
-bool initialize_android(size_t env_handle, size_t context_handle) noexcept {
-#ifdef __ANDROID__
-  std::lock_guard lock(jni_setup);
-  if (application_context.load()) return true;
-  auto* env = reinterpret_cast<JNIEnv*>(env_handle);
-  JavaVM* vm = nullptr;
-  if (!env || !context_handle || env->GetJavaVM(&vm) != JNI_OK) return false;
-  if (webrtc::jni::InitGlobalJniVariables(vm) < 0) return false;
-  webrtc::InitClassLoader(env);
-  application_context.store(env->NewGlobalRef(reinterpret_cast<jobject>(context_handle)));
-  return application_context.load() != nullptr;
-#else
-  (void)env_handle;
-  (void)context_handle;
-  return false;
-#endif
-}
 }  // namespace korero

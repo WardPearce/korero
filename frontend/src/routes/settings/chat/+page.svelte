@@ -29,7 +29,7 @@
   }
 </script>
 
-<svelte:head><title>Chat · VNX.chat</title></svelte:head>
+<svelte:head><title>Chat · Korero.chat</title></svelte:head>
 
 <main class="room-pane settings-pane">
   <header class="workspace-header">

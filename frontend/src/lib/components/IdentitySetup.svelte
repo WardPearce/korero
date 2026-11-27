@@ -44,7 +44,7 @@
 
 </script>
 
-<Modal {open} title="Set up your identity" description="Your username will be used when you join a new VNX.chat server." dismissible={false}>
+<Modal {open} title="Set up your identity" description="Your username will be used when you join a new Korero.chat server." dismissible={false}>
   {#snippet icon()}<Fingerprint size={22} />{/snippet}
   {#if error || migrationError}<p class="form-error" role="alert">{error || migrationError}</p>{/if}
   <form class="dialog-form" onsubmit={submit}>

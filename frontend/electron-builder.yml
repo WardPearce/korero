@@ -1,5 +1,5 @@
 appId: app.korero.voice
-productName: VNX.chat
+productName: Korero.chat
 npmRebuild: false
 directories:
   output: desktop-dist

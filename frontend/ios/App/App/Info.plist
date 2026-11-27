@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>VNX.chat</string>
+        <string>Korero.chat</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -23,11 +23,11 @@
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>VNX.chat uses the microphone to transmit your voice in channels.</string>
+	<string>Korero.chat uses the microphone to transmit your voice in channels.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>VNX.chat uses the camera when you choose to share video.</string>
+	<string>Korero.chat uses the camera when you choose to share video.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>VNX.chat connects to voice servers on your local network.</string>
+	<string>Korero.chat connects to voice servers on your local network.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>
@@ -51,6 +51,10 @@
 	</dict>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
 	<key>UIRequiredDeviceCapabilities</key>

@@ -54,7 +54,15 @@
           throw new Error(workspace.actionError || "Could not mute your voice channel microphone.");
         }
       }
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: audio.profile.input ? { deviceId: { exact: audio.profile.input } } : true });
+      // The monitor plays its own input, which echo cancellation can suppress.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          deviceId: audio.profile.input ? { exact: audio.profile.input } : undefined,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
       const context = new AudioContext();
       const source = context.createMediaStreamSource(stream);
       const analyser = context.createAnalyser();
@@ -103,13 +111,13 @@
   onMount(() => { void audio.refreshDevices(); return stopMonitor; });
 </script>
 
-<svelte:head><title>Audio settings · VNX.chat</title></svelte:head>
+<svelte:head><title>Audio settings · Korero.chat</title></svelte:head>
 
 <main class="room-pane settings-pane">
   <header class="workspace-header"><div class="heading-icon"><Headphones size={19} /></div><h1>Audio</h1></header>
   <div class="workspace">
     {#if !audio.available}
-      <p class="notice" role="status">Audio device and processing settings are available in the VNX.chat desktop app.</p>
+      <p class="notice" role="status">Audio device and processing settings are available in the Korero.chat desktop app.</p>
     {:else if audio.error || audio.deviceError}
       <p class="notice" role="status">{audio.error || audio.deviceError}</p>
     {/if}
@@ -136,7 +144,7 @@
         </div>
         <Checkbox label="System-wide talk shortcut" {disabled}
           bind:checked={() => audio.profile.globalTalkShortcut, (checked) => { void audio.update("globalTalkShortcut", checked); }} />
-        <p class="field-hint" role="status">{audio.shortcutError || (audio.globalActive ? "The shortcut works while other apps are focused." : "The shortcut works while VNX.chat is focused.")}</p>
+        <p class="field-hint" role="status">{audio.shortcutError || (audio.globalActive ? "The shortcut works while other apps are focused." : "The shortcut works while Korero.chat is focused.")}</p>
         {#if audio.talking}
           <p class="field-hint" role="status">Transmitting microphone audio</p>
         {/if}

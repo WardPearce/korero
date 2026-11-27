@@ -1,5 +1,6 @@
 import type { Consumer, ConsumerOptions, RtpCapabilities, Transport, TransportOptions } from "mediasoup-client/types";
 import type { Snapshot, VoiceState } from "../connection/client";
+import type { MobileCallAudio } from "./mobile-call-audio";
 import type { MediaRequest } from "./screen-media";
 
 interface Source {
@@ -32,12 +33,14 @@ export class WebVoice {
   private subscribing = new Set<string>();
   private sourceChanges?: Map<string, boolean>;
   private sending = Promise.resolve();
+  private playback = Promise.resolve();
   private device?: ReturnType<WebVoice["load"]>;
 
   constructor(
     readonly channelId: string,
     private readonly connectionId: string,
     private readonly audio: AudioContext,
+    private readonly callAudio: MobileCallAudio,
     private readonly request: MediaRequest,
     private readonly changed: () => void,
     private readonly volumes: Record<string, number>,
@@ -63,11 +66,13 @@ export class WebVoice {
     this.bitrate = snapshot.targetAudioBitrate ?? this.bitrate;
     if (receive !== this.canReceive) {
       this.canReceive = receive;
+      if (receive) this.playback = this.callAudio.setMode("playback", () => !this.closed && this.canReceive);
       this.restartReceiving();
     }
     if (send !== this.canSend) {
       this.canSend = send;
       this.restartSending();
+      if (!send) this.releaseMicrophoneMode();
     }
   }
 
@@ -156,6 +161,9 @@ export class WebVoice {
     this.sending = this.sending.then(async () => {
       await stopping;
       if (!current()) return;
+      await this.playback;
+      await this.callAudio.setMode("play-and-record", current);
+      if (!current()) return;
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
@@ -199,7 +207,12 @@ export class WebVoice {
     this.sendGeneration++;
     this.sendError = message;
     void this.stopSending();
+    this.releaseMicrophoneMode();
     this.changed();
+  }
+
+  private releaseMicrophoneMode() {
+    void this.callAudio.setMode("playback", () => !this.closed).catch(() => {});
   }
 
   private restartReceiving() {
@@ -211,6 +224,8 @@ export class WebVoice {
     const changes = new Map<string, boolean>();
     this.sourceChanges = changes;
     void stopping.then(async () => {
+      if (!current()) return;
+      await this.playback;
       const opened = await this.open("receive", current);
       if (!opened) return;
       this.receiver = opened.transport;

@@ -45,7 +45,7 @@ export class ScreenMedia {
   }
 
   private async connect(direction: "send" | "receive") {
-    if (!supportsWebRtc()) throw new Error("This browser does not support WebRTC. Open VNX.chat in a browser with WebRTC support.");
+    if (!supportsWebRtc()) throw new Error("This browser does not support WebRTC. Open Korero.chat in a browser with WebRTC support.");
     const { Device } = await import("mediasoup-client");
     this.checkOpen();
     const { iceServers, ...routerRtpCapabilities } = await this.request<ScreenCapabilities>("media.capabilities", { kind: "video" });

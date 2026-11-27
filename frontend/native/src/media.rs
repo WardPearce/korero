@@ -29,8 +29,6 @@ mod ffi {
         fn set_whisper_to_talk(pressed: bool);
         fn audio_devices() -> Result<String>;
         fn test_microphone() -> Result<MicrophoneSample>;
-        #[cfg(target_os = "android")]
-        fn initialize_android(env: usize, context: usize) -> bool;
         fn make_voice(
             rpc: Box<Rpc>,
             capabilities: &str,
@@ -45,11 +43,6 @@ mod ffi {
         fn close_consumer(self: Pin<&mut Voice>, producer_id: &str) -> Result<()>;
         fn peak(self: &Voice) -> f64;
     }
-}
-
-#[cfg(target_os = "android")]
-pub fn initialize_android(env: usize, context: usize) -> bool {
-    ffi::initialize_android(env, context)
 }
 
 #[derive(Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]

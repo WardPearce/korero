@@ -1,4 +1,5 @@
 import { offline, requestError, messageFrom, type DirectMessage, type DirectOperation, type Member, type MemberRequest, type Message, type RelayResponse, type ScreenShare, type Snapshot, type VoiceState } from "./client";
+import { MobileCallAudio } from "../media/mobile-call-audio";
 import { WebVoice } from "../media/web-voice";
 import { mobileApp, voiceApp } from "./platform";
 
@@ -22,6 +23,7 @@ class BrowserSession {
   private socket?: WebSocket;
   private heartbeat?: ReturnType<typeof setInterval>;
   private nextId = 0;
+  private readonly callAudio = new MobileCallAudio();
   private voice?: WebVoice;
   private audio?: AudioContext;
   private volumes: Record<string, number> = {};
@@ -36,10 +38,7 @@ class BrowserSession {
   watch(update: (view: VoiceState) => void) {
     this.update = update;
     const visibility = () => {
-      if (!this.snapshot || !voiceApp()) return;
-      if (!document.hidden) void this.audio?.resume().catch(() => {});
-      this.updateVoice(this.snapshot);
-      this.show();
+      if (!document.hidden && this.voice) void this.audio?.resume().catch(() => {});
     };
     if (mobileApp()) document.addEventListener("visibilitychange", visibility);
     return () => {
@@ -206,21 +205,20 @@ class BrowserSession {
   }
 
   private updateVoice(snapshot: Snapshot) {
-    const { connectionId } = snapshot;
-    const channelId = document.hidden ? null : snapshot.channelId;
+    const { channelId, connectionId } = snapshot;
     if ((this.voice?.channelId ?? null) !== channelId) {
       this.voice?.close();
       this.voice = undefined;
       if (channelId) {
         const socket = this.socket;
         const audio = this.audio ??= new AudioContext();
-        this.voice = new WebVoice(channelId, connectionId, audio, (kind, payload) => {
+        this.voice = new WebVoice(channelId, connectionId, audio, this.callAudio, (kind, payload) => {
           if (socket !== this.socket || this.snapshot?.channelId !== channelId) {
             return Promise.reject(new Error("The active channel changed."));
           }
           return this.rpc(kind, payload);
         }, () => this.show(), this.volumes);
-      }
+      } else this.stopCallAudio();
     }
     this.voice?.update(snapshot);
   }
@@ -330,13 +328,18 @@ class BrowserSession {
     await this.rpc(kind, payload);
   }
 
+  private stopCallAudio() {
+    void this.callAudio.setMode("auto").catch(() => {});
+    void this.audio?.close().catch(() => {});
+    this.audio = undefined;
+  }
+
   private closeSocket() {
     const socket = this.socket;
     this.socket = undefined;
     this.voice?.close();
     this.voice = undefined;
-    void this.audio?.close().catch(() => {});
-    this.audio = undefined;
+    this.stopCallAudio();
     this.snapshot = null;
     this.messages = [];
     this.directMessages = [];

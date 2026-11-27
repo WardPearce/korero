@@ -223,7 +223,7 @@
         <TalkKey label="Whisper shortcut" {shortcut} disabled={busy || Boolean(wanted)}
           onchange={(value) => { shortcut = value; saveSettings(); }} />
         <p class="field-hint">
-          {mode === "hold" ? "Hold" : "Press"} <kbd>{talkShortcutLabel(shortcut)}</kbd> while VNX.chat is focused.
+          {mode === "hold" ? "Hold" : "Press"} <kbd>{talkShortcutLabel(shortcut)}</kbd> while Korero.chat is focused.
         </p>
         {#if error}<p class="notice" role="alert">{error}</p>{/if}
         <div class="dialog-actions">

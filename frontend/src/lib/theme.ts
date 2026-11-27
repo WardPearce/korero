@@ -1,5 +1,5 @@
 import { browser } from "$app/environment";
-import logo from "../../static/vnx-logo.svg?raw";
+import logo from "../../static/korero-logo.svg?raw";
 
 export const colorFields = [
   ["background", "Workspace"], ["panel", "Sidebars"], ["surface", "Cards and menus"],
@@ -42,7 +42,9 @@ function preset(id: string, name: string, scheme: Theme["scheme"], surfaces: Sur
   } };
 }
 
-export const defaultTheme = preset("dark", "Dark", "dark", ["#15171d", "#1b1e26", "#20242e", "#363e50", "#606e86"], darkSwatches);
+export const defaultTheme = preset("korero", "Kōrero", "dark",
+  ["#101820", "#16212b", "#1e2c38", "#344758", "#627c90", "#f2f6fa", "#aabac8"],
+  ["#5ce0cc", "#8ea5bc", "#b7acf3", "#6fd5a0", "#ff929b", "#f6bf74", "#83d3ee"]);
 
 export const playfulThemes = [
   preset("arcade", "Arcade", "dark", ["#100d21", "#1a1232", "#241745", "#44316a", "#8062a8", "#fff2ff", "#cdbbe3"],
@@ -79,6 +81,7 @@ export const playfulThemes = [
 
 export const builtInThemes = [
   defaultTheme,
+  preset("dark", "Dark", "dark", ["#15171d", "#1b1e26", "#20242e", "#363e50", "#606e86"], darkSwatches),
   preset("light", "Light", "light", ["#f8faff", "#eef1f8", "#ffffff", "#d5dbe8", "#7e899e"], lightSwatches),
   preset("corporate", "Corporate", "light", ["#fafbfd", "#eff2f6", "#ffffff", "#d4dbe5", "#7c8799"],
     ["#397bf4", "#6e7284", "#c43179", "#477800", "#ca3150", "#856000", "#00796f"], 6),
@@ -227,7 +230,7 @@ function properties(theme: Theme) {
     "--muted": colors.panel,
     "--muted-foreground": colors.mutedText,
     "--primary": colors.primary,
-    "--primary-foreground": onColor(colors.primary),
+    "--primary-foreground": theme === defaultTheme ? colors.background : onColor(colors.primary),
     "--secondary": colors.secondary,
     "--secondary-foreground": onColor(colors.secondary),
     "--accent": colors.accent,
@@ -257,7 +260,7 @@ export function applyAppearance(appearance: Appearance, theme: Theme = themeFor(
 
   const favicon = document.querySelector<HTMLLinkElement>("#app-favicon");
   if (favicon) {
-    const tintedLogo = logo.replace(/fill="[^"]*"/, `fill="${theme.colors.text}"`);
+    const tintedLogo = logo.replace("<svg ", `<svg style="--foreground:${theme.colors.text};--primary:${theme.colors.primary}" `);
     favicon.href = `data:image/svg+xml,${encodeURIComponent(tintedLogo)}`;
   }
 }

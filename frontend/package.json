@@ -1,5 +1,5 @@
 {
-  "name": "vnx-chat-frontend",
+  "name": "korero-chat-frontend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -58,9 +58,9 @@
     "vite": "7.3.8"
   },
   "main": "electron/main.mjs",
-  "productName": "VNX.chat",
-  "description": "VNX.chat voice and chat client",
-  "homepage": "https://github.com/WardPearce/vnx-chat",
+  "productName": "Korero.chat",
+  "description": "Korero.chat voice and chat client",
+  "homepage": "https://github.com/WardPearce/korero",
   "author": {
     "name": "WardPearce",
     "email": "wardpearce@pm.me"

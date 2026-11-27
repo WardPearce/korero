@@ -104,7 +104,7 @@
 
   function openSetup() {
     if (!supportsWebRtc()) {
-      error = "This browser does not support WebRTC. Open VNX.chat in a browser with WebRTC support.";
+      error = "This browser does not support WebRTC. Open Korero.chat in a browser with WebRTC support.";
       return;
     }
     setupError = "";

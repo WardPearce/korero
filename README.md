@@ -20,7 +20,7 @@ connections, voice channel joins and leaves, moderation, and server changes.
 Filter by event type or actor account ID.
 
 The first owner claims the server with its setup token. Regular sign-in uses
-your VNX.chat identity and follows the server’s registration policy. Right-click
+your Korero.chat identity and follows the server’s registration policy. Right-click
 a channel to change its password or bitrate. Leave the channel bitrate blank to
 inherit the server default.
 
@@ -30,7 +30,7 @@ precedence.
 
 To use administration in a browser, serve the frontend over HTTPS or localhost,
 add the frontend’s origin to `server.origins`, and use a server certificate
-trusted by the browser. You can import an existing VNX.chat identity backup.
+trusted by the browser. You can import an existing Korero.chat identity backup.
 
 See the [TeamSpeak 6 and Discord comparison](docs/server-feature-research.md)
 for possible additions to server administration and voice.
@@ -71,7 +71,7 @@ Linux Wayland sessions use the focused-window shortcut.
 
 Use **Whisper to another channel** in the voice toolbar to select an occupied
 channel you can speak in. Choose push-to-talk or toggle-to-talk and record a
-separate shortcut. The default is **Alt+B** while VNX.chat is focused. Whisper
+separate shortcut. The default is **Alt+B** while Korero.chat is focused. Whisper
 audio goes only to the selected channel while you stay in your current room.
 
 ## Run a standalone build

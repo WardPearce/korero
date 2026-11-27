@@ -15,7 +15,7 @@ export function decodeBase64Url(value: string) {
 
 function checkEnvelope(pkcs8: Uint8Array) {
   if (pkcs8.length !== 83 || !pkcs8Header.every((byte, index) => byte === pkcs8[index]) ||
-      pkcs8[48] !== 0x81 || pkcs8[49] !== 0x21 || pkcs8[50] !== 0) throw new Error("Invalid VNX.chat identity key.");
+      pkcs8[48] !== 0x81 || pkcs8[49] !== 0x21 || pkcs8[50] !== 0) throw new Error("Invalid Korero.chat identity key.");
 }
 
 export function identitySeed(privateKey: string) {
@@ -36,7 +36,7 @@ function unpack(pkcs8: Uint8Array) {
   checkEnvelope(pkcs8);
   const seed = pkcs8.slice(16, 48);
   const publicKey = encodeBase64Url(ed25519.getPublicKey(seed));
-  if (publicKey !== encodeBase64Url(pkcs8.slice(51))) throw new Error("Invalid VNX.chat identity key.");
+  if (publicKey !== encodeBase64Url(pkcs8.slice(51))) throw new Error("Invalid Korero.chat identity key.");
   return { seed, publicKey };
 }
 
@@ -51,7 +51,7 @@ export async function importBrowserIdentity(blob: string, passphrase: string): P
   const bytes = decodeBase64Url(blob.trim());
   const offset = header.length;
   if (bytes.length !== offset + 16 + 12 + 83 + 16 || !header.every((byte, index) => bytes[index] === byte)) {
-    throw new Error("Invalid VNX.chat identity export.");
+    throw new Error("Invalid Korero.chat identity export.");
   }
   const key = await wrappingKey(passphrase, bytes.slice(offset, offset + 16));
   const pkcs8 = await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.slice(offset + 16, offset + 28), additionalData: header },

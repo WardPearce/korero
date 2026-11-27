@@ -2,7 +2,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
   appId: "app.korero.voice",
-  appName: "VNX.chat",
+  appName: "Korero.chat",
   webDir: "dist",
   server: {
     hostname: "localhost",

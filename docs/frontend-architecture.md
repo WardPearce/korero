@@ -1,4 +1,4 @@
-# VNX.chat client
+# Korero.chat client
 
 The SvelteKit client builds to `frontend/dist`. Electron packages those assets for
 Linux x86_64. Capacitor copies the same build into the Android and iOS projects.
@@ -49,7 +49,10 @@ certificate SHA-256 fingerprint with the operator before approving it. See
 ## Capacitor mobile
 
 The Android and iOS apps use the system WebView for chat, voice, and camera
-sharing. Voice uses the microphone while the app is in the foreground.
+sharing. Join a voice channel with the app open. An active call can continue
+when you switch apps or lock the screen. Android runs a foreground service for
+the call, and iOS uses the system background audio mode. Leaving the channel or
+disconnecting ends background audio.
 Audio device selection and processing controls, whisper transmission, and
 system-wide shortcuts are desktop features. Screen capture depends on the
 system WebView.

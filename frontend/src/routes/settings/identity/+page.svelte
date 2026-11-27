@@ -30,7 +30,7 @@
 
   async function exportKey() {
     const blob = await exportIdentity(passphrase);
-    await downloadFile("vnx-chat.identity", new Blob([blob], { type: "text/plain" }));
+    await downloadFile("korero.identity", new Blob([blob], { type: "text/plain" }));
     passphrase = "";
     status = "Encrypted identity exported.";
   }
@@ -50,11 +50,11 @@
 
 </script>
 
-<svelte:head><title>Identity settings · VNX.chat</title></svelte:head>
+<svelte:head><title>Identity settings · Korero.chat</title></svelte:head>
 <main class="room-pane settings-pane">
   <header class="workspace-header"><div class="heading-icon"><Fingerprint size={19} aria-hidden="true" /></div><h1>Identity</h1></header>
   <div class="workspace">
-    {#if !available}<p class="notice">Open the VNX.chat desktop app to manage and back up your identity.</p>
+    {#if !available}<p class="notice">Open the Korero.chat desktop app to manage and back up your identity.</p>
     {:else}
       <section class="settings-card dialog-form" aria-label="Local identity">
         {#if key}

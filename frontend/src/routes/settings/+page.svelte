@@ -33,7 +33,7 @@
 </script>
 
 <svelte:head>
-  <title>Account settings · VNX.chat</title>
+  <title>Account settings · Korero.chat</title>
 </svelte:head>
 
 <main class="room-pane settings-pane">

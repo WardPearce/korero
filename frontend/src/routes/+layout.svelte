@@ -42,7 +42,7 @@
   });
 
   type Target = { origin: string; info: ServerInfo };
-  const deviceName = "VNX.chat";
+  const deviceName = "Korero.chat";
 
   let viewport = $state(1200);
   let savedRailWidth = $state(230);
@@ -278,7 +278,7 @@
     const target = { origin, info: await getServerInfo(origin) };
     discovery = target;
     if (!target.info.identityAuthentication || !target.info.identityEnrollment) {
-      throw new Error("Update this server to a VNX.chat version that supports identity sign-in.");
+      throw new Error("Update this server to a Korero.chat version that supports identity sign-in.");
     }
     if (target.info.passwordRequired) {
       savedServerPassword = await getSavedPassword(origin, target.info.serverId).catch(() => undefined);
@@ -295,7 +295,7 @@
   async function getServerInfo(origin: string): Promise<ServerInfo> {
     const result = await apiFor(origin).server.info.get();
     if (result.error) throw requestError(result.error);
-    if (!result.data || !("serverId" in result.data)) throw new Error("This server did not return VNX.chat server details.");
+    if (!result.data || !("serverId" in result.data)) throw new Error("This server did not return Korero.chat server details.");
     return result.data;
   }
 
@@ -514,7 +514,7 @@
       if (command === "leave_channel") return browserSession.leaveChannel();
       if (command === "set_presence") return browserSession.setPresence(args);
       if (command === "send_message") return browserSession.sendMessage(args?.channelId as string, args?.text as string, args?.html as string | undefined);
-      throw new Error("Open VNX.chat in the desktop app to use voice.");
+      throw new Error("Open Korero.chat in the desktop app to use voice.");
     });
   }
 
@@ -630,7 +630,7 @@
 </script>
 
 <svelte:head>
-  <title>VNX.chat</title>
+  <title>Korero.chat</title>
 </svelte:head>
 
 <svelte:window bind:innerWidth={viewport} onkeydown={audio.talkKeyDown} onkeyup={audio.talkKeyUp} onblur={audio.talkWindowBlur} />
@@ -638,9 +638,9 @@
 <div class="shell" data-pane={onWorkspace ? mobilePane : "room"} data-workspace={onWorkspace} style:--rail-width={railWidth + "px"} style:--channel-width={channelWidth + "px"}>
   <aside id="server-rail" class="server-rail" aria-label="Servers">
     <div class="rail-top">
-      <div class="brand" role="img" aria-label="VNX.chat">
-        <span class="brand-logo" style:--brand-logo={`url("${asset("/vnx-logo.svg")}")`}></span><span class="brand-domain">.chat</span>
-      </div>
+      <svg class="brand" viewBox="2 0 126 29" role="img" aria-label="Kōrero.">
+        <use href={asset("/korero-logo.svg") + "#wordmark"} />
+      </svg>
       <Button variant="outline" class="rail-connect" disabled={!identityReady || connectBusy || Boolean(pending)} onclick={() => showConnect()}><Plus size={18} /> Connect to server</Button>
       <section class="rail-section">
         <div class="rail-section-label"><span>Servers</span></div>

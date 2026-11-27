@@ -556,7 +556,7 @@ async fn configure_talk_shortcut(shortcut: Option<String>, state: &AppState) -> 
         let key = shortcut.as_deref().map(str::parse::<HotKey>).transpose().map_err(|error| error.to_string())?;
         if key.is_some() && registration.is_none() {
             if std::env::var_os("DISPLAY").is_none() || std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") {
-                return Err("System-wide shortcuts require an X11 session. The shortcut works while VNX.chat is focused.".into());
+                return Err("System-wide shortcuts require an X11 session. The shortcut works while Korero.chat is focused.".into());
             }
             let manager = GlobalHotKeyManager::new().map_err(|error| error.to_string())?;
             let outgoing = state.outgoing.clone();
@@ -595,7 +595,7 @@ async fn configure_talk_shortcut(shortcut: Option<String>, state: &AppState) -> 
     {
         let _ = state;
         if shortcut.is_some() {
-            return Err("System-wide shortcuts are unavailable. The shortcut works while VNX.chat is focused.".into());
+            return Err("System-wide shortcuts are unavailable. The shortcut works while Korero.chat is focused.".into());
         }
         Ok(())
     }
