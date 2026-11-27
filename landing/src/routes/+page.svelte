@@ -520,14 +520,13 @@ docker logs korero`}
 			<ul class="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
 				{#each platforms as p (p)}
 					<li>
-						<a
-							href="https://github.com/WardPearce/korero"
-							target="_blank"
-							rel="noopener noreferrer"
-							class="block rounded-xl border border-border bg-card px-5 py-4 font-medium hover:border-input"
+						<button
+							type="button"
+							onclick={openDownloadDialog}
+							class="block w-full rounded-xl border border-border bg-card px-5 py-4 font-medium hover:border-input"
 						>
 							{p}
-						</a>
+						</button>
 					</li>
 				{/each}
 			</ul>
