@@ -208,13 +208,19 @@
     memberSelection = { connectionId: snapshot.connectionId, members };
   }
 
+  /** Your own connection can always be dragged out of the channel it is in; dropping it joins the target. */
+  function isSelf(channel: Channel, member: Member) {
+    return member.connectionId === snapshot?.connectionId && snapshot.channelId === channel.id;
+  }
+
   function startMemberDrag(event: DragEvent, channel: Channel, member: Member) {
-    if (!snapshot || !online || pending || movableMembers.get(member.connectionId) !== channel.id || !event.dataTransfer) {
+    const self = isSelf(channel, member);
+    if (!snapshot || !online || pending || (!self && movableMembers.get(member.connectionId) !== channel.id) || !event.dataTransfer) {
       event.preventDefault();
       return;
     }
     endDrag();
-    const selected = selectedMembers.has(member.connectionId);
+    const selected = !self && selectedMembers.has(member.connectionId);
     if (!selected) memberSelection = null;
     draggedMembers = {
       connectionId: snapshot.connectionId,
@@ -224,8 +230,17 @@
     event.dataTransfer.setData(memberDragType, member.connectionId);
   }
 
+  function draggingSelf(dragged = draggedMembers) {
+    return Boolean(dragged && dragged.members.size === 1 && dragged.members.has(dragged.connectionId));
+  }
+
+  function selfDropAllowed(channel: Channel, dragged = draggedMembers) {
+    return draggingSelf(dragged) && dragged!.connectionId === snapshot?.connectionId && online && !pending &&
+      snapshot.channelId !== channel.id && dragged!.members.get(dragged!.connectionId) === snapshot.channelId;
+  }
+
   function memberDropIds(channel: Channel, dragged = draggedMembers) {
-    if (!dragged || dragged.connectionId !== snapshot?.connectionId || !online || pending || !channel.canMove) return [];
+    if (!dragged || draggingSelf(dragged) || dragged.connectionId !== snapshot?.connectionId || !online || pending || !channel.canMove) return [];
     const ids: string[] = [];
     for (const [id, sourceId] of dragged.members) {
       if (movableMembers.get(id) !== sourceId) return [];
@@ -308,7 +323,7 @@
   function dragOver(event: DragEvent & { currentTarget: HTMLDivElement }, channel: Channel) {
     let target: DropTarget | null | undefined;
     if (event.dataTransfer?.types.includes(memberDragType)) {
-      target = memberDropIds(channel).length ? { id: channel.id, placement: "inside" } : null;
+      target = selfDropAllowed(channel) || memberDropIds(channel).length ? { id: channel.id, placement: "inside" } : null;
     } else {
       const source = dragSource();
       target = source && dragPlacement(event, source, channel);
@@ -342,7 +357,9 @@
     endDrag();
     if (!target || !channel) return;
     event.preventDefault();
-    if (members) {
+    if (members && selfDropAllowed(channel, members)) {
+      onjoin(channel);
+    } else if (members) {
       const ids = memberDropIds(channel, members);
       if (ids.length) void moveMembers(channel.id, ids);
     } else if (source) {
@@ -396,7 +413,7 @@
           {@const movable = movableMembers.get(member.connectionId) === channel.id}
           <ChannelMember {channel} {member} selected={selectedMembers.has(member.connectionId)}
             onToggleSelection={movable ? () => toggleMemberSelection(channel, member) : undefined}
-            onDragStart={movable ? (event) => startMemberDrag(event, channel, member) : undefined}
+            onDragStart={movable || isSelf(channel, member) ? (event) => startMemberDrag(event, channel, member) : undefined}
             onDragEnd={endDrag} />
         {/each}
       </ul>

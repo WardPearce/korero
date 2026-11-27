@@ -429,7 +429,7 @@
     const previous = entry.view;
     const channel = state.snapshot?.channelId;
     if (origin === serverOrigin && channel && channel !== previous.snapshot?.channelId) selectedChannelId = channel;
-    if (notify) announceShareChanges(previous.snapshot, state.snapshot);
+    if (notify) announceRoomChanges(previous.snapshot, state.snapshot);
     if (notify && state.lastPoke && state.lastPoke.id !== previous.lastPoke?.id) {
       poke = { ...state.lastPoke, origin };
       playUiSound("poke");
@@ -461,10 +461,10 @@
   }
 
   /**
-   * Cues screen share and camera activity. Shares that were already live on joining
-   * stay silent, as does anything announced while switching channels.
+   * Cues screen share, camera activity and members leaving the channel. Shares that were already
+   * live on joining stay silent, as does anything announced while switching channels.
    */
-  function announceShareChanges(before: VoiceState["snapshot"], after: VoiceState["snapshot"]) {
+  function announceRoomChanges(before: VoiceState["snapshot"], after: VoiceState["snapshot"]) {
     if (!before || !after || before.channelId !== after.channelId || before.connectionId !== after.connectionId) return;
     const producers = (snapshot: VoiceState["snapshot"], source: "screens" | "cameras") =>
       new Set((snapshot?.[source] ?? []).map(({ producerId }) => producerId));
@@ -476,6 +476,8 @@
     else if (appeared("cameras")) playUiSound("cameraStart");
     if (disappeared("screens")) playUiSound("screenShareStop");
     else if (disappeared("cameras")) playUiSound("cameraStop");
+    const present = new Set(after.members.map(({ connectionId }) => connectionId));
+    if (before.members.some(({ connectionId }) => connectionId !== after.connectionId && !present.has(connectionId))) playUiSound("memberLeft");
   }
 
   function updateDesktopVoice(origin: string) {

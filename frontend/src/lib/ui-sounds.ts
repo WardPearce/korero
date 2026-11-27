@@ -1,7 +1,7 @@
 import * as Tone from "tone";
 
 type Sound = "channel" | "connect" | "disconnect" | "mute" | "unmute" | "deafen" | "undeafen" | "message" | "directMessage"
-  | "poke" | "afk" | "back" | "screenShareStart" | "screenShareStop" | "cameraStart" | "cameraStop";
+  | "poke" | "afk" | "back" | "screenShareStart" | "screenShareStop" | "cameraStart" | "cameraStop" | "memberLeft";
 
 /**
  * Each cue is a short phrase rather than a single glide, so families of sounds stay recognisable:
@@ -18,7 +18,10 @@ type Cue = { notes: Note[]; swish?: "up" | "down" };
 const cues: Record<Sound, Cue> = {
   connect: { notes: [["pad", "C4", 0, 0.5, 0.5], ["bell", "C5", 0, 0.3, 0.45], ["bell", "E5", 0.08, 0.3, 0.45], ["bell", "G5", 0.16, 0.45, 0.5]] },
   disconnect: { notes: [["bell", "G5", 0, 0.25, 0.4], ["bell", "E5", 0.08, 0.25, 0.4], ["bell", "C5", 0.16, 0.4, 0.4], ["pad", "C4", 0.16, 0.45, 0.4]] },
-  channel: { swish: "up", notes: [["pluck", "E5", 0.03, 0.1, 0.45], ["bell", "A5", 0.1, 0.3, 0.4]] },
+  // Leaving a channel plays `disconnect`; joining mirrors it: the pad lands first, then the bells climb back up.
+  channel: { notes: [["pad", "C4", 0, 0.45, 0.4], ["bell", "C5", 0, 0.25, 0.4], ["bell", "E5", 0.08, 0.25, 0.4], ["bell", "G5", 0.16, 0.4, 0.4]] },
+  // Someone else leaving your channel: a softer, shorter echo of `disconnect`.
+  memberLeft: { notes: [["bell", "G5", 0, 0.2, 0.3], ["bell", "C5", 0.09, 0.35, 0.3], ["pad", "C4", 0.09, 0.35, 0.25]] },
   mute: { notes: [["pluck", "A4", 0, 0.07, 0.6], ["pluck", "E4", 0.07, 0.1, 0.55]] },
   unmute: { notes: [["pluck", "E4", 0, 0.07, 0.55], ["pluck", "A4", 0.07, 0.1, 0.6]] },
   deafen: { notes: [["pluck", "D4", 0, 0.08, 0.6], ["pluck", "A3", 0.08, 0.14, 0.6], ["pad", "A2", 0.08, 0.25, 0.35]] },
