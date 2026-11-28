@@ -3,10 +3,11 @@
   import { onDestroy, onMount } from "svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import Modal from "#lib/components/Modal.svelte";
-  import { chooseCapture, watchDesktop, type CaptureRequest, type CaptureSource } from "#lib/connection/platform";
+  import { chooseCapture, watchDesktop, type CapturePreviews, type CaptureRequest, type CaptureSource } from "#lib/connection/platform";
 
   let request = $state.raw<CaptureRequest>();
-  let unlisten: (() => void) | undefined;
+  let loadingPreviews = $state(false);
+  let unlisten: (() => void)[] = [];
   let destroyed = false;
 
   const screens = $derived(request?.sources.filter(({ kind }) => kind === "screen") ?? []);
@@ -16,18 +17,37 @@
     const current = request;
     if (!current) return;
     request = undefined;
+    loadingPreviews = false;
     void chooseCapture(current.id, sourceId).catch(() => {});
   }
 
   onMount(async () => {
-    const stop = await watchDesktop<CaptureRequest>("korero:capture-sources", (payload) => { request = payload; });
-    if (destroyed) stop();
-    else unlisten = stop;
+    const stops = await Promise.all([
+      watchDesktop<CaptureRequest>("korero:capture-sources", (payload) => {
+        request = payload;
+        loadingPreviews = payload.previews;
+      }),
+      watchDesktop<CapturePreviews>("korero:capture-previews", (payload) => {
+        const current = request;
+        if (current?.id !== payload.id) return;
+        const previews = new Map(payload.sources.map((source) => [source.id, source]));
+        request = {
+          ...current,
+          sources: current.sources.map((source) => {
+            const preview = previews.get(source.id);
+            return preview ? { ...source, thumbnail: preview.thumbnail, icon: preview.icon } : source;
+          }),
+        };
+        loadingPreviews = false;
+      }),
+    ]);
+    if (destroyed) for (const stop of stops) stop();
+    else unlisten = stops;
   });
 
   onDestroy(() => {
     destroyed = true;
-    unlisten?.();
+    for (const stop of unlisten) stop();
     answer(null);
   });
 </script>
@@ -40,9 +60,11 @@
         {#each sources as source (source.id)}
           <li>
             <button type="button" class="capture-tile" onclick={() => answer(source.id)}>
-              <span class="capture-thumbnail">
+              <span class="capture-thumbnail" class:loading={loadingPreviews} aria-busy={loadingPreviews}>
                 {#if source.thumbnail}
                   <img src={source.thumbnail} alt="" />
+                {:else if loadingPreviews}
+                  <!-- Preview still capturing. -->
                 {:else if source.kind === "screen"}
                   <Monitor size={28} aria-hidden="true" />
                 {:else}
@@ -107,6 +129,9 @@
     background: var(--muted);
     color: var(--muted-foreground);
   }
+  .capture-thumbnail.loading { animation: capture-pulse 1.4s ease-in-out infinite; }
+  @keyframes capture-pulse { 50% { opacity: .55; } }
+  @media (prefers-reduced-motion: reduce) { .capture-thumbnail.loading { animation: none; } }
   .capture-thumbnail img { width: 100%; height: 100%; object-fit: contain; }
   .capture-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: .875rem; }
   .capture-name > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -3,7 +3,7 @@ import { lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
-export const workerBuildPolicy = "system-openssl-3.5.9-v1";
+export const workerBuildPolicy = "system-openssl-rtp-limits-v3";
 
 export function sha256(bytes: Uint8Array) {
   return createHash("sha256").update(bytes).digest("hex");

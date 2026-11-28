@@ -5,12 +5,13 @@
   import SelectField from "#lib/components/fields/SelectField.svelte";
   import VoiceBitrateField from "#lib/components/fields/VoiceBitrateField.svelte";
   import { Textarea } from "#lib/components/ui/textarea/index.js";
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { Settings2, X } from "@lucide/svelte";
   import IconButton from "#lib/components/IconButton.svelte";
   import ServerAuditLog from "./ServerAuditLog.svelte";
   import { apiFor, messageFrom, requestError } from "#lib/connection/client";
   import { getWorkspace } from "#lib/workspace";
+  import { banDurationOptions, banDurations, banPayload, type BanDuration } from "#lib/ban-duration";
   import { permissionLabels as sharedPermissionLabels } from "#lib/permissions";
 
   let { origin, title, permissions, bannerSupported, bannerImageUrl, extended, onclose }: {
@@ -39,7 +40,7 @@
   const permissionLabels: Record<Permission, string> = sharedPermissionLabels;
   const permissionGroups = [
     { label: "Channel access and voice", permissions: ["join", "speak", "shareScreen", "useCamera", "whisper"] },
-    { label: "Messaging", permissions: ["text", "attachFiles", "sendDirectMessages", "deleteChannels"] },
+    { label: "Messaging", permissions: ["text", "attachFiles", "sendDirectMessages", "deleteChannels", "pinMessages"] },
     { label: "Channel management", permissions: ["createChannels", "editChannels", "removeChannels"] },
     { label: "Moderation", permissions: ["move", "mute", "kick", "ban"] },
     { label: "Server administration", permissions: ["manageRoles", "manageInvitations", "manageSettings", "viewAdmin"] },
@@ -84,6 +85,7 @@
   let editingBadge = $state("");
   let badgeDraft = $state("");
   let banningAccount = $state("");
+  let banDuration = $state<BanDuration>("never");
   let deletingRole = $state("");
   let roleName = $state("");
   let selectedTemplate = $state("");
@@ -146,6 +148,25 @@
     });
   }
 
+  /** Reloads the open page in the background, leaving notices and any badge being edited alone. */
+  async function refreshMembers() {
+    const response = await apiFor(origin).admin.accounts.get({ query: { after: pages.at(-1) } });
+    if (!response.error && response.data && "accounts" in response.data) members = response.data;
+  }
+
+  // The server bumps this whenever any account's roles change, including changes made elsewhere.
+  const accountsRevision = $derived(workspace.view.snapshot?.accountsRevision);
+  let seenAccountsRevision: number | undefined;
+  $effect(() => {
+    const revision = accountsRevision;
+    if (revision === undefined || revision === seenAccountsRevision) return;
+    const first = seenAccountsRevision === undefined;
+    seenAccountsRevision = revision;
+    untrack(() => {
+      if (!first && members && (tab === "users" || tab === "roles")) void refreshMembers();
+    });
+  });
+
   async function selectTab(next: Tab) {
     if (busy) return;
     tab = next;
@@ -159,15 +180,29 @@
     if (next === "invitation") await loadInvitations();
   }
 
-  async function setRole(account: Roles["accounts"][number], role: string | undefined) {
-    if (role === undefined || role === account.role) return;
+  const baseRoles = ["Guest", "Member"];
+  function heldRoles(account: Roles["accounts"][number]) {
+    return account.roles ?? [account.role];
+  }
+  /** Every account keeps Guest or Member, and only roles below the caller can be removed. */
+  function removable(account: Roles["accounts"][number], role: string) {
+    const held = heldRoles(account);
+    return account.editable && !!members?.roles.includes(role) &&
+      !(baseRoles.includes(role) && !held.some((other) => other !== role && baseRoles.includes(other)));
+  }
+
+  async function changeRole(account: Roles["accounts"][number], role: string | undefined, add: boolean) {
+    if (role === undefined || heldRoles(account).includes(role) === add) return;
     await run(async () => {
-      const response = await apiFor(origin).admin.roles.patch({ accountId: account.id, role });
+      const body = { accountId: account.id, role };
+      const api = apiFor(origin).admin.accounts.roles;
+      const response = add ? await api.post(body) : await api.delete(body);
       if (response.error) throw requestError(response.error);
+      const roles = response.data.roles;
       if (members) {
-        members = { ...members, accounts: members.accounts.map((row) => row.id === account.id ? { ...row, role } : row) };
+        members = { ...members, accounts: members.accounts.map((row) => row.id === account.id ? { ...row, roles, role: roles[0] ?? row.role } : row) };
       }
-      notice = `${account.displayName} is now ${role}.`;
+      notice = add ? `${account.displayName} now has the ${role} role.` : `${account.displayName} no longer has the ${role} role.`;
     });
   }
 
@@ -179,13 +214,14 @@
   async function toggleBan(account: Roles["accounts"][number]) {
     const banned = account.banned;
     await run(async () => {
-      const ok = await workspace.memberAction({
-        kind: banned ? "moderation.unban" : "moderation.ban",
-        payload: { accountId: account.id },
-      });
+      const seconds = banned ? undefined : banDurations[banDuration].seconds;
+      const ok = await workspace.memberAction(banned
+        ? { kind: "moderation.unban", payload: { accountId: account.id } }
+        : { kind: "moderation.ban", payload: banPayload(account.id, banDuration) });
       if (!ok) throw new Error(workspace.actionError || `Could not ${banned ? "unban" : "ban"} ${account.displayName}.`);
       if (members) {
-        members = { ...members, accounts: members.accounts.map((row) => row.id === account.id ? { ...row, banned: !banned } : row) };
+        const bannedUntil = seconds === undefined ? null : Date.now() + seconds * 1000;
+        members = { ...members, accounts: members.accounts.map((row) => row.id === account.id ? { ...row, banned: !banned, bannedUntil } : row) };
       }
       banningAccount = "";
       notice = banned ? `Unbanned ${account.displayName}.` : `Banned ${account.displayName}.`;
@@ -566,17 +602,32 @@
               <span class="shrinkable">
                 <strong class="truncate" title={account.displayName}>{account.displayName}</strong>
                 {#if account.badge}<span class="member-badge" title={account.badge}>{account.badge}</span>{/if}
-                {#if account.banned}<span class="member-badge banned-tag">Banned</span>{/if}
+                {#if account.banned}
+                  <span class="member-badge banned-tag" title={account.bannedUntil ? `Banned until ${new Date(account.bannedUntil).toLocaleString()}` : "Banned permanently"}>
+                    {account.bannedUntil ? `Banned until ${new Date(account.bannedUntil).toLocaleDateString()}` : "Banned"}
+                  </span>
+                {/if}
                 <small class="field-hint">{account.id}</small>
               </span>
+              <span class="role-chips" aria-label={`Roles for ${account.displayName}`}>
+                {#each heldRoles(account) as role (role)}
+                  <span class="member-badge member-role role-chip">
+                    {role}
+                    {#if removable(account, role)}
+                      <button type="button" class="role-chip-remove" disabled={busy}
+                        aria-label={`Remove ${role} from ${account.displayName}`} title={`Remove ${role}`}
+                        onclick={() => void changeRole(account, role, false)}><X /></button>
+                    {/if}
+                  </span>
+                {/each}
+              </span>
               {#if account.editable}
-                <SelectField label={`Role for ${account.displayName} (${account.id})`} hideLabel
-                  options={members.roles.includes(account.role) ? roleOptions
-                    : [{ label: account.role, value: account.role, disabled: true }, ...roleOptions]}
-                  disabled={busy || !roleOptions.length}
-                  bind:value={() => account.role, (role) => void setRole(account, role)} />
-              {:else}
-                <span>{account.role}</span>
+                {@const addable = roleOptions.filter(({ value }) => !heldRoles(account).includes(value))}
+                {#if addable.length}
+                  <SelectField label={`Add a role for ${account.displayName} (${account.id})`} hideLabel placeholder="Add role"
+                    options={addable} disabled={busy}
+                    bind:value={() => undefined, (role) => void changeRole(account, role, true)} />
+                {/if}
               {/if}
               {#if account.editable && account.badge !== undefined}
                 {#if editingBadge === account.id}
@@ -595,13 +646,17 @@
               {/if}
               {#if account.bannable}
                 {#if banningAccount === account.id}
+                  {#if !account.banned}
+                    <SelectField label={`Ban for ${account.displayName} expires after`} hideLabel
+                      options={banDurationOptions} disabled={busy} bind:value={banDuration} />
+                  {/if}
                   <Button variant="outline" disabled={busy} onclick={() => { banningAccount = ""; }}>Cancel</Button>
                   <Button variant="default" disabled={busy} onclick={() => toggleBan(account)}>
                     {account.banned ? "Confirm unban" : "Confirm ban"}
                   </Button>
                 {:else}
                   <Button variant="outline" disabled={busy} aria-label={`${account.banned ? "Unban" : "Ban"} ${account.displayName}`}
-                    onclick={() => { banningAccount = account.id; }}>{account.banned ? "Unban" : "Ban"}</Button>
+                    onclick={() => { banningAccount = account.id; banDuration = "never"; }}>{account.banned ? "Unban" : "Ban"}</Button>
                 {/if}
               {/if}
             </li>

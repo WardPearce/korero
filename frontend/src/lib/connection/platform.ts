@@ -1,6 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 
-type DesktopEvent = "korero:state" | "korero:media" | "korero:talk-shortcut" | "korero:capture-sources";
+type DesktopEvent = "korero:state" | "korero:media" | "korero:talk-shortcut" | "korero:capture-sources" | "korero:capture-previews";
 
 interface DesktopBridge {
   applicationAudio?: boolean;
@@ -18,6 +18,13 @@ export interface CaptureSource {
 }
 
 export interface CaptureRequest {
+  id: string;
+  /** Whether thumbnails and icons will follow in a `korero:capture-previews` event. */
+  previews: boolean;
+  sources: CaptureSource[];
+}
+
+export interface CapturePreviews {
   id: string;
   sources: CaptureSource[];
 }

@@ -19,7 +19,7 @@ async function command(args: string[], cwd = process.cwd()) {
 
 function replace(text: string, search: string | RegExp, updated: string) {
   const result = text.replace(search, updated);
-  if (result === text) throw new Error("mediasoup source changed. Recheck the OpenSSL build adjustment");
+  if (result === text) throw new Error("mediasoup source changed. Recheck the native worker patches");
   return result;
 }
 
@@ -36,7 +36,8 @@ export async function prepareWorker() {
   }
   if (version !== "3.32.2") throw new Error("Review the native worker build adjustment before upgrading mediasoup");
   await command(["pkg-config", "--atleast-version=3.5.9", "openssl"]);
-  const work = join(root, "out", workerBuildPolicy);
+  // Keep Meson's build directory stable across policy changes so it can reuse its dependency cache.
+  const work = join(root, "out", "system-openssl-3.5.9-v1");
   const source = join(work, "source");
   const build = join(work, "build");
   await mkdir(source, { recursive: true });
@@ -54,18 +55,63 @@ export async function prepareWorker() {
   const main = join(source, "src", "main.cpp");
   let cpp = await readFile(main, "utf8");
   cpp = replace(cpp, "#include", "#include <openssl/crypto.h>\n#include <cstdio>\n#include");
+  cpp = replace(cpp, "int main(", `constexpr bool koreroSupportedOpenSsl(unsigned major, unsigned minor, unsigned patch)
+{
+  return (major > 3 || (major == 3 && minor >= 5)) &&
+         !(major == 3 && minor == 5 && patch < 9) &&
+         !(major == 3 && minor == 6 && patch < 5) &&
+         !(major == 4 && minor == 0 && patch < 3);
+}
+
+static_assert(koreroSupportedOpenSsl(OPENSSL_VERSION_MAJOR, OPENSSL_VERSION_MINOR, OPENSSL_VERSION_PATCH),
+              "OpenSSL must include the September 2026 DTLS fixes");
+
+int main(`);
   cpp = replace(cpp, /\{\s*(?=const char\* envVersion)/, `{
-  const auto major = OPENSSL_version_major();
-  const auto minor = OPENSSL_version_minor();
-  const auto patch = OPENSSL_version_patch();
-  if (major < 3 || (major == 3 && (minor < 5 || (minor == 5 && patch < 9))))
+  if (!koreroSupportedOpenSsl(OPENSSL_version_major(), OPENSSL_version_minor(), OPENSSL_version_patch()))
   {
-    std::fputs("mediasoup requires OpenSSL 3.5.9 or newer\\n", stderr);
+    std::fputs("OpenSSL must include the September 2026 DTLS fixes (3.5.9, 3.6.5 or 4.0.3 on those branches)\\n", stderr);
     return 43;
   }
 
   `);
   await writeFile(main, cpp);
+
+  await cp(join(import.meta.dir, "worker-rtp-limits.hpp"), join(source, "include", "RTC", "KoreroRtpLimits.hpp"));
+  const transportHeader = join(source, "include", "RTC", "Transport.hpp");
+  let header = await readFile(transportHeader, "utf8");
+  header = replace(header, '#include "RTC/RateCalculator.hpp"', '#include "RTC/RateCalculator.hpp"\n#include "RTC/KoreroRtpLimits.hpp"');
+  header = replace(header, "int64_t maxIncomingBitrate{ 0 };", "int64_t maxIncomingBitrate{ 0 };\n\t\tKoreroRtpBudget koreroIncomingRtp;");
+  await writeFile(transportHeader, header);
+
+  const transportSource = join(source, "src", "RTC", "Transport.cpp");
+  let transport = await readFile(transportSource, "utf8");
+  transport = replace(transport, "// Pass the RTP packet to the corresponding Producer.", `// Limit accepted audio RTP even when the sender ignores congestion feedback.
+		if (producer->GetKind() == RTC::Media::Kind::AUDIO &&
+		    this->maxIncomingBitrate > 0 && this->maxIncomingBitrate != AbsoluteMaxBitrate &&
+		    !this->koreroIncomingRtp.Allow(this->maxIncomingBitrate, receivedAtUs, packet->GetLength() + GetPacketOverhead()))
+		{
+			delete packet;
+			return;
+		}
+
+		// Pass the RTP packet to the corresponding Producer.`);
+  await writeFile(transportSource, transport);
+
+  const webRtcSource = join(source, "src", "RTC", "WebRtcTransport.cpp");
+  let webRtc = await readFile(webRtcSource, "utf8");
+  webRtc = replace(webRtc, "if (!this->srtpSendSession->EncryptRtp", `// Every router in this worker shares one RTP egress budget.
+		static thread_local KoreroRtpBudget koreroOutgoingRtp;
+		static const auto koreroEgressBitrate = KoreroRtpEgressBitrate();
+		if (!koreroOutgoingRtp.Allow(koreroEgressBitrate, this->shared->GetTimeUs(), len + GetPacketOverhead()))
+		{
+			if (cb)
+				cb(false);
+			return;
+		}
+
+		if (!this->srtpSendSession->EncryptRtp`);
+  await writeFile(webRtcSource, webRtc);
   const configured = await Bun.file(join(build, "meson-info", "intro-buildoptions.json")).exists();
   await command(["meson", "setup", ...(configured ? ["--reconfigure"] : []), "--buildtype=release", "-Db_ndebug=true", build, source]);
   const jobs = Number(process.env.VOICE_BUILD_JOBS ?? Math.min(8, availableParallelism()));

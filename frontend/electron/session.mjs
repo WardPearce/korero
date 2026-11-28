@@ -9,7 +9,7 @@ const channelMessageLimit = 200;
 const isSameDirectMessage = (a, b) => a.id === b.id && a.senderId === b.senderId && a.recipientId === b.recipientId;
 
 export function offlineView(origin) {
-  return { origin, phase: "offline", snapshot: null, messages: [], directMessages: [], lastPoke: null, speaking: [], error: null };
+  return { origin, phase: "offline", snapshot: null, messages: [], messageRevisions: {}, directMessages: [], lastPoke: null, speaking: [], error: null };
 }
 
 export function readCredentials(value) {
@@ -327,6 +327,11 @@ export class DesktopSession {
     this.#show({ speaking: Array.from(this.#speaking, (producerId) => this.#audioSources.get(producerId)) });
   }
 
+  #reviseMessages(channelId) {
+    const revisions = this.view.messageRevisions;
+    return channelId ? { ...revisions, [channelId]: (revisions[channelId] ?? 0) + 1 } : revisions;
+  }
+
   async #event(wire, { type, payload }) {
     const { snapshot, messages, directMessages } = this.view;
     const sameRoom = payload?.channelId === undefined || payload.channelId === snapshot.channelId;
@@ -363,9 +368,13 @@ export class DesktopSession {
       this.#show({ messages: [...messages.filter((message) => !oldest.has(message)), payload] });
     } else if (type === "message.edited") {
       this.#show({ messages: messages.map((message) => message.id === payload.messageId
-        ? { ...message, text: payload.text, html: payload.html, editedAt: payload.editedAt } : message) });
+        ? { ...message, text: payload.text, html: payload.html, editedAt: payload.editedAt } : message),
+        messageRevisions: this.#reviseMessages(payload.channelId) });
     } else if (type === "message.deleted") {
-      this.#show({ messages: messages.filter(({ id }) => id !== payload.messageId) });
+      this.#show({ messages: messages.filter(({ id }) => id !== payload.messageId), messageRevisions: this.#reviseMessages(payload.channelId) });
+    } else if (type === "message.pinChanged") {
+      this.#show({ messages: messages.map((message) => message.id === payload.messageId ? { ...message, pinnedAt: payload.pinnedAt } : message),
+        messageRevisions: this.#reviseMessages(payload.channelId) });
     } else if (type === "direct.poked" && payload.recipientId === snapshot.account.id) {
       this.#show({ lastPoke: payload });
     } else if (type.startsWith("direct.") && [payload?.senderId, payload?.recipientId].includes(snapshot.account.id)) {

@@ -1,13 +1,16 @@
 <script lang="ts">
   import { Button } from "#lib/components/ui/button/index.js";
+  import { Input } from "#lib/components/ui/input/index.js";
   import { Activity, Ban, BellRing, HeadphoneOff, LogOut, MessageCircle, MicOff, MonitorUp, Shield, Volume2 } from "@lucide/svelte";
   import { tick } from "svelte";
   import Avatar from "#lib/components/Avatar.svelte";
   import ContextActions from "#lib/components/ContextActions.svelte";
   import Modal from "#lib/components/Modal.svelte";
+  import SelectField from "#lib/components/fields/SelectField.svelte";
   import * as ContextMenu from "#lib/components/ui/context-menu/index.js";
   import { Root as Slider } from "#lib/components/ui/slider/index.js";
   import { apiFor, messageFrom, requestError, type Channel, type Member, type MemberRequest } from "#lib/connection/client";
+  import { banDurationOptions, banPayload, type BanDuration } from "#lib/ban-duration";
   import { maxMemberVolume } from "#lib/preferences";
   import { getWorkspace } from "#lib/workspace";
 
@@ -30,6 +33,12 @@
   const canModerate = $derived(!ownAccount && Boolean(member.role && snapshot?.lowerRoles?.includes(member.role)));
   const displayedRole = $derived(member.role === "Guest" || member.role === "Member" ? undefined : member.role);
   const roles = $derived(canModerate ? snapshot?.assignableRoles ?? [] : []);
+  const heldRoles = $derived(member.roles ?? (member.role ? [member.role] : []));
+  const baseRoles = ["Guest", "Member"];
+  /** Every account keeps Guest or Member, so the last one cannot be removed. */
+  function isLastBaseRole(role: string) {
+    return baseRoles.includes(role) && !heldRoles.some((held) => held !== role && baseRoles.includes(held));
+  }
   const canMute = $derived(canModerate && channel.canMute);
   const canKick = $derived(canModerate && snapshot?.serverPermissions.includes("kick"));
   const canBan = $derived(canModerate && snapshot?.serverPermissions.includes("ban"));
@@ -39,6 +48,7 @@
   const canAdjustVolume = $derived(voiceAvailable && !ownAccount && snapshot?.lowerRoles !== undefined);
   let dialog = $state<"kick" | "ban">("kick");
   let dialogOpen = $state(false);
+  let banDuration = $state<BanDuration>("never");
   let nameDialogOpen = $state(false);
   let nameDraft = $state("");
   let nameError = $state("");
@@ -89,16 +99,16 @@
   async function showDialog(kind: typeof dialog) {
     workspace.actionError = "";
     dialog = kind;
+    banDuration = "never";
     await tick();
     dialogOpen = true;
   }
 
   async function confirm(event: SubmitEvent) {
     event.preventDefault();
-    const ok = await workspace.memberAction({
-      kind: dialog === "kick" ? "moderation.kick" : "moderation.ban",
-      payload: { accountId: member.accountId },
-    });
+    const ok = await workspace.memberAction(dialog === "kick"
+      ? { kind: "moderation.kick", payload: { accountId: member.accountId } }
+      : { kind: "moderation.ban", payload: banPayload(member.accountId, banDuration) });
     if (ok) dialogOpen = false;
   }
 </script>
@@ -138,11 +148,13 @@
         <ContextMenu.Sub>
           <ContextMenu.SubTrigger><Shield /> Roles</ContextMenu.SubTrigger>
           <ContextMenu.SubContent class="max-h-(--bits-context-menu-content-available-height) overflow-y-auto">
-            <ContextMenu.RadioGroup value={member.role ?? ""} onValueChange={(role) => act({ kind: "role.set", payload: { accountId: member.accountId, role } })}>
-              {#each roles as role (role)}
-                <ContextMenu.RadioItem value={role} disabled={role === member.role} closeOnSelect>{role}</ContextMenu.RadioItem>
-              {/each}
-            </ContextMenu.RadioGroup>
+            {#each roles as role (role)}
+              {@const held = heldRoles.includes(role)}
+              <ContextMenu.CheckboxItem checked={held} disabled={held && isLastBaseRole(role)}
+                onCheckedChange={(checked) => act({ kind: checked ? "role.add" : "role.remove", payload: { accountId: member.accountId, role } })}>
+                {role}
+              </ContextMenu.CheckboxItem>
+            {/each}
           </ContextMenu.SubContent>
         </ContextMenu.Sub>
       {/if}
@@ -229,7 +241,7 @@
 {#if nameDialogOpen}
   <Modal bind:open={nameDialogOpen} title="Change display name" description="Choose the name other members see on this server.">
     <form class="dialog-form" onsubmit={saveName}>
-      <label>Display name <input class="input" required maxlength="80" bind:value={nameDraft} /></label>
+      <label>Display name<Input required maxlength={80} bind:value={nameDraft} /></label>
       {#if nameError}<p class="form-error" role="alert">{nameError}</p>{/if}
       <div class="dialog-actions">
         <Button variant="outline" type="button" onclick={() => { nameDialogOpen = false; }}>Cancel</Button>
@@ -245,6 +257,9 @@
     description={dialog === "kick" ? "Their devices will be disconnected from the server."
       : "Their devices will be disconnected and their account will be blocked from rejoining."}>
     <form class="dialog-form" onsubmit={confirm}>
+      {#if dialog === "ban"}
+        <SelectField label="Expires after" options={banDurationOptions} bind:value={banDuration} />
+      {/if}
       {#if workspace.actionError}<p class="form-error" role="alert">{workspace.actionError}</p>{/if}
       <div class="dialog-actions">
         <Button variant="outline" type="button" onclick={() => { dialogOpen = false; }}>Cancel</Button>

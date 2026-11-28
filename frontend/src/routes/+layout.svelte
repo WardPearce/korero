@@ -139,7 +139,10 @@
   let actionError = $state("");
   let selectedChannelId = $state<string | null>(null);
   let mobilePane = $state<MobilePane>(typeof window !== "undefined" && mobileApp() ? "servers" : "room");
-  const swipePanes = mobilePaneSwipe(() => mobilePane, openWorkspace);
+  const swipePanes = mobilePaneSwipe(() => onWorkspace ? mobilePane : "settings", (pane) => {
+    if (pane === "settings") void goto(resolve("/settings"));
+    else openWorkspace(pane);
+  });
   let roomView = $state<RoomView>("chat");
   let screenShareViewerTarget = $state<HTMLElement>();
   let screenShareControlsTarget = $state<HTMLElement>();
@@ -527,7 +530,10 @@
     const previous = entry.view;
     const channel = state.snapshot?.channelId;
     if (origin === serverOrigin && channel && channel !== previous.snapshot?.channelId) selectedChannelId = channel;
-    if (notify) announceRoomChanges(previous.snapshot, state.snapshot);
+    if (notify) {
+      announceOwnChanges(previous, state);
+      announceRoomChanges(previous.snapshot, state.snapshot);
+    }
     if (notify && state.lastPoke && state.lastPoke.id !== previous.lastPoke?.id) {
       poke = { ...state.lastPoke, origin };
       playUiSound("poke");
@@ -556,6 +562,23 @@
       for (const receive of directChangeListeners) receive(origin, state.snapshot.connectionId, state.directChange);
     }
     updateTalkContext();
+  }
+
+  /**
+   * Cues joining, switching and leaving channels and losing the server from the snapshot, so a
+   * move, kick or ban by an admin sounds the same as doing it yourself. Leaving another server's
+   * channel to join one here stays silent.
+   */
+  function announceOwnChanges(before: VoiceState, after: VoiceState) {
+    if (before.phase === "online" && after.phase !== "online") {
+      playUiSound("disconnect");
+      return;
+    }
+    const was = before.snapshot;
+    const now = after.snapshot;
+    if (!was || !now || was.connectionId !== now.connectionId || was.channelId === now.channelId) return;
+    if (now.channelId) playUiSound("channel");
+    else if (pending !== "join") playUiSound("disconnect");
   }
 
   /**
@@ -608,16 +631,16 @@
     if (origin) void preferences.local.put({ key: focusKey, value: origin }).catch(() => {});
   }
 
-  /** Connects to every saved server that is not already connected. */
+  /** Connects to every saved server that allows auto-connect and is not already connected. */
   async function connectSaved() {
     await restored;
     if (!identityReady) return;
     if (!serverOrigin) {
       const preferred = await preferences.local.get(focusKey).then((entry) => entry?.value).catch(() => undefined);
-      const entry = savedServers.find(({ origin }) => origin === preferred) ?? savedServers[0];
+      const entry = savedServers.find(({ origin }) => origin === preferred) ?? savedServers.find((saved) => saved.autoConnect !== false) ?? savedServers[0];
       if (entry && !serverOrigin) serverOrigin = entry.origin;
     }
-    await Promise.all(savedServers.map(({ origin }) => autoConnect(origin)));
+    await Promise.all(savedServers.filter((entry) => entry.autoConnect !== false).map(({ origin }) => autoConnect(origin)));
   }
 
   /**
@@ -936,7 +959,9 @@
       });
     }
     if (remembered) {
-      const entry = { name: target.info.name, origin: target.origin, passwordRequired: target.info.passwordRequired };
+      const previous = savedServers.find(({ origin }) => origin === target.origin);
+      const entry: SavedServer = { name: target.info.name, origin: target.origin, passwordRequired: target.info.passwordRequired };
+      if (previous?.autoConnect === false) entry.autoConnect = false;
       const credential = password && password !== savedServerPassword
         ? { origin: entry.origin, serverId: target.info.serverId, password }
         : undefined;
@@ -1012,7 +1037,7 @@
 
   async function leaveVoice() {
     if (!voiceConnection) return;
-    if (await runFor(voiceConnection.origin, "leave", "leave_channel")) playUiSound("disconnect");
+    await runFor(voiceConnection.origin, "leave", "leave_channel");
   }
 
   function handleShortcut(event: KeyboardEvent) {
@@ -1034,9 +1059,10 @@
       if (command === "delete_channel") return session.deleteChannel(args?.channelId as string);
       if (command === "leave_channel") return session.leaveChannel();
       if (command === "set_presence") return session.setPresence(args);
-      if (command === "send_message") return session.sendMessage(args?.channelId as string, args?.text as string, args?.html as string | undefined);
+      if (command === "send_message") return session.channel(args?.channelId as string).send({ text: args?.text as string, html: args?.html as string | undefined });
       if (command === "edit_message") return session.editMessage(args?.messageId as string, args?.text as string);
       if (command === "delete_message") return session.deleteMessage(args?.messageId as string);
+      if (command === "pin_message") return session.setMessagePin(args?.channelId as string, args?.messageId as string, args?.pinned === true);
       throw new Error("Open Korero.chat in the desktop app to use voice.");
     });
   }
@@ -1168,13 +1194,24 @@
       actions.push({ label: "Connection info", onSelect: () => showConnectionInfo(connectionId) });
       if (canAdminister) actions.push({ label: "Server settings", onSelect: showServerSettings });
     }
-    if (!savedServers.some(({ origin }) => origin === entry.origin)) return actions;
+    const saved = savedServers.find(({ origin }) => origin === entry.origin);
+    if (!saved) return actions;
+    const autoConnect = saved.autoConnect !== false;
+    actions.push({ label: autoConnect ? "Disable auto-connect" : "Enable auto-connect", onSelect: () => setAutoConnect(entry.origin, !autoConnect) });
     actions.push({ label: "Remove server", onSelect: () => {
       removingServer = entry;
       removeError = "";
       removeServerOpen = true;
     } });
     return actions;
+  }
+
+  function setAutoConnect(origin: string, enabled: boolean) {
+    void updateSavedServers((servers) => servers.map((server) => {
+      if (server.origin !== origin) return server;
+      const { autoConnect: _, ...rest } = server;
+      return enabled ? rest : { ...rest, autoConnect: false };
+    })).catch((error) => { actionError = messageFrom(error); });
   }
 
   async function removeServer() {
@@ -1202,13 +1239,17 @@
 <svelte:window bind:innerWidth={viewport} onkeydown={handleShortcut} onkeyup={audio.talkKeyUp} onblur={audio.talkWindowBlur}
   onfocus={refreshHostedAccount} />
 
+{#if import.meta.env.DEV && !(pictureInPicture && voiceConnection)}
+  <div class="dev-banner" role="note">Development build — not for production use</div>
+{/if}
+
 {#if pictureInPicture && voiceConnection}
   <CallPictureInPicture origin={voiceConnection.origin} view={voiceConnection.view} />
 {/if}
 
 <div class="shell" hidden={pictureInPicture && Boolean(voiceConnection)} data-pane={onWorkspace ? mobilePane : "room"} data-workspace={onWorkspace} data-mobile-voice={mobileVoice}
   style:--rail-width={railWidth + "px"} style:--channel-width={channelWidth + "px"}
-  {@attach onWorkspace && viewport <= 760 ? swipePanes : undefined}>
+  {@attach viewport <= 760 ? swipePanes : undefined}>
   <ServerRail servers={railServers} {identityReady} {connectBusy} {pending} {username} {me} {online} {status}
     onconnect={() => showConnect()} onselect={selectServer} ondisconnect={(origin) => { void disconnect(origin); }} />
   <PaneDivider label="Resize server sidebar" controls="server-rail" value={railWidth} min={180} max={railMax} resize={(value, commit) => resizePane("rail", value, commit)} />

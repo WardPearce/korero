@@ -6,7 +6,7 @@ RUN apt-get update \
 COPY backend/package.json backend/bun.lock ./
 RUN bun install --frozen-lockfile --production --ignore-scripts
 COPY backend/src/security/files.ts ./src/security/files.ts
-COPY backend/scripts/worker.ts ./scripts/worker.ts
+COPY backend/scripts/worker.ts backend/scripts/worker-rtp-limits.hpp ./scripts/
 RUN bun run prepare:worker
 COPY backend/src ./src
 COPY backend/scripts ./scripts

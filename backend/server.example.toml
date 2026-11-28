@@ -57,7 +57,7 @@ image_hosts = []
 # New hosted account policy. Valid: "open" (anyone may create one) or "closed" (existing
 # hosted accounts can still sign in and update). Independent of server.registration and
 # server.password: those apply to voice server accounts only. Set with
-# VOICE_REMOTE_ACCOUNT_HOST_REGISTRATION. Capacity is limited by limits.hosted_accounts.
+# VOICE_REMOTE_ACCOUNT_HOST_REGISTRATION. Capacity is limited by account count and stored bytes.
 registration = "closed"
 
 # ---------------------------------------------------------------------------
@@ -105,6 +105,12 @@ port = 8444
 workers = 1
 # Target audio bitrate in bits per second. Valid: 32000-128000 (32-128 kbit/s).
 target_audio_bitrate = 64000
+# Hard incoming RTP ceiling per microphone or whisper transport, in bits per second,
+# including packet overhead. Valid: 192000-1000000.
+max_audio_ingress_bitrate = 256000
+# Hard outgoing RTP ceiling across workers, in bits per second. Divided equally among
+# workers. Valid: 10000000-10000000000.
+max_rtp_egress_bitrate = 250000000
 # Offer UDP media candidates. Valid: true or false; at least one of enable_udp/enable_tcp
 # must be true.
 enable_udp = true
@@ -197,6 +203,18 @@ registration_per_minute = 12
 upgrades_per_minute = 60
 # Maximum hosted accounts this server stores as an account provider. Valid: 1-10000000.
 hosted_accounts = 10000
+# Hosted profile budget in bytes, including a 256-byte allowance per account.
+# Valid: 1-1099511627776. Existing profiles count toward this budget.
+hosted_account_bytes = 1073741824
+# Maximum concurrent hosted registration and update body reads. A single source can
+# use up to a quarter of these slots, rounded down with a minimum of one. Valid: 1-128.
+hosted_account_requests_concurrent = 16
+# Display-name updates per account per minute. Valid: 1-1000.
+profile_updates_per_minute = 10
+# Audit history is trimmed by both row count and age. Valid: 1-10000000 events and
+# 1-87600 hours.
+audit_events = 100000
+audit_retention_hours = 2160
 
 # ---------------------------------------------------------------------------
 # Chat messaging.

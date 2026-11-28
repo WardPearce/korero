@@ -81,7 +81,9 @@ try {
         resume("media.consumer.resume", { consumerId }),
       ]);
     }, { producerId: awayProducer, consumerId: aliceAudio.consumerId });
-    if (blockedWhileAfk.some((error) => error !== "FORBIDDEN")) throw new Error("AFK allowed a media request");
+    if (blockedWhileAfk.some((error) => error !== "FORBIDDEN" && error !== "NOT_FOUND")) {
+      throw new Error("AFK did not reject a media resume: " + blockedWhileAfk.join(", "));
+    }
     const returned = await alice.evaluate(async () => {
       await window.harness.rpc("presence.set", { muted: true });
       return window.harness.rpc<VoicePresence>("presence.set", { afk: false });

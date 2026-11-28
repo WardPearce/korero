@@ -4,6 +4,27 @@ import { LOBBY } from "../../src/database";
 
 const base = "/api/v1/auth/";
 
+test("login challenges echo the requested origin and verify the enrolled origin after proof", async () => {
+  const server = await fixture();
+  try {
+    const enrolled = testIdentity();
+    const member = await server.register("Existing member", enrolled);
+    const alternate = `https://localhost:${server.port}`;
+    for (const identity of [enrolled, testIdentity()]) {
+      const { response, payload } = await server.call<{ origin: string }>(base + "identity/challenge", {
+        operation: "login", publicKey: identity.publicKey.export({ format: "jwk" }).x!,
+        deviceName: "Test", origin: alternate,
+      });
+      expect(response.status).toBe(200);
+      expect(payload.origin).toBe(alternate);
+    }
+    const differentOrigin = await server.proof("login", enrolled, "Test", alternate);
+    expect((await server.fail(base + "identity/login", differentOrigin)).status).toBe(401);
+    const sameOrigin = await server.proof("login", enrolled);
+    expect((await server.call<Device>(base + "identity/login", sameOrigin)).payload.account.id).toBe(member.account.id);
+  } finally { await server.cleanup(); }
+});
+
 test("valid refresh and ticket issuance have capacity after the public authentication quota is used", async () => {
   const server = await fixture({ environment: { VOICE_LIMITS_AUTH_PER_MINUTE: "4" } });
   try {
@@ -172,3 +193,30 @@ test("access tokens expire independently and device sessions enforce expiry", as
     expect((await server.fail(base + "refresh", { refreshToken: fresh.payload.refreshToken })).status).toBe(401);
   } finally { await server.cleanup(); }
 }, 12000);
+
+test("accounts carry every role they hold, ordered by rank", async () => {
+  const server = await fixture();
+  try {
+    const newcomer = await server.register("Newcomer");
+    expect(newcomer.account).toMatchObject({ role: "Member", roles: ["Member"] });
+    expect((await server.call<Device["account"]>("/api/v1/account", undefined, newcomer.accessToken)).payload.roles).toEqual(["Member"]);
+
+    const owner = await server.owner();
+    expect(owner.account).toMatchObject({ role: "Owner", roles: ["Owner", "Member"] });
+
+    await server.call("/api/v1/admin/roles", { name: "Visitor", permissions: ["join"] }, owner.accessToken);
+    expect((await server.call("/api/v1/admin/preferences", { defaultRole: "Visitor" }, owner.accessToken, "PATCH")).response.status).toBe(200);
+    const visitor = await server.register("Visitor account");
+    expect(visitor.account).toMatchObject({ role: "Visitor", roles: ["Visitor", "Guest"] });
+  } finally { await server.cleanup(); }
+});
+
+test("bootstrapping an existing account adds Owner without dropping its roles", async () => {
+  const server = await fixture();
+  try {
+    const identity = testIdentity();
+    await server.register("Promoted", identity);
+    const owner = await server.owner(identity);
+    expect(owner.account).toMatchObject({ role: "Owner", roles: ["Owner", "Member"] });
+  } finally { await server.cleanup(); }
+});

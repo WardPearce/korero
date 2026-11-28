@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Pin } from "@lucide/svelte";
   import type { Snippet } from "svelte";
   import Avatar from "#lib/components/Avatar.svelte";
   import { getChatDisplay } from "#lib/chat/chat-display";
@@ -9,8 +10,11 @@
 
   type MessageHeader = { senderId: string; createdAt: number; editedAt?: number | null };
 
-  let { message, previous, name, showProfilePicture = true, editText, editLimit = 2000, onedit, ondelete, children }: {
+  let { message, messageId, highlighted = false, pinned = false, previous, name, showProfilePicture = true, editText, editLimit = 2000, onedit, ondelete, onpin, children }: {
     message: MessageHeader;
+    messageId?: string;
+    highlighted?: boolean;
+    pinned?: boolean;
     previous?: MessageHeader;
     name: string;
     showProfilePicture?: boolean;
@@ -19,6 +23,7 @@
     editLimit?: number;
     onedit?: (text: string) => Promise<void>;
     ondelete?: () => Promise<void>;
+    onpin?: () => void;
     children: Snippet;
   } = $props();
 
@@ -28,7 +33,7 @@
   let busy = $state(false);
   let error = $state("");
   const canEdit = $derived(editText !== undefined && Boolean(onedit));
-  const hasActions = $derived(canEdit || Boolean(ondelete));
+  const hasActions = $derived(canEdit || Boolean(ondelete) || Boolean(onpin));
 
   function startEditing() {
     draft = editText ?? "";
@@ -87,7 +92,8 @@
 </script>
 
 {#snippet article(props: Record<string, unknown> = {})}
-  <article {...props} class={["chat-message", { compact, grouped, "with-avatar": display.value.showAvatars }]}>
+  <article {...props} id={messageId && `chat-message-${messageId}`}
+    class={["chat-message", { compact, grouped, highlighted, "with-avatar": display.value.showAvatars }]}>
     {#if display.value.showAvatars && !grouped}
       <Avatar {name} accountId={showProfilePicture ? message.senderId : undefined} small={compact} />
     {/if}
@@ -99,6 +105,9 @@
         {/if}
       </div>
       <div class="chat-body">
+        {#if pinned}
+          <span class="mb-0.5 flex items-center gap-1 text-xs text-muted-foreground"><Pin size={12} aria-hidden="true" /> Pinned</span>
+        {/if}
         {#if editing}
           <form class="chat-edit" onsubmit={saveEdit}>
             <textarea bind:value={draft} {@attach focusField} onkeydown={editKeys} rows="2" maxlength={editLimit}
@@ -128,6 +137,9 @@
     </ContextMenu.Trigger>
     <ContextMenu.Content class="max-w-[calc(100vw-1rem)]">
       {#if canEdit}<ContextMenu.Item onSelect={startEditing}>Edit message</ContextMenu.Item>{/if}
+      {#if onpin}
+        <ContextMenu.Item disabled={busy} onSelect={onpin}>{pinned ? "Unpin message" : "Pin message"}</ContextMenu.Item>
+      {/if}
       {#if ondelete}
         <ContextMenu.Item variant="destructive" onSelect={() => { error = ""; confirmingDelete = true; }}>Delete message</ContextMenu.Item>
       {/if}
@@ -156,6 +168,7 @@
     padding: calc(var(--ui-gap) * .55) var(--ui-gap);
   }
   .chat-message:hover { background: var(--control-hover); }
+  .chat-message.highlighted { background: var(--control-hover); box-shadow: inset 3px 0 var(--primary); }
   .chat-message.compact {
     --chat-avatar-size: 1.5rem;
     gap: 6px;

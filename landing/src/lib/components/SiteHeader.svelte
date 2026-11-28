@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { openDownloadDialog } from '#lib/download-dialog.js';
 </script>
 
@@ -13,13 +14,17 @@
 	class="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur-md supports-[not(backdrop-filter:blur(0))]:bg-background"
 >
 	<div class="mx-auto flex max-w-6xl items-center justify-between gap-6 px-6 py-3.5">
-		<a href="/" aria-label="Kōrero home">
+		<a href={resolve('/')} aria-label="Kōrero home">
 			<img src="/korero-logo.svg" alt="Kōrero." class="h-6" />
 		</a>
-		<nav aria-label="Primary" class="flex items-center gap-6 text-sm text-muted-foreground">
-			<a href="/#features" class="hover:text-foreground max-sm:hidden">Features</a>
-			<a href="/host" class="hover:text-foreground max-sm:hidden">Host a server</a>
-			<a href="/protocol" class="hover:text-foreground max-sm:hidden">Protocol</a>
+		<nav
+			aria-label="Primary"
+			class="flex items-center gap-4 text-sm text-muted-foreground sm:gap-6"
+		>
+			<a href={resolve('/#features')} class="hover:text-foreground max-sm:hidden">Features</a>
+			<a href={resolve('/host')} class="hover:text-foreground max-sm:hidden">Host a server</a>
+			<a href={resolve('/protocol')} class="hover:text-foreground max-sm:hidden">Protocol</a>
+			<a href={resolve('/sdk')} class="hover:text-foreground">SDK</a>
 			<a
 				href="https://github.com/WardPearce/korero"
 				target="_blank"
@@ -35,7 +40,7 @@
 				</svg>
 			</a>
 			<a
-				href="/#get"
+				href={resolve('/#get')}
 				class="rounded-lg bg-primary px-3.5 py-1.5 font-medium text-primary-foreground hover:brightness-110"
 				onclick={(event) => {
 					event.preventDefault();

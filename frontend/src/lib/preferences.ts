@@ -1,9 +1,11 @@
+import type { DeviceIdentity } from "korero-chat/source";
 import Dexie, { type Table } from "dexie";
 import type { ScreenPlayback } from "./media/screen-popout";
 import type { TalkShortcut } from "./media/talk-shortcut";
 
-export interface SavedServer { origin: string; name: string; passwordRequired?: boolean }
-export interface DeviceIdentity { publicKey: string; privateKey: string }
+/** `autoConnect` is absent for servers that connect on startup; `false` opts a server out. */
+export interface SavedServer { origin: string; name: string; passwordRequired?: boolean; autoConnect?: boolean }
+export type { DeviceIdentity };
 export interface TrustRecord { origin: string; fingerprint: string }
 type PasswordKey = [origin: string, serverId: string, channelId: string];
 interface SavedPassword { origin: string; serverId: string; channelId: string; password: string }
@@ -59,6 +61,10 @@ export async function getLocalBookmarkPasswords(servers: SavedServer[]) {
   const origins = servers.map(({ origin }) => origin);
   const records = await preferences.passwords.where("origin").anyOf(origins).and(({ channelId }) => !channelId).toArray();
   return records.map(({ origin, serverId, password }) => ({ origin, serverId, password }));
+}
+
+export async function saveBookmarkPasswords(entries: { origin: string; serverId: string; password: string }[]) {
+  if (entries.length) await preferences.passwords.bulkPut(entries.map((entry) => ({ ...entry, channelId: "" })));
 }
 
 export function savePassword(origin: string, serverId: string, password: string, channelId = "") {

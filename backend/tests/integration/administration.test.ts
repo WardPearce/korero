@@ -4,12 +4,14 @@ import { join } from "node:path";
 import { fixture, testIdentity, until, type Device, type Snapshot } from "../server";
 import { LOBBY } from "../../src/database";
 
+const accountRoles = "/api/v1/admin/accounts/roles";
+
 test("channel permission changes respect the caller's access throughout the affected subtree", async () => {
   const server = await fixture();
   try {
     const owner = await server.owner();
     const admin = await server.register("Administrator");
-    await server.call("/api/v1/admin/roles", { accountId: admin.account.id, role: "Administrator" }, owner.accessToken, "PATCH");
+    await server.call("/api/v1/admin/accounts/roles", { accountId: admin.account.id, role: "Administrator" }, owner.accessToken, "POST");
     const ownerWs = await server.ws(owner);
     const adminWs = await server.ws(admin);
     const { channelId: parent } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Parent" });
@@ -49,20 +51,24 @@ test("role administration requires a lower rank and control of current and propo
     const roles = "/api/v1/admin/roles";
     const definition = `${roles}/definition`;
     const assign = (actor: Device, target: Device, role: string) =>
-      server.fail(roles, { accountId: target.account.id, role }, actor.accessToken, "PATCH");
+      server.fail(accountRoles, { accountId: target.account.id, role }, actor.accessToken, "POST");
+    const revoke = (actor: Device, target: Device, role: string) =>
+      server.fail(accountRoles, { accountId: target.account.id, role }, actor.accessToken, "DELETE");
     const delegator = { name: "Role manager", permissions: ["join", "manageRoles"] };
     const reader = { name: "Reader", permissions: ["join"] };
     expect((await assign(owner, admin, "Administrator")).status).toBe(200);
     expect((await assign(owner, moderator, "Moderator")).status).toBe(200);
     expect((await assign(owner, guest, "Guest")).status).toBe(200);
+    expect((await revoke(owner, guest, "Member")).status).toBe(200);
     expect((await server.fail(roles, delegator, owner.accessToken)).status).toBe(200);
     expect((await assign(owner, delegate, delegator.name)).status).toBe(200);
     expect((await assign(delegate, delegate, "Guest")).status).toBe(403);
-    expect((await assign(delegate, moderator, "Guest")).status).toBe(403);
+    // Removing a role requires holding its grants.
+    expect((await revoke(delegate, moderator, "Moderator")).status).toBe(403);
     expect((await assign(delegate, guest, "Moderator")).status).toBe(403);
     expect((await server.fail(definition, { ...delegator, permissions: ["join"] }, delegate.accessToken, "PATCH")).status).toBe(403);
     const delegateWs = await server.ws(delegate);
-    await expect(delegateWs.rpc("role.set", { accountId: moderator.account.id, role: "Guest" })).rejects.toThrow("FORBIDDEN");
+    await expect(delegateWs.rpc("role.remove", { accountId: moderator.account.id, role: "Moderator" })).rejects.toThrow("FORBIDDEN");
 
     expect((await server.fail(roles, reader, admin.accessToken)).status).toBe(200);
     const ownerWs = await server.ws(owner);
@@ -70,7 +76,7 @@ test("role administration requires a lower rank and control of current and propo
     await ownerWs.rpc("channel.override", { channelId, role: "Administrator", permission: "text", allow: false });
     expect((await server.fail(definition, { ...reader, permissions: ["join", "text"] }, admin.accessToken, "PATCH")).status).toBe(403);
     expect((await assign(admin, guest, reader.name)).status).toBe(200);
-    expect((await assign(owner, guest, "Guest")).status).toBe(200);
+    expect((await revoke(owner, guest, reader.name)).status).toBe(200);
     await ownerWs.rpc("channel.override", { channelId, role: reader.name, permission: "text", allow: true });
     expect((await assign(admin, guest, reader.name)).status).toBe(403);
     expect((await server.fail(definition, reader, admin.accessToken, "PATCH")).status).toBe(403);
@@ -84,7 +90,7 @@ test("bans are audited and accounts that can ban others cannot be banned", async
   try {
     const owner = await server.owner();
     const admin = await server.register("Administrator");
-    await server.call("/api/v1/admin/roles", { accountId: admin.account.id, role: "Administrator" }, owner.accessToken, "PATCH");
+    await server.call("/api/v1/admin/accounts/roles", { accountId: admin.account.id, role: "Administrator" }, owner.accessToken, "POST");
     const member = await server.register("Member");
 
     const ownerWs = await server.ws(owner);
@@ -102,11 +108,27 @@ test("bans are audited and accounts that can ban others cannot be banned", async
         expect.objectContaining({ action: "moderation.ban", targetId: member.account.id }),
       ]));
 
+      type AccountPage = { accounts: { id: string; banned: boolean; bannedUntil: number | null }[] };
+      const listed = async () => (await server.call<AccountPage>("/api/v1/admin/accounts", undefined, owner.accessToken))
+        .payload.accounts.find(({ id }) => id === member.account.id);
+      expect(await listed()).toEqual(expect.objectContaining({ banned: true, bannedUntil: null }));
+
       // Unbanning is audited too.
       await adminWs.rpc("moderation.unban", { accountId: member.account.id });
       expect(await moderation()).toEqual(expect.arrayContaining([
         expect.objectContaining({ action: "moderation.unban", targetId: member.account.id }),
       ]));
+      expect(await listed()).toEqual(expect.objectContaining({ banned: false, bannedUntil: null }));
+
+      // A timed ban reports its expiry and lifts itself once it passes.
+      const before = Date.now();
+      await adminWs.rpc("moderation.ban", { accountId: member.account.id, expiresInSeconds: 1 });
+      const timed = await listed();
+      expect(timed?.banned).toBe(true);
+      expect(timed?.bannedUntil).toBeGreaterThanOrEqual(before + 1000);
+      expect(timed?.bannedUntil).toBeLessThanOrEqual(Date.now() + 1000);
+      await Bun.sleep(1100);
+      expect(await listed()).toEqual(expect.objectContaining({ banned: false, bannedUntil: null }));
     } finally {
       ownerWs.close();
       adminWs.close();
@@ -124,8 +146,9 @@ test("built-in role permissions apply to connected accounts and protect the regi
     const roles = "/api/v1/admin/roles";
     const edit = (name: string, permissions: string[], token = owner.accessToken) =>
       server.call(`${roles}/definition`, { name, permissions }, token, "PATCH");
-    const assign = (accountId: string, role: string) => server.call(roles, { accountId, role }, owner.accessToken, "PATCH");
+    const assign = (accountId: string, role: string) => server.call(accountRoles, { accountId, role }, owner.accessToken, "POST");
     expect((await assign(guest.account.id, "Guest")).response.status).toBe(200);
+    expect((await server.call(accountRoles, { accountId: guest.account.id, role: "Member" }, owner.accessToken, "DELETE")).response.status).toBe(200);
     expect((await edit("Member", ["join", "kick"])).response.status).toBe(409);
     expect((await edit("Administrator", ["join"])).response.status).toBe(403);
     expect((await edit("Owner", ["join"])).response.status).toBe(403);
@@ -189,13 +212,13 @@ test("identity enrollment, role hierarchy, and server administration are enforce
     const aliceIdentity = testIdentity();
     const alice = await server.register("Alice", aliceIdentity);
     const roles = "/api/v1/admin/roles";
-    expect((await server.fail(roles, { accountId: owner.account.id, role: "Member" }, owner.accessToken, "PATCH")).status).toBe(403);
-    const grant = await server.call(roles, { accountId: alice.account.id, role: "Administrator" }, owner.accessToken, "PATCH");
+    expect((await server.fail(accountRoles, { accountId: owner.account.id, role: "Member" }, owner.accessToken, "POST")).status).toBe(403);
+    const grant = await server.call(accountRoles, { accountId: alice.account.id, role: "Administrator" }, owner.accessToken, "POST");
     expect(grant.response.status).toBe(200);
-    expect((await server.fail(roles, { accountId: owner.account.id, role: "Member" }, alice.accessToken, "PATCH")).status).toBe(403);
+    expect((await server.fail(accountRoles, { accountId: owner.account.id, role: "Member" }, alice.accessToken, "POST")).status).toBe(403);
     const accounts = await server.call("/api/v1/admin/accounts", undefined, alice.accessToken);
     expect(accounts.payload).toMatchObject({ accounts: expect.arrayContaining([{ id: owner.account.id,
-      displayName: "Operator", role: "Owner", badge: null, editable: false, bannable: false, banned: false }]) });
+      displayName: "Operator", role: "Owner", roles: ["Owner", "Member"], badge: null, editable: false, bannable: false, banned: false, bannedUntil: null }]) });
 
     const configPath = "/api/v1/admin/configuration";
     const file = join(server.directory, "server.toml");
@@ -231,7 +254,7 @@ test("the server counts unique accounts and shares badges from authorized accoun
     const admin = await server.register("Administrator");
     const identity = testIdentity();
     const member = await server.register("Member", identity);
-    await server.call("/api/v1/admin/roles", { accountId: admin.account.id, role: "Administrator" }, owner.accessToken, "PATCH");
+    await server.call("/api/v1/admin/accounts/roles", { accountId: admin.account.id, role: "Administrator" }, owner.accessToken, "POST");
     const badges = "/api/v1/admin/badges";
     const target = { accountId: member.account.id, badge: "  Event host  " };
     expect((await server.fail(badges, { ...target, accountId: admin.account.id }, member.accessToken, "PATCH")).status).toBe(403);
@@ -304,14 +327,16 @@ test("custom role grants, server presentation, and channel order are enforced an
     const admin = await server.register("Administrator");
     const member = await server.register("Listener");
     const roles = "/api/v1/admin/roles";
-    await server.call(roles, { accountId: admin.account.id, role: "Administrator" }, owner.accessToken, "PATCH");
+    await server.call(accountRoles, { accountId: admin.account.id, role: "Administrator" }, owner.accessToken, "POST");
     const role = { name: "Listener", permissions: ["join", "manageRoles"] };
     expect((await server.fail(roles, role, member.accessToken)).status).toBe(403);
     expect((await server.call(roles, role, admin.accessToken)).payload).toEqual(role);
     expect((await server.fail(roles, { ...role, name: "administrator" }, admin.accessToken)).status).toBe(409);
-    expect((await server.call(roles, { accountId: member.account.id, role: role.name }, admin.accessToken, "PATCH")).response.status).toBe(200);
+    expect((await server.call(accountRoles, { accountId: member.account.id, role: role.name }, admin.accessToken, "POST")).response.status).toBe(200);
+    expect((await server.call(accountRoles, { accountId: member.account.id, role: "Guest" }, admin.accessToken, "POST")).response.status).toBe(200);
+    expect((await server.call(accountRoles, { accountId: member.account.id, role: "Member" }, admin.accessToken, "DELETE")).response.status).toBe(200);
     expect((await server.fail(roles, { ...role, name: "Other role" }, member.accessToken)).status).toBe(403);
-    expect((await server.fail(roles, { accountId: admin.account.id, role: "Guest" }, member.accessToken, "PATCH")).status).toBe(403);
+    expect((await server.fail(accountRoles, { accountId: admin.account.id, role: "Guest" }, member.accessToken, "POST")).status).toBe(403);
 
     const adminWs = await server.ws(admin);
     const memberWs = await server.ws(member);
@@ -351,7 +376,7 @@ test("channel deletion uses its own grant and protects the Lobby and parents wit
     const name = "Channel moderator";
     const permissions = ["join", "deleteChannels"];
     expect((await server.call(roles, { name, permissions }, owner.accessToken)).response.status).toBe(200);
-    expect((await server.call(roles, { accountId: member.account.id, role: name }, owner.accessToken, "PATCH")).response.status).toBe(200);
+    expect((await server.call(accountRoles, { accountId: member.account.id, role: name }, owner.accessToken, "POST")).response.status).toBe(200);
 
     const ownerWs = await server.ws(owner);
     const memberWs = await server.ws(member);
@@ -384,7 +409,7 @@ test("channel moves preserve subtrees and enforce destination permissions and de
     const owner = await server.owner();
     const admin = await server.register("Administrator");
     const member = await server.register("Listener");
-    await server.call("/api/v1/admin/roles", { accountId: admin.account.id, role: "Administrator" }, owner.accessToken, "PATCH");
+    await server.call("/api/v1/admin/accounts/roles", { accountId: admin.account.id, role: "Administrator" }, owner.accessToken, "POST");
     const ownerWs = await server.ws(owner);
     const adminWs = await server.ws(admin);
     const memberWs = await server.ws(member);
@@ -406,6 +431,8 @@ test("channel moves preserve subtrees and enforce destination permissions and de
     const override = (channelId: string, role: string, permission: string, allow: boolean) =>
       ownerWs.rpc("channel.override", { channelId, role, permission, allow });
     await override(destination, "Member", "join", false);
+    // Administrators also hold Member, so they need their own allow to keep reaching the channel.
+    await override(destination, "Administrator", "join", true);
     await memberWs.rpc("channel.join", { channelId: child });
     expect((await order(source, destination, "inside")).response.status).toBe(200);
     await until(() => memberWs.received.some(({ type, payload }) => type === "channel.changed" && payload.channelId === null), Boolean);
@@ -417,7 +444,7 @@ test("channel moves preserve subtrees and enforce destination permissions and de
     const editor = await server.register("Channel editor");
     const roles = "/api/v1/admin/roles";
     expect((await server.call(roles, { name: "Editor", permissions: ["join", "editChannels"] }, owner.accessToken)).response.status).toBe(200);
-    await server.call(roles, { accountId: editor.account.id, role: "Editor" }, owner.accessToken, "PATCH");
+    await server.call(accountRoles, { accountId: editor.account.id, role: "Editor" }, owner.accessToken, "POST");
     const editorWs = await server.ws(editor);
     expect((await server.fail("/api/v1/channels/order", { channelId: source, targetId: destination, placement: "before", parentId: null },
       editor.accessToken, "PATCH")).status).toBe(403);
@@ -437,7 +464,7 @@ test("channel moves preserve subtrees and enforce destination permissions and de
 });
 
 test("live server preferences and paged audit history enforce role permissions", async () => {
-  const server = await fixture();
+  const server = await fixture({ environment: { VOICE_LIMITS_PROFILE_UPDATES_PER_MINUTE: "120" } });
   try {
     const owner = await server.owner();
     const member = await server.register("Existing member");
@@ -493,7 +520,8 @@ test("live server preferences and paged audit history enforce role permissions",
 
     await save({ defaultRole: "Member", defaultAudioBitrate: null, motd: "" });
     expect((await remove(listener.name)).response.status).toBe(409);
-    await server.call(roles, { accountId: registered.account.id, role: "Member" }, owner.accessToken, "PATCH");
+    await server.call(accountRoles, { accountId: registered.account.id, role: "Member" }, owner.accessToken, "POST");
+    await server.call(accountRoles, { accountId: registered.account.id, role: listener.name }, owner.accessToken, "DELETE");
     expect((await remove(listener.name)).response.status).toBe(200);
     expect(await ownerWs.rpc("state.get")).toMatchObject({ motd: "", targetAudioBitrate: 64000 });
     for (let index = 0; index < 101; index++) {
@@ -570,7 +598,7 @@ test("channel permission settings list and apply per-role overrides over HTTP", 
     const owner = await server.owner();
     const moderator = await server.register("Moderator");
     const member = await server.register("Member");
-    await server.call("/api/v1/admin/roles", { accountId: moderator.account.id, role: "Moderator" }, owner.accessToken, "PATCH");
+    await server.call("/api/v1/admin/accounts/roles", { accountId: moderator.account.id, role: "Moderator" }, owner.accessToken, "POST");
     const ownerWs = await server.ws(owner);
     const memberWs = await server.ws(member);
     const { channelId: parent } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Staff" });

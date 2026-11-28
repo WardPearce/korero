@@ -27,10 +27,13 @@ export const hostedAccounts = sqliteTable("hosted_accounts", {
   encryptedData: text("encrypted_data").notNull(),
   revision: integer().notNull(),
 });
+export const hostedAccountUsage = sqliteTable("hosted_account_usage", {
+  id: integer().primaryKey(), bytes: integer().notNull(),
+}, (table) => [check("hosted_account_usage_singleton", sql`${table.id} = 1`)]);
 export const accountRoles = sqliteTable("account_roles", {
-  accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
   role: text().notNull().references(() => rolesTable.name),
-}, (table) => [index("account_roles_role").on(table.role)]);
+}, (table) => [primaryKey({ columns: [table.accountId, table.role] }), index("account_roles_role").on(table.role)]);
 export const accountIdentities = sqliteTable("account_identities", {
   accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
   publicKey: text("public_key").unique().notNull(),
@@ -74,10 +77,11 @@ export const bans = sqliteTable("bans", {
 export const messages = sqliteTable("messages", {
   id: text().primaryKey(), channelId: text("channel_id").references(() => channels.id, { onDelete: "cascade" }),
   senderId: text("sender_id").notNull().references(() => accounts.id), recipientId: text("recipient_id").references(() => accounts.id),
-  text: text().notNull(), html: text(), createdAt: integer("created_at").notNull(), editedAt: integer("edited_at"),
+  text: text().notNull(), html: text(), createdAt: integer("created_at").notNull(), editedAt: integer("edited_at"), pinnedAt: integer("pinned_at"),
 }, (table) => [
   check("message_destination", sql`(${table.channelId} IS NULL) != (${table.recipientId} IS NULL)`),
   index("messages_channel").on(table.channelId, table.createdAt, table.id),
+  index("messages_pins").on(table.channelId, table.pinnedAt, table.id).where(sql`${table.pinnedAt} IS NOT NULL`),
   index("messages_direct").on(table.senderId, table.recipientId, table.createdAt, table.id),
   index("messages_retention").on(table.createdAt),
 ]);
@@ -111,7 +115,7 @@ export const auditEvents = sqliteTable("audit", {
   id: integer().primaryKey(), actorId: text("actor_id").references(() => accounts.id), action: text().notNull(),
   targetId: text("target_id"), createdAt: integer("created_at").notNull(),
   details: text({ mode: "json" }).$type<Record<string, string | number | boolean | string[] | null>>(),
-}, (table) => [index("audit_actor").on(table.actorId, table.id)]);
+}, (table) => [index("audit_actor").on(table.actorId, table.id), index("audit_age").on(table.createdAt)]);
 export const speakingRestrictions = sqliteTable("speaking_restrictions", {
   accountId: text("account_id").primaryKey().references(() => accounts.id, { onDelete: "cascade" }),
   actorId: text("actor_id").notNull().references(() => accounts.id),

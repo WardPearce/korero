@@ -2,14 +2,17 @@ import type { Attachment } from "svelte/attachments";
 import { on } from "svelte/events";
 import type { MobilePane } from "./workspace";
 
-const panes: readonly MobilePane[] = ["servers", "channels", "room"];
+// Settings is a separate route, but on mobile it sits after the chat room in the swipe order.
+export type SwipePane = MobilePane | "settings";
+
+const panes: readonly SwipePane[] = ["servers", "channels", "room", "settings"];
 const directionThreshold = 8;
 const swipeDistance = 60;
 const horizontalRatio = 1.5;
 
 interface Gesture {
   start: Touch;
-  pane: MobilePane;
+  pane: SwipePane;
   swiping: boolean;
 }
 
@@ -20,7 +23,7 @@ function hasHorizontalScroll(target: Element, shell: HTMLElement) {
   return false;
 }
 
-export function mobilePaneSwipe(currentPane: () => MobilePane, navigate: (pane: MobilePane) => void): Attachment<HTMLElement> {
+export function mobilePaneSwipe(currentPane: () => SwipePane, navigate: (pane: SwipePane) => void): Attachment<HTMLElement> {
   return (shell) => {
     let gesture: Gesture | undefined;
 
@@ -31,7 +34,7 @@ export function mobilePaneSwipe(currentPane: () => MobilePane, navigate: (pane: 
     function start(event: TouchEvent) {
       cancel();
       const target = event.target;
-      if (event.touches.length !== 1 || !(target instanceof Element) || !target.closest(".server-rail, .channel-pane, .room-pane")) return;
+      if (event.touches.length !== 1 || !(target instanceof Element) || !target.closest(".server-rail, .channel-pane, .room-pane, .settings-shell")) return;
       if (target.closest("dialog, input, textarea, select, [contenteditable], [role='slider'], .composer, .voice-toolbar")) return;
       gesture = { start: event.touches[0], pane: currentPane(), swiping: false };
     }

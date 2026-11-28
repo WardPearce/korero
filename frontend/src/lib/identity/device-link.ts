@@ -1,11 +1,11 @@
-import type { SavedServer } from "../preferences";
+import { getLocalBookmarkPasswords, saveBookmarkPasswords, type SavedServer } from "../preferences";
 import { decodeBase64Url, encodeBase64Url, identityFromPrivateKey } from "./browser-identity";
-import { HostedAccount, isSavedServer, type HostedLink } from "./hosted-account";
+import { HostedAccount, isBookmarkPassword, isSavedServer, type BookmarkPassword, type HostedLink } from "./hosted-account";
 import { saveLocalIdentity, type LocalProfile } from "./local-identity";
 
 // A device link signs another device, such as a phone, in to the same identity.
-// A local link carries the private key, username, and saved servers. A hosted link carries the
-// provider, username, sign-in credential, and encryption key, and the new device reads the rest
+// A local link carries the private key, username, saved servers, and saved server passwords.
+// A hosted link carries the provider, username, sign-in credential, and encryption key, and the new device reads the rest
 // from the provider. The payload is encrypted with a random link code that is shown only on the
 // source device, so a photo of the QR code alone cannot be used.
 const encoder = new TextEncoder();
@@ -23,7 +23,7 @@ export type LinkedIdentity =
   | { kind: "hosted"; result: Awaited<ReturnType<typeof HostedAccount.fromLink>> };
 
 type LinkData =
-  | { v: 1; kind: "local"; username: string; privateKey: string; servers: SavedServer[] }
+  | { v: 1; kind: "local"; username: string; privateKey: string; servers: SavedServer[]; passwords?: BookmarkPassword[] }
   | ({ v: 1; kind: "hosted" } & HostedLink);
 
 export function generateLinkCode() {
@@ -53,12 +53,13 @@ async function sealLink(data: LinkData): Promise<DeviceLink> {
   const key = await linkKey(normalizeLinkCode(code), salt);
   const sealed = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData }, key, encoder.encode(JSON.stringify(data)));
   const payload = prefix + encodeBase64Url(Uint8Array.of(...salt, ...iv, ...new Uint8Array(sealed)));
-  if (payload.length > maxPayloadLength) throw new Error("This identity has too many saved servers to link by QR code.");
+  if (payload.length > maxPayloadLength) throw new Error("This identity has too many saved servers or passwords to link by QR code.");
   return { payload, code };
 }
 
-export function createLocalDeviceLink({ username, identity, servers }: LocalProfile) {
-  return sealLink({ v: 1, kind: "local", username, privateKey: identity.privateKey, servers });
+export async function createLocalDeviceLink({ username, identity, servers }: LocalProfile) {
+  const passwords = await getLocalBookmarkPasswords(servers);
+  return sealLink({ v: 1, kind: "local", username, privateKey: identity.privateKey, servers, passwords });
 }
 
 export async function createHostedDeviceLink(account: HostedAccount) {
@@ -82,7 +83,8 @@ export async function openDeviceLink(payload: string, code: string): Promise<Lin
   if (!data || typeof data !== "object") throw new Error("The device link is damaged.");
   const fields = data as Record<string, unknown>;
   if (fields.v === 1 && fields.kind === "local" && typeof fields.username === "string" &&
-      typeof fields.privateKey === "string" && Array.isArray(fields.servers) && fields.servers.every(isSavedServer)) {
+      typeof fields.privateKey === "string" && Array.isArray(fields.servers) && fields.servers.every(isSavedServer) &&
+      (fields.passwords === undefined || (Array.isArray(fields.passwords) && fields.passwords.every(isBookmarkPassword)))) {
     return data as LinkData;
   }
   if (fields.v === 1 && fields.kind === "hosted" && typeof fields.origin === "string" && typeof fields.username === "string" &&
@@ -99,5 +101,9 @@ export async function importDeviceLink(payload: string, code: string): Promise<L
     return { kind: "hosted", result: await HostedAccount.fromLink({ origin, username, credential, key }) };
   }
   const identity = identityFromPrivateKey(link.privateKey);
-  return { kind: "local", profile: await saveLocalIdentity(link.username, async () => identity, link.servers) };
+  const profile = await saveLocalIdentity(link.username, async () => identity, link.servers);
+  // Keep only passwords for servers the link also bookmarks.
+  const origins = new Set(link.servers.map(({ origin }) => origin));
+  await saveBookmarkPasswords((link.passwords ?? []).filter(({ origin }) => origins.has(origin)));
+  return { kind: "local", profile };
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { downloadFile } from "#lib/download-file";
-  import { Check, Download, Hash, Image as ImageIcon, Palette, Pencil, Plus, Send, Upload } from "@lucide/svelte";
+  import { Check, Download, Image as ImageIcon, MessageCircle, Palette, Pencil, Plus, Send, Smile, Upload } from "@lucide/svelte";
   import { onDestroy, tick } from "svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
@@ -251,24 +251,35 @@
 {#snippet channelPreview(theme: Theme, showStatuses = false)}
   <div class="sample theme-sample" data-glass={appearance.glassmorphism ? "" : undefined} data-image={theme.image ? "" : undefined} style={themeStyle(theme)} aria-label="Sample channel" role="group">
     <div class="sample-sidebar">
-      <strong>Channels</strong>
-      <span class="sample-selection"><Hash size={14} aria-hidden="true" /> General</span>
-      <span><Hash size={14} aria-hidden="true" /> Lounge</span>
+      <div class="sample-header"><strong>Korero</strong></div>
+      <div class="sample-channels">
+        <span class="sample-row" data-selected>General</span>
+        <span class="sample-row">Lounge</span>
+      </div>
     </div>
     <div class="sample-channel">
-      <div class="sample-title"><Hash size={16} aria-hidden="true" /> General</div>
-      <div class="sample-message">
-        <span class="sample-avatar" aria-hidden="true">M</span>
-        <div><strong>Moana</strong> <small>10:42 am</small><p>See you in voice.</p></div>
+      <div class="sample-header">
+        <span class="sample-heading-icon" aria-hidden="true"><MessageCircle size={15} /></span>
+        <div><small>Channel chat</small><strong>General</strong></div>
       </div>
-      <div class="sample-composer"><span>Message General</span><span><Send size={15} aria-hidden="true" /></span></div>
-      {#if showStatuses}
-        <div class="sample-statuses">
-          {#each sampleStatuses as [color, label] (color)}
-            <span style:--status={theme.colors[color]}>{label}</span>
-          {/each}
+      <div class="sample-log">
+        <div class="sample-message">
+          <span class="sample-avatar" aria-hidden="true">M</span>
+          <div><div class="sample-meta"><strong>Moana</strong> <small>10:42 am</small></div><p>See you in voice.</p></div>
         </div>
-      {/if}
+        {#if showStatuses}
+          <div class="sample-statuses">
+            {#each sampleStatuses as [color, label] (color)}
+              <span style:--status={theme.colors[color]}>{label}</span>
+            {/each}
+          </div>
+        {/if}
+      </div>
+      <div class="sample-composer">
+        <span class="sample-input">Message General</span>
+        <span class="sample-icon" aria-hidden="true"><Smile size={15} /></span>
+        <span class="sample-send" aria-hidden="true"><Send size={15} /></span>
+      </div>
     </div>
   </div>
 {/snippet}
@@ -578,43 +589,60 @@
   .sample[data-image]:not([data-glass]) .sample-sidebar {
     background: color-mix(in srgb, var(--muted) 88%, transparent);
   }
-  .sample[data-image]:not([data-glass]) .sample-message {
+  .sample[data-image]:not([data-glass]) .sample-composer {
     background: color-mix(in srgb, var(--card) 90%, transparent);
   }
-  .sample-sidebar, .sample-channel { display: grid; align-content: start; min-width: 0; gap: calc(var(--ui-gap) * .55); }
-  .sample-sidebar { padding: calc(var(--ui-gap) * .7); border-inline-end: 1px solid var(--border); background: var(--glass-panel, var(--muted)); }
-  .sample-sidebar strong { margin: .3em; font-size: .85em; color: var(--muted-foreground); }
-  .sample-sidebar > span, .sample-title { display: flex; align-items: center; gap: .35em; padding: .4em .5em; }
-  .sample-sidebar > span { font-size: .9em; color: var(--muted-foreground); }
-  .sample-sidebar > .sample-selection {
-    border-radius: var(--radius);
-    background: var(--control-selected);
-    box-shadow: inset 3px 0 var(--primary);
-    color: var(--foreground);
-  }
-  .sample-channel { padding: 0 calc(var(--ui-gap) * .7) calc(var(--ui-gap) * .7); }
-  .sample-title {
-    min-height: var(--control-height);
-    margin-inline: calc(var(--ui-gap) * -.7);
-    padding-inline: calc(var(--ui-gap) * .7);
+  /* Mirrors the real channel pane, chat header, message row and composer at preview scale. */
+  .sample-sidebar, .sample-channel { display: flex; flex-direction: column; min-width: 0; }
+  .sample-sidebar { border-inline-end: 1px solid var(--border); background: var(--glass-panel, var(--muted)); }
+  .sample-header {
+    display: flex; align-items: center; gap: .6em; min-height: 3.6em;
+    padding: .55em calc(var(--ui-gap) * .7);
     border-bottom: 1px solid var(--border);
-    font-weight: 650;
   }
-  .sample-message {
-    display: flex; align-items: start; gap: .55rem; padding: calc(var(--ui-gap) * .65);
-    border-radius: var(--radius); background: var(--glass-card, var(--card)); box-shadow: var(--glass-highlight, none);
+  .sample[data-glass] .sample-header {
+    background: var(--glass-card, transparent); border-color: var(--glass-edge, var(--border)); box-shadow: var(--glass-highlight, none);
   }
-  .sample-message > div { min-width: 0; }
-  .sample-message small { color: var(--muted-foreground); }
+  .sample-header strong { display: block; overflow: hidden; font-size: 1.05em; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+  .sample-header > div { display: grid; min-width: 0; }
+  .sample-header small { color: var(--muted-foreground); font-size: .75em; }
+  .sample-heading-icon {
+    display: grid; flex: none; place-items: center; width: 2.2em; height: 2.2em;
+    border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card);
+  }
+  .sample-channels { display: grid; gap: .4em; padding: .6em; }
+  .sample-row {
+    display: flex; align-items: center; min-height: 2.5em; min-width: 0; padding: .25em .6em .25em 1.6em;
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .sample-row[data-selected] {
+    border-color: var(--primary); background: var(--control-selected);
+    box-shadow: inset 3px 0 var(--primary); font-weight: 700;
+  }
+  .sample-log { display: grid; flex: 1; align-content: start; gap: .5em; padding-block: .35em; }
+  .sample-message { display: grid; grid-template-columns: 2em minmax(0, 1fr); align-items: start; gap: .6em; padding: .4em calc(var(--ui-gap) * .7); }
+  .sample-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 .5em; }
+  .sample-meta small { color: var(--muted-foreground); font-size: .8em; }
   .sample-avatar {
-    display: grid; flex: none; place-items: center; width: 2em; height: 2em;
-    border-radius: min(calc(var(--radius) * 2), 50%);
-    background: var(--secondary); color: var(--secondary-foreground);
+    display: grid; place-items: center; width: 2em; height: 2em;
+    border: 1px solid var(--border); border-radius: var(--avatar-radius);
+    background: var(--secondary); color: var(--secondary-foreground); font-size: 1em;
   }
-  .sample-composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; }
-  .sample-composer span { display: flex; align-items: center; gap: .5rem; min-height: var(--control-height); padding-inline: .5rem; border: 1px solid var(--input); border-radius: var(--radius); color: var(--muted-foreground); }
-  .sample-composer span:last-child { border-color: transparent; background: var(--primary); color: var(--primary-foreground); }
-  .sample-statuses { display: flex; flex-wrap: wrap; gap: .4em 1em; font-size: .8em; }
+  .sample-composer {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: .45em;
+    padding: calc(var(--ui-gap) * .6); border-top: 1px solid var(--border); background: var(--card);
+  }
+  .sample[data-glass] .sample-composer { background: var(--glass-card, var(--card)); border-color: var(--glass-edge, var(--border)); }
+  .sample-composer > span { display: flex; align-items: center; height: 2.4em; border-radius: var(--radius-md); }
+  .sample-input {
+    min-width: 0; padding-inline: .65em; border: 1px solid var(--input); background: var(--background);
+    color: var(--muted-foreground); overflow: hidden; white-space: nowrap;
+  }
+  .sample-icon, .sample-send { justify-content: center; width: 2.4em; }
+  .sample-icon { border: 1px solid var(--input); background: var(--background); }
+  .sample-send { background: var(--primary); color: var(--primary-foreground); }
+  .sample-statuses { display: flex; flex-wrap: wrap; gap: .4em 1em; padding-inline: calc(var(--ui-gap) * .7); font-size: .8em; }
   .sample-statuses span { display: inline-flex; align-items: center; gap: .35em; }
   .sample-statuses span::before { content: ""; width: .65em; height: .65em; border-radius: min(var(--radius), 50%); background: var(--status); }
   @container (max-width: 40rem) {
@@ -624,19 +652,15 @@
     .theme-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 7.5rem), 1fr)); }
     .theme-filters button { padding-inline: .4rem; font-size: var(--type-caption); }
     .sample { grid-template-columns: minmax(5.25rem, 1fr) minmax(0, 2.5fr); }
-    .sample-sidebar > span { padding-inline: .3em; }
-    .sample-sidebar :global(svg) { display: none; }
+    .sample-row { padding-inline-start: .6em; }
   }
   @container (max-width: 22.5rem) {
     .page-actions { margin-inline-start: 0; }
     .sample { grid-template-columns: minmax(0, 1fr); }
-    .sample-sidebar {
-      display: flex;
-      flex-wrap: wrap;
-      border-inline-end: 0;
-      border-bottom: 1px solid var(--border);
-    }
-    .sample-sidebar strong { display: none; }
+    .sample-sidebar { border-inline-end: 0; border-bottom: 1px solid var(--border); }
+    .sample-sidebar > .sample-header { display: none; }
+    .sample-channels { display: flex; flex-wrap: wrap; }
+    .sample-row { flex: 1; }
   }
   @container (max-width: 34rem) {
     .editor-layout { display: flex; flex-direction: column; }

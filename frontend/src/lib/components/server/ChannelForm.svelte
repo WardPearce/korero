@@ -10,6 +10,7 @@
   import { Button, buttonVariants } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
   import { Textarea } from "#lib/components/ui/textarea/index.js";
+  import { groupChannelsByParent } from "#lib/channel-tree";
   import type { Channel } from "#lib/connection/client";
   import { getWorkspace } from "#lib/workspace";
 
@@ -44,23 +45,25 @@
     ? editing.canSetAudioBitrate
     : snapshot?.serverPermissions.includes("manageSettings")));
   let canSetChannelAccess = $derived(editing?.canSetPassword !== false);
-  let possibleParents = $derived((snapshot?.channels ?? []).filter((parent, _, all) => {
-    for (let candidate: Channel | undefined = parent; candidate; candidate = all.find(({ id }) => id === candidate?.parentId)) {
-      if (candidate.temporary || candidate.id === editing?.id) return false;
-    }
-    return true;
-  }));
   const topLevel = "Top level";
   const topLevelValue = "top-level";
   const parentOptions = $derived.by(() => {
-    const options = [{ id: "", label: topLevel, value: topLevelValue }];
+    const channelsByParent = groupChannelsByParent(snapshot?.channels ?? []);
+    const options = [{ id: "", label: topLevel, value: topLevelValue, depth: 0 }];
     const labels = new Set([topLevel]);
-    for (const parent of possibleParents) {
-      let label = parent.name;
-      for (let number = 2; labels.has(label); number++) label = `${parent.name} (${number})`;
-      labels.add(label);
-      options.push({ id: parent.id, label, value: `channel:${parent.id}` });
+
+    function appendChildren(parentId: string | null, depth: number) {
+      for (const channel of channelsByParent.get(parentId) ?? []) {
+        if (channel.temporary || channel.id === editing?.id) continue;
+        let label = channel.name;
+        for (let number = 2; labels.has(label); number++) label = `${channel.name} (${number})`;
+        labels.add(label);
+        options.push({ id: channel.id, label, value: `channel:${channel.id}`, depth });
+        appendChildren(channel.id, depth + 1);
+      }
     }
+
+    appendChildren(null, 0);
     return options;
   });
   const selectedParent = $derived(parentOptions.find(({ id }) => id === parentChannelId)?.value ?? "");

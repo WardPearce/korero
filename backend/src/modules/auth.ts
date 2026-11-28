@@ -2,14 +2,15 @@ import { and, count, desc, eq, getTableColumns, gt, inArray, isNotNull, isNull, 
 import { integer, sqliteTable } from "drizzle-orm/sqlite-core";
 import { createPublicKey, randomUUID, verify } from "node:crypto";
 import type { Config } from "../config";
-import { audit, DEFAULT_ROLE_KEY, INITIAL_ROLE, type Queries, type Role, type Store } from "../database";
-import { accountIdentities, accounts, accountRoles, bans, invitations, profilePictures, refreshHistory, sessions, settings, setup } from "../database/schema";
+import { audit, DEFAULT_ROLE_KEY, INITIAL_ROLE, isBaseRole, sortRoles, type Queries, type Role, type Store } from "../database";
+import { accountIdentities, accounts, accountRoles, bans, invitations, profilePictures, refreshHistory, rolesTable, sessions, settings, setup } from "../database/schema";
 import { maxProfilePictureBytes } from "../protocol";
 import { Credentials, equalDigest, randomToken } from "../security/credentials";
 import { fail, ProtocolError, RateLimit } from "../security/errors";
 import { PasswordWork } from "../security/work";
 
-export type Account = typeof accounts.$inferSelect & { role: Role; avatarId: string | null };
+/** `roles` is ordered by rank, highest first, and `role` is the highest (display) role. */
+export type Account = typeof accounts.$inferSelect & { roles: Role[]; role: Role; avatarId: string | null };
 const { accessDigest: _, ...sessionColumns } = getTableColumns(sessions);
 export type Session = Omit<typeof sessions.$inferSelect, "accessDigest">;
 type IdentityOperation = "login" | "register" | "bootstrap";
@@ -56,15 +57,30 @@ function decodeProfilePicture(encoded: string) {
 }
 
 function invitationScope(actor: Account) {
-  return actor.role === "Administrator" || actor.role === "Owner" ? undefined : eq(invitations.createdBy, actor.id);
+  return isAdministrator(actor) ? undefined : eq(invitations.createdBy, actor.id);
+}
+
+function isAdministrator(account: Account) {
+  return account.roles.includes("Administrator") || account.roles.includes("Owner");
+}
+
+/** Returns the roles each account holds, ordered by rank, highest first. */
+export function accountRoleNames(db: Queries, ids: readonly string[]) {
+  const held = new Map<string, { name: Role; rank: number }[]>(ids.map((id) => [id, []]));
+  if (!ids.length) return new Map<string, Role[]>();
+  for (const row of db.select({ accountId: accountRoles.accountId, name: rolesTable.name, rank: rolesTable.rank }).from(accountRoles)
+    .innerJoin(rolesTable, eq(accountRoles.role, rolesTable.name)).where(inArray(accountRoles.accountId, [...ids])).all()) {
+    held.get(row.accountId)?.push(row);
+  }
+  return new Map([...held].map(([id, rows]) => [id, sortRoles(rows)]));
 }
 
 function getAccount(db: Queries, id: string): Account {
-  const row = db.select({ ...getTableColumns(accounts), role: accountRoles.role, avatarId: profilePictures.revision })
-    .from(accounts).innerJoin(accountRoles, eq(accounts.id, accountRoles.accountId))
-    .leftJoin(profilePictures, eq(accounts.id, profilePictures.accountId)).where(eq(accounts.id, id)).get();
-  if (!row) fail("NOT_FOUND");
-  return row;
+  const row = db.select({ ...getTableColumns(accounts), avatarId: profilePictures.revision })
+    .from(accounts).leftJoin(profilePictures, eq(accounts.id, profilePictures.accountId)).where(eq(accounts.id, id)).get();
+  const roles = row && accountRoleNames(db, [id]).get(id);
+  if (!row || !roles?.length) fail("NOT_FOUND");
+  return { ...row, roles, role: roles[0]! };
 }
 
 function hasOwner(db: Queries) {
@@ -77,9 +93,14 @@ function findSession(db: Queries, condition: SQL, now = Date.now()) {
   return db.select(sessionColumns).from(sessions).where(and(condition, activeAt(now))).get();
 }
 
+/** The active ban's expiry: `null` when permanent, `undefined` when the account is not banned. */
+export function banExpiry(db: Queries, accountId: string): number | null | undefined {
+  return db.select({ expiresAt: bans.expiresAt }).from(bans)
+    .where(and(eq(bans.accountId, accountId), or(isNull(bans.expiresAt), gt(bans.expiresAt, Date.now())))).get()?.expiresAt;
+}
+
 export function isBanned(db: Queries, accountId: string) {
-  return !!db.select({ id: bans.accountId }).from(bans)
-    .where(and(eq(bans.accountId, accountId), or(isNull(bans.expiresAt), gt(bans.expiresAt, Date.now())))).get();
+  return banExpiry(db, accountId) !== undefined;
 }
 
 export class Auth {
@@ -88,6 +109,7 @@ export class Auth {
   private readonly ticketsByAccount = new Map<string, number>();
   private readonly refreshRate: RateLimit;
   private readonly ticketRate: RateLimit;
+  private readonly profileUpdateRate: RateLimit;
   readonly passwordLocked = process.env.VOICE_SERVER_PASSWORD !== undefined;
   private readonly environmentPasswordHash?: string;
   private readonly passwordWork = new PasswordWork();
@@ -97,6 +119,7 @@ export class Auth {
   constructor(private readonly db: Store, private readonly credentials: Credentials, private readonly config: Config) {
     this.refreshRate = new RateLimit(Math.max(4, config.limits.auth_per_minute));
     this.ticketRate = new RateLimit(Math.max(config.limits.connections_per_account, config.limits.auth_per_minute));
+    this.profileUpdateRate = new RateLimit(config.limits.profile_updates_per_minute);
     if (this.passwordLocked && config.server.password) {
       this.environmentPasswordHash = Bun.password.hashSync(config.server.password, passwordOptions);
     }
@@ -104,6 +127,7 @@ export class Auth {
 
   account(id: string) { return getAccount(this.db, id); }
   updateAccount(id: string, displayName: string) {
+    this.profileUpdateRate.take(id);
     const previous = this.account(id);
     if (previous.displayName === displayName) return previous;
     this.db.transaction((tx) => {
@@ -206,7 +230,7 @@ export class Auth {
         .where(eq(accountIdentities.publicKey, identity.publicKey)).get();
       if (existing) {
         if (isBanned(tx, existing.accountId)) fail("FORBIDDEN");
-        tx.update(accountRoles).set({ role: "Owner" }).where(eq(accountRoles.accountId, existing.accountId)).run();
+        tx.insert(accountRoles).values({ accountId: existing.accountId, role: "Owner" }).onConflictDoNothing().run();
         audit(tx, existing.accountId, "setup.consumed", existing.accountId);
         return { created: false, result: { account: getAccount(tx, existing.accountId), ...this.createSession(tx, existing.accountId, device) } };
       }
@@ -258,10 +282,12 @@ export class Auth {
     const id = randomUUID();
     const createdAt = Date.now();
     db.insert(accounts).values({ id, displayName: name, createdAt }).run();
-    db.insert(accountRoles).values({ accountId: id, role }).run();
+    // Every account holds a base role. Owners are also Members, and a custom default role comes with Guest.
+    const assigned = isBaseRole(role) ? [role] : [role, role === "Owner" ? "Member" : "Guest"];
+    db.insert(accountRoles).values(assigned.map((name) => ({ accountId: id, role: name }))).run();
     db.insert(accountIdentities).values({ accountId: id, publicKey, origin, joinedViaInvitation }).run();
     audit(db, id, "identity.attached", id);
-    return { account: { id, displayName: name, role, createdAt, badge: null, avatarId: null }, ...this.createSession(db, id, device) };
+    return { account: getAccount(db, id), ...this.createSession(db, id, device) };
   }
 
   challengeIdentity(source: string, serverId: string, operation: IdentityOperation, publicKey: string, deviceName: string, origin: string) {
@@ -273,10 +299,6 @@ export class Auth {
     }
     if (pending >= maxIdentityChallengesPerSource || this.identityChallenges.size >= maxIdentityChallenges) fail("RATE_LIMITED");
     const id = randomToken();
-    if (operation === "login") {
-      origin = this.db.select({ origin: accountIdentities.origin }).from(accountIdentities)
-        .where(eq(accountIdentities.publicKey, publicKey)).get()?.origin ?? origin;
-    }
     const challenge = { serverId, operation, publicKey, deviceName, origin, expiresAt: now + 60_000 };
     this.identityChallenges.set(id, { ...challenge, source });
     return { id, ...challenge, binding: "" };
@@ -304,11 +326,13 @@ export class Auth {
   }
 
   async loginIdentity(client: string, serverId: string, id: string, signature: string, password?: string) {
-    const { publicKey, deviceName } = this.proveIdentity(serverId, "login", id, signature);
+    const { publicKey, deviceName, origin } = this.proveIdentity(serverId, "login", id, signature);
     // Look the identity up first so a throwaway key cannot be used to test server passwords.
-    const identity = this.db.select({ joinedViaInvitation: accountIdentities.joinedViaInvitation }).from(accountIdentities)
+    const identity = this.db.select({ origin: accountIdentities.origin, joinedViaInvitation: accountIdentities.joinedViaInvitation }).from(accountIdentities)
       .where(eq(accountIdentities.publicKey, publicKey)).get();
     if (!identity) fail("NOT_FOUND");
+    // Check the enrolled origin only after proof of key ownership.
+    if (identity.origin !== origin) fail("AUTH_FAILED");
     const hash = identity.joinedViaInvitation ? undefined : await this.verifyPassword(client, password);
     return this.db.transaction((tx) => {
       const row = tx.select().from(accountIdentities).where(eq(accountIdentities.publicKey, publicKey)).get();
@@ -476,7 +500,7 @@ export class Auth {
   }
 
   invitation(actor: Account, expiresInSeconds?: number, uses?: number, expiresAt?: number) {
-    const adminOnly = actor.role === "Administrator" || actor.role === "Owner";
+    const adminOnly = isAdministrator(actor);
     if (this.config.server.registration === "admin" && !adminOnly) fail("FORBIDDEN");
     const now = Date.now();
     if (expiresAt !== undefined && (expiresInSeconds !== undefined || expiresAt <= now)) {

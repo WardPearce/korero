@@ -1,7 +1,7 @@
 import { call, desktopApp, requestError, type RelayResponse } from "../connection/client";
-import { exportBrowserIdentity, signIdentity } from "./browser-identity";
+import { exportBrowserIdentity } from "./browser-identity";
 import { browserSessions } from "../connection/browser-session";
-import type { DeviceIdentity } from "../preferences";
+import type { DeviceIdentity, IdentityAction } from "korero-chat/source";
 
 let activeIdentity: DeviceIdentity | undefined;
 export function getIdentity() {
@@ -23,33 +23,12 @@ export async function exportIdentity(passphrase: string) {
   return desktopApp() ? call<string>("export_identity", { privateKey, passphrase }) : exportBrowserIdentity(privateKey, passphrase);
 }
 
-type IdentityAction =
-  | { operation: "login"; password?: string }
-  | { operation: "register"; displayName: string; invitation?: string; password?: string }
-  | { operation: "bootstrap"; displayName: string; token: string; password?: string };
-
 export async function authenticateIdentity(origin: string, serverId: string, deviceName: string, action: IdentityAction) {
   const identity = requireIdentity();
   if (desktopApp()) {
     return call<RelayResponse>("authenticate_identity", { origin, serverId, deviceName, privateKey: identity.privateKey, action });
   }
-  const { operation, ...fields } = action;
-  const { publicKey } = identity;
-  const challenge = await browserSessions.request(origin, "/api/v1/auth/identity/challenge", { origin, operation, deviceName, publicKey });
-  if (challenge.status !== 200) throw identityError(challenge);
-  const details = challenge.body as { id: string; origin: string; serverId: string; operation: string;
-    publicKey: string; deviceName: string; binding: string; expiresAt: number };
-  if (details.origin !== origin || details.serverId !== serverId || details.operation !== operation ||
-      details.publicKey !== publicKey || details.deviceName !== deviceName || details.binding !== "") {
-    throw new Error("The identity challenge does not match this server address or request.");
-  }
-  const id = details.id;
-  const signature = await signIdentity(identity, ["korero-identity-v1", serverId, origin, operation, id, publicKey, "", deviceName, details.expiresAt]);
-  switch (operation) {
-    case "login": return browserSessions.request(origin, "/api/v1/auth/identity/login", { id, signature, ...fields });
-    case "register": return browserSessions.request(origin, "/api/v1/auth/register", { identity: { id, signature }, deviceName, ...fields });
-    case "bootstrap": return browserSessions.request(origin, "/api/v1/admin/bootstrap", { identity: { id, signature }, deviceName, ...fields });
-  }
+  return browserSessions.session(origin).authenticate({ serverId, deviceName, action, identity });
 }
 
 export function identityError(result: RelayResponse) {

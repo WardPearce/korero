@@ -888,7 +888,61 @@
               ]
             },
             "type": {
-              "const": "role.set"
+              "const": "role.add"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "accountId",
+                "role"
+              ],
+              "properties": {
+                "accountId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "role": {
+                  "minLength": 1,
+                  "maxLength": 80,
+                  "pattern": "^(?=.*\\S)[^/\\u0000-\\u001f\\u007f]+$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
+              "const": "role.remove"
             },
             "payload": {
               "additionalProperties": false,
@@ -976,7 +1030,8 @@
                     "attachFiles",
                     "shareScreen",
                     "useCamera",
-                    "whisper"
+                    "whisper",
+                    "pinMessages"
                   ]
                 },
                 "allow": {
@@ -1776,6 +1831,191 @@
                       "type": "integer"
                     }
                   ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
+              "const": "message.context"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "channelId",
+                "messageId"
+              ],
+              "properties": {
+                "channelId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "messageId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
+              "const": "message.pins"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "channelId"
+              ],
+              "properties": {
+                "channelId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "before": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "pinnedAt"
+                  ],
+                  "properties": {
+                    "id": {
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                      "type": "string"
+                    },
+                    "pinnedAt": {
+                      "minimum": 1,
+                      "maximum": 9007199254740991,
+                      "anyOf": [
+                        {
+                          "format": "integer",
+                          "default": 0,
+                          "type": "string"
+                        },
+                        {
+                          "minimum": 1,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
+              "const": "message.pin"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "channelId",
+                "messageId",
+                "pinned"
+              ],
+              "properties": {
+                "channelId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "messageId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "pinned": {
+                  "type": "boolean"
                 }
               }
             }
@@ -4069,7 +4309,7 @@
         },
         "permissions": {
           "minItems": 0,
-          "maxItems": 20,
+          "maxItems": 21,
           "type": "array",
           "items": {
             "default": "join",
@@ -4094,7 +4334,8 @@
               "shareScreen",
               "useCamera",
               "whisper",
-              "removeChannels"
+              "removeChannels",
+              "pinMessages"
             ]
           }
         }
@@ -4296,7 +4537,8 @@
                   "attachFiles",
                   "shareScreen",
                   "useCamera",
-                  "whisper"
+                  "whisper",
+                  "pinMessages"
                 ]
               },
               "allow": {

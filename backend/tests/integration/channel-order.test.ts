@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { fixture } from "../server";
 
+const accountRoles = "/api/v1/admin/accounts/roles";
+
 test("channel ordering requires a server-wide edit grant", async () => {
   const server = await fixture();
   try {
@@ -8,7 +10,7 @@ test("channel ordering requires a server-wide edit grant", async () => {
     const editor = await server.register("Channel editor");
     const roles = "/api/v1/admin/roles";
     expect((await server.call(roles, { name: "Channel editor", permissions: ["join"] }, owner.accessToken)).response.status).toBe(200);
-    expect((await server.call(roles, { accountId: editor.account.id, role: "Channel editor" }, owner.accessToken, "PATCH")).response.status).toBe(200);
+    expect((await server.call(accountRoles, { accountId: editor.account.id, role: "Channel editor" }, owner.accessToken, "POST")).response.status).toBe(200);
 
     const ownerWs = await server.ws(owner);
     const editorWs = await server.ws(editor);

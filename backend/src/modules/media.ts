@@ -37,8 +37,10 @@ export class Media {
   }
   private async startSlot(slot: Slot) {
     const { createWorker } = await import("mediasoup");
-    const worker = await createWorker({ logLevel: "error" });
     const { media, mediaAddresses } = this.config;
+    // The native budget is shared by all routers on this worker. Split the server budget across workers.
+    process.env.KORERO_WORKER_RTP_EGRESS_BITRATE = String(Math.floor(media.max_rtp_egress_bitrate / media.workers));
+    const worker = await createWorker({ logLevel: "error" });
     const protocols: Array<"udp" | "tcp"> = [];
     if (media.enable_udp) protocols.push("udp");
     if (media.enable_tcp) protocols.push("tcp");
@@ -268,6 +270,7 @@ export class Media {
             webRtcServer: room.slot.server ?? fail("UNAVAILABLE"),
             enableUdp: this.config.media.enable_udp && !forceTcp, enableTcp: this.config.media.enable_tcp,
             preferUdp: !forceTcp, enableSctp: false,
+            maxIncomingBitrate: kind === "audio" ? this.config.media.max_audio_ingress_bitrate : undefined,
           });
           try {
             if (videoSource && direction === "send") {

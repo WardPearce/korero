@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import SiteHeader from '#lib/components/SiteHeader.svelte';
 	import CodeBlock from '#lib/components/CodeBlock.svelte';
@@ -46,6 +47,8 @@
 	];
 
 	const repo = 'https://github.com/WardPearce/korero/blob/main/docs';
+	const identityTranscript =
+		'["korero-identity-v1", serverId, origin, operation, id, publicKey, "", deviceName, expiresAt]';
 
 	let active = $state('http');
 
@@ -94,6 +97,9 @@
 			this protocol, so anything they can do, yours can too.
 		</p>
 		<div class="mt-8 flex flex-wrap gap-3">
+			<a href={resolve('/sdk')} class="hero-button">
+				<Braces size={16} /> TypeScript SDK
+			</a>
 			<a
 				href="{repo}/protocol-v1.schema.json"
 				target="_blank"
@@ -697,11 +703,7 @@
 			nonce and
 			<code>expiresAt</code> is in Unix milliseconds.
 		</p>
-		<CodeBlock
-			lang="json"
-			label="Signature payload"
-			code={`["korero-identity-v1", serverId, origin, operation, id, publicKey, "", deviceName, expiresAt]`}
-		/>
+		<CodeBlock lang="json" label="Signature payload" code={identityTranscript} />
 		<p>
 			Encode the signature as base64url without padding. Send <code>&#123;id, signature&#125;</code>
 			to the login endpoint or as <code>identity</code> in the enrollment request. A valid login
@@ -1530,7 +1532,7 @@
 			<p>Protocol v1, from the Kōrero source documentation.</p>
 			<div class="doc-footer-links">
 				<a href="{repo}/protocol.md" target="_blank" rel="noopener noreferrer">Edit this page</a>
-				<a href="/host">Deploy a server <ArrowRight size={15} /></a>
+				<a href={resolve('/host')}>Deploy a server <ArrowRight size={15} /></a>
 			</div>
 		</div>
 	</main>

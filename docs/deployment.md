@@ -106,6 +106,22 @@ Upgrades count existing messages toward the budget. If the server is already ove
 budget, message writes that increase storage return `LIMIT` until deletions or
 retention cleanup free enough space.
 
+`limits.hosted_account_bytes` budgets hosted profiles separately. The default is
+1 GiB including a 256-byte allowance per account. Existing profiles count toward
+the budget. Providers over budget continue to serve profiles and accept updates
+that stay the same size or shrink. `limits.hosted_account_requests_concurrent`
+caps concurrent hosted registration and update body reads at 16 by default.
+
+Audit history defaults to 100,000 events and 90 days. Set `limits.audit_events`
+and `limits.audit_retention_hours` to adjust those limits. The server trims
+excess records in batches. `limits.profile_updates_per_minute` limits display-name
+updates to 10 per account per minute by default.
+
+`media.max_audio_ingress_bitrate` caps incoming microphone and whisper RTP at
+256 kbit/s per transport by default. `media.max_rtp_egress_bitrate` defaults to
+250 Mbit/s of outgoing RTP across the server, divided equally among the media
+workers. Both include packet overhead and allow a one-second burst.
+
 When upgrading from channel-scoped administration grants, existing denials for
 `createChannels`, `editChannels`, `removeChannels`, and `move` still apply to
 the role and inherit down the channel tree. Scoped allows for these actions are
@@ -205,8 +221,9 @@ credentials that were valid at snapshot time. Rotate or revoke them again if nec
 
 ## Build dependencies and platform support
 
-Compilation uses the matching Linux toolchain, Bun 1.4.5, and system OpenSSL
-development files at version 3.5.9 or newer. Linux kernels and glibc requirements
+Compilation uses the matching Linux toolchain, Bun 1.4.5, and patched system OpenSSL
+development files. The media worker requires at least 3.5.9 on OpenSSL 3.5,
+3.6.5 on OpenSSL 3.6, or 4.0.3 on OpenSSL 4.0. Linux kernels and glibc requirements
 depend on the native build host. The release workflow builds in Debian 13 for AMD64
 and ARM64. See [Compatibility](compatibility.md) for results and measured requirements.
 

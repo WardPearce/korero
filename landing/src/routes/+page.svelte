@@ -75,7 +75,7 @@
 		},
 		{
 			title: 'Away when you need a minute',
-			body: 'Go AFK with a short note so people know when you will be back. The desktop app keeps itself up to date.'
+			body: 'Go AFK with a short note so people know when you will be back.'
 		}
 	];
 
@@ -104,7 +104,6 @@
 		{
 			name: 'Chat',
 			active: true,
-			unread: 0,
 			users: [
 				{
 					n: 'wardybara',
@@ -125,8 +124,8 @@
 				{ n: 'ensyy', c: 'bg-accent', role: '', speaking: false, sharing: false, muted: true }
 			]
 		},
-		{ name: 'Lobby', active: false, unread: 0, users: [] },
-		{ name: 'clips', active: false, unread: 3, users: [] }
+		{ name: 'Lobby', active: false, users: [] },
+		{ name: 'clips', active: false, users: [] }
 	];
 
 	const mockMessages = [
@@ -313,13 +312,7 @@
 								>
 									{#if ch.active}<ChevronDown size={14} />{/if}
 									{ch.name}
-									{#if ch.unread}
-										<span
-											class="ml-auto rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground"
-										>
-											{ch.unread}
-										</span>
-									{:else if ch.active}
+									{#if ch.active}
 										<span class="ml-auto size-1.5 rounded-full bg-success"></span>
 									{/if}
 								</div>

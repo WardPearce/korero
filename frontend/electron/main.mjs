@@ -62,21 +62,42 @@ function cancelCaptures() {
   pendingCaptures.clear();
 }
 
-function pickCapture(sources) {
+function captureSource(source) {
+  return {
+    id: source.id,
+    name: source.name,
+    kind: source.id.startsWith("screen:") ? "screen" : "window",
+    thumbnail: captureThumbnail(source.thumbnail),
+    icon: captureIcon(source.appIcon),
+  };
+}
+
+// Thumbnails are slow to capture (notably on Windows), so the picker opens with names only and previews follow.
+async function loadCapturePreviews(id, sources) {
+  try {
+    const previews = await desktopCapturer.getSources({
+      types: ["screen", "window"],
+      thumbnailSize: { width: 480, height: 270 },
+      fetchWindowIcons: true,
+    });
+    if (!pendingCaptures.has(id)) return;
+    const known = new Set(sources.map((source) => source.id));
+    sendToWindow("korero:capture-previews", {
+      id,
+      sources: previews.filter((source) => known.has(source.id)).map(captureSource),
+    });
+  } catch {
+    if (pendingCaptures.has(id)) sendToWindow("korero:capture-previews", { id, sources: [] });
+  }
+}
+
+function pickCapture(sources, previews) {
   cancelCaptures();
   const id = crypto.randomUUID();
   return new Promise((resolve) => {
     pendingCaptures.set(id, resolve);
-    sendToWindow("korero:capture-sources", {
-      id,
-      sources: sources.map((source) => ({
-        id: source.id,
-        name: source.name,
-        kind: source.id.startsWith("screen:") ? "screen" : "window",
-        thumbnail: captureThumbnail(source.thumbnail),
-        icon: captureIcon(source.appIcon),
-      })),
-    });
+    sendToWindow("korero:capture-sources", { id, previews, sources: sources.map(captureSource) });
+    if (previews) void loadCapturePreviews(id, sources);
   }).then((sourceId) => sources.find((source) => source.id === sourceId));
 }
 
@@ -90,12 +111,12 @@ async function chooseCapture(request, callback) {
     const portal = process.platform === "linux" && process.env.XDG_SESSION_TYPE === "wayland";
     const sources = await desktopCapturer.getSources({
       types: ["screen", "window"],
-      thumbnailSize: portal ? { width: 0, height: 0 } : { width: 480, height: 270 },
-      fetchWindowIcons: !portal,
+      thumbnailSize: { width: 0, height: 0 },
+      fetchWindowIcons: false,
     });
     const selected = !window || sources.length === 0 ? undefined
       : portal && sources.length === 1 ? sources[0]
-      : await pickCapture(sources);
+      : await pickCapture(sources, !portal);
     callback(selected ? {
       video: selected,
       audio: request.audioRequested && process.platform !== "linux" ? "loopback" : undefined,

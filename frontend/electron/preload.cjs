@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld("koreroDesktop", {
   invoke: (command, args) => ipcRenderer.invoke("korero:command", command, args),
   chooseCapture: (id, sourceId) => ipcRenderer.invoke("korero:capture-choice", id, sourceId),
   listen: (event, callback) => {
-    if (!["korero:state", "korero:media", "korero:talk-shortcut", "korero:capture-sources"].includes(event)) {
+    if (!["korero:state", "korero:media", "korero:talk-shortcut", "korero:capture-sources", "korero:capture-previews"].includes(event)) {
       throw new Error("Unsupported desktop event.");
     }
     const listener = (_, payload) => callback(payload);

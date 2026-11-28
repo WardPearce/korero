@@ -47,7 +47,7 @@
   - Roles, moderation, message of the day and an audit log
   - Direct-IP HTTPS and WebSocket signalling with TLS fingerprint verification
 - **Open**
-  - The [v1 protocol](docs/protocol.md) is open to independent clients
+  - The [v1 protocol](docs/protocol.md) and [TypeScript SDK](sdk/) support independent clients and bots
   - Bun/Elysia server in [`backend/`](backend/), SvelteKit client for Electron, Capacitor and browsers in [`frontend/`](frontend/)
 
 # Quick deploy

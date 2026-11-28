@@ -12,7 +12,6 @@
   import type { Channel } from "#lib/connection/client";
   import { voiceApp } from "#lib/connection/platform";
   import { forgetPassword, getSavedPassword, savePassword } from "#lib/preferences";
-  import { playUiSound } from "#lib/ui-sounds";
   import { getWorkspace } from "#lib/workspace";
 
   const workspace = getWorkspace();
@@ -45,12 +44,12 @@
   async function joinChannel(channel: Channel) {
     workspace.roomView = "chat";
     workspace.selectedChannelId = channel.id;
-    workspace.mobilePane = "room";
+    // Joining voice keeps mobile on the current pane; only the chat button opens the chat room.
     workspace.actionError = "";
     const connectionId = snapshot?.connectionId;
     if (!online || !connectionId || pending || activeChannel?.id === channel.id) return;
     if (!channel.passwordRequired) {
-      if (await run("join", "join_channel", { channelId: channel.id, password: null })) playUiSound("channel");
+      await run("join", "join_channel", { channelId: channel.id, password: null });
       return;
     }
 
@@ -58,10 +57,7 @@
     const saved = await getSavedPassword(serverOrigin, serverId, channel.id).catch(() => undefined);
     if (connectionId !== snapshot?.connectionId || workspace.selectedChannelId !== channel.id || !online || pending) return;
     if (saved) {
-      if (await run("join", "join_channel", { channelId: channel.id, password: saved })) {
-        playUiSound("channel");
-        return;
-      }
+      if (await run("join", "join_channel", { channelId: channel.id, password: saved })) return;
       // Older servers use the generic FORBIDDEN message for a rejected password.
       const message = actionError.replace(/^FORBIDDEN: /, "");
       if (message !== "Incorrect channel password." && message !== "Operation not permitted") return;
@@ -81,7 +77,6 @@
     const { id } = joining.channel;
     const password = channelPassword;
     if (await run("join", "join_channel", { channelId: id, password })) {
-      playUiSound("channel");
       passwordOpen = false;
       channelPassword = "";
       joining = null;

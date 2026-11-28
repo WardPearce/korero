@@ -1,3 +1,4 @@
+import { webTransport, type ServerSocket } from "korero-chat/source";
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 
 export interface CertificateContact { origin: string; fingerprint: string; publiclyTrusted: boolean }
@@ -28,7 +29,7 @@ const emptyBody = new Set([101, 204, 205, 304]);
 /** Sends a server request. Headers in `init` replace those on the request. */
 export async function serverFetch(input: string | Request, init: RequestInit & { timeout: number }): Promise<Response> {
   const { timeout, ...options } = init;
-  if (!nativeTransport()) return fetch(input, { ...options, redirect: "error", signal: AbortSignal.timeout(timeout) });
+  if (!nativeTransport()) return webTransport.fetch(input, init);
   const request = new Request(input, options);
   const url = new URL(request.url);
   const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.text();
@@ -89,13 +90,6 @@ class NativeSocket {
   }
 }
 
-export type ServerSocket = Pick<WebSocket, "readyState" | "send" | "close"> & {
-  onopen: (() => void) | null;
-  onmessage: ((event: { data: string }) => void) | null;
-  onerror: (() => void) | null;
-  onclose: (() => void) | null;
-};
-
 export function openServerSocket(url: string): ServerSocket {
-  return nativeTransport() ? new NativeSocket(url) : new WebSocket(url) as unknown as ServerSocket;
+  return nativeTransport() ? new NativeSocket(url) : webTransport.openSocket(url);
 }

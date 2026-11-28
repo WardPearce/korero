@@ -7,6 +7,7 @@
   import { buttonVariants, Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
   import EmojiPicker from "#lib/components/EmojiPicker.svelte";
+  import TimestampPicker from "#lib/components/chat/TimestampPicker.svelte";
   import IconButton from "#lib/components/IconButton.svelte";
   import { uploadAttachment } from "#lib/chat/chat-attachments";
   import { maxChatHtmlLength, maxChatTextLength, sanitizeChatHtml } from "#lib/chat/rich-chat";
@@ -123,22 +124,32 @@
     attachFile(event.dataTransfer.files[0]);
   }
 
-  async function insertEmoji(emoji: string) {
+  async function insertText(text: string) {
     if (!enabled || busy) return;
     if (editor) {
-      editor.chain().focus().insertContent({ type: "text", text: emoji }).run();
-      pickerOpen = false;
+      editor.chain().focus().insertContent({ type: "text", text }).run();
       return;
     }
     const start = field?.selectionStart ?? message.length;
     const end = field?.selectionEnd ?? start;
-    const next = message.slice(0, start) + emoji + message.slice(end);
+    const next = message.slice(0, start) + text + message.slice(end);
     if (next.length > maxChatTextLength) return;
     message = next;
-    pickerOpen = false;
     await tick();
     field?.focus();
-    field?.setSelectionRange(start + emoji.length, start + emoji.length);
+    field?.setSelectionRange(start + text.length, start + text.length);
+  }
+
+  async function insertEmoji(emoji: string) {
+    pickerOpen = false;
+    await insertText(emoji);
+  }
+
+  function insertTimestamp(token: string) {
+    // Pad with spaces so the token never merges into a neighbouring word.
+    const before = editor ? editor.state.doc.textBetween(Math.max(0, editor.state.selection.from - 1), editor.state.selection.from)
+      : message.slice(0, field?.selectionStart ?? message.length).slice(-1);
+    void insertText(`${before && !/\s/.test(before) ? " " : ""}${token} `);
   }
 
   async function send(event: SubmitEvent) {
@@ -204,6 +215,8 @@
     triggerClass={buttonVariants({ variant: "outline", size: "icon", class: "icon-button" })}>
     <Smile size={17} />
   </EmojiPicker>
+  <TimestampPicker disabled={!enabled || busy} oninsert={insertTimestamp}
+    triggerClass={buttonVariants({ variant: "outline", size: "icon", class: "icon-button" })} />
   <Button type="submit" class="send-button" variant="default" aria-label={sendLabel} title={sendLabel}
     disabled={!enabled || (!message.trim() && !file) || busy || draftTooLong}>
     <Send size={17} />

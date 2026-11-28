@@ -53,6 +53,8 @@ package-lock.json
 /frontend/.svelte-kit/
 /frontend/.env
 /frontend/.native/
+/sdk/node_modules/
+/sdk/dist/
 
 
 /backend/server.toml

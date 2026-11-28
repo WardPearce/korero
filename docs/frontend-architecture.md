@@ -5,6 +5,11 @@ desktop. Capacitor copies the same build into the Android and iOS projects.
 The client connects to a separately deployed Bun/Elysia and mediasoup server
 using the [v1 protocol](protocol.md).
 
+The [TypeScript SDK](../sdk/) provides the HTTP client, identity and direct-message
+cryptography, and browser and mobile sessions. The Svelte client subscribes to SDK
+state events and retains the platform adapters for Android transport, audio, and
+the Electron bridge.
+
 ## Server connections
 
 At launch the client signs in to every saved server and keeps those sessions
@@ -109,14 +114,18 @@ the new installation.
 ## Verify
 
 Run `bun run check` in `frontend/` and run `bun run check` and `bun run test`
-in `backend/`. The browser and Electron audio checks exercise signaling and media
-with synthetic input. Run the Electron check from a graphical desktop session.
+in `backend/`. The frontend SDK test exercises the built app against a temporary
+server. The audio checks exercise signaling and media with synthetic input. Run
+the Electron checks from a graphical desktop session.
 
 ```sh
 cd frontend
 bun run build
 cd ../backend
 bunx --bun playwright install chromium
+bun run test:e2e:frontend
 bun run test:e2e
 bun run test:e2e:desktop
 ```
+
+Pass `--desktop` to `bun run test:e2e:frontend` to include the Electron SDK flow.

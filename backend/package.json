@@ -8,6 +8,7 @@
     "test": "bun test tests/unit tests/integration",
     "test:e2e": "bun tests/e2e/audio.ts",
     "test:e2e:desktop": "bun tests/e2e/desktop-audio.ts",
+    "test:e2e:frontend": "bun tests/e2e/frontend-sdk.ts",
     "build": "bun scripts/build.ts",
     "prepare:worker": "bun scripts/worker.ts",
     "db:generate": "drizzle-kit generate",

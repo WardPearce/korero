@@ -1,8 +1,10 @@
 <script lang="ts">
   import { sanitizeChatMarkup } from "#lib/chat/rich-chat";
+  import { hasTimestamps, refreshRelativeTimestamps, renderTimestamps } from "#lib/chat/chat-timestamps";
 
   let { text, html, onlink }: { text: string; html?: string; onlink?: (url: string) => void } = $props();
   const formatted = $derived(html ? sanitizeChatMarkup(html) : undefined);
+  const timestamps = $derived(hasTimestamps(text));
 
   function addTextLinks(fragment: DocumentFragment) {
     const walker = document.createTreeWalker(fragment, NodeFilter.SHOW_TEXT);
@@ -37,6 +39,7 @@
   function renderMessage(element: HTMLElement) {
     const fragment = formatted ? formatted.cloneNode(true) as DocumentFragment : document.createDocumentFragment();
     if (!formatted) fragment.append(text);
+    renderTimestamps(fragment);
     const confirm = onlink;
     if (confirm) {
       addTextLinks(fragment);
@@ -60,12 +63,13 @@
       }
     }
     element.replaceChildren(fragment);
+    return refreshRelativeTimestamps(element);
   }
 </script>
 
 {#if formatted}
   <div class="rich-message" {@attach renderMessage}></div>
-{:else if onlink && text}
+{:else if (onlink || timestamps) && text}
   <p class="rich-message" {@attach renderMessage}></p>
 {:else if text}
   <p>{text}</p>
@@ -84,4 +88,5 @@
   .rich-message :global(code) { padding: .12em .3em; }
   .rich-message :global(pre) { overflow-x: auto; padding: .5em .65em; }
   .rich-message :global(pre code) { padding: 0; }
+  .rich-message :global(.chat-timestamp) { padding: .05em .3em; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--foreground); cursor: help; white-space: nowrap; }
 </style>

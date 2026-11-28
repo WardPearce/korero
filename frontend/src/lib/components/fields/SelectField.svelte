@@ -3,7 +3,7 @@
 
   let { label, options, value = $bindable(), placeholder = "Choose an option", disabled = false, hideLabel = false }: {
     label: string;
-    options: readonly { value: Value; label: string; disabled?: boolean }[];
+    options: readonly { value: Value; label: string; disabled?: boolean; depth?: number }[];
     value?: Value;
     placeholder?: string;
     disabled?: boolean;
@@ -29,6 +29,8 @@
     <Select.Content class="app-select-content" align="start">
       {#each options as option (option.value)}
         <Select.Item value={option.value} label={option.label} disabled={option.disabled}
+          aria-label={option.depth ? `${option.label}, level ${option.depth + 1}` : undefined}
+          style={option.depth ? `padding-inline-start: calc(0.375rem + ${option.depth} * min(0.625rem, 2vi))` : undefined}
           class="[&>span:last-child]:min-w-0 [&>span:last-child]:shrink [&>span:last-child]:whitespace-normal [&>span:last-child]:wrap-anywhere" />
       {/each}
     </Select.Content>

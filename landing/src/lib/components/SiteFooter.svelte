@@ -1,3 +1,7 @@
+<script lang="ts">
+	import { resolve } from '$app/paths';
+</script>
+
 <footer class="border-t border-border">
 	<div
 		class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-8 text-sm text-muted-foreground"
@@ -11,7 +15,8 @@
 		>
 			Source on GitHub
 		</a>
-		<a href="/host" class="hover:text-foreground">Host a server</a>
-		<a href="/protocol" class="hover:text-foreground">Protocol</a>
+		<a href={resolve('/host')} class="hover:text-foreground">Host a server</a>
+		<a href={resolve('/protocol')} class="hover:text-foreground">Protocol</a>
+		<a href={resolve('/sdk')} class="hover:text-foreground">SDK</a>
 	</div>
 </footer>

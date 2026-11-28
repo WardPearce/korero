@@ -1,4 +1,3 @@
-import { browser } from '$app/environment';
 import { buildLatestRelease, type GithubRelease, type LatestRelease } from '#lib/releases.js';
 
 const repository = 'WardPearce/korero';
@@ -35,7 +34,7 @@ async function fetchLatestRelease(): Promise<LatestRelease | null> {
 }
 
 export async function getLatestRelease(): Promise<LatestRelease | null> {
-	if (!browser) return null;
+	if (typeof window === 'undefined') return null;
 	if (cache && Date.now() < cache.expiresAt) return cache.release;
 	if (!pending) pending = fetchLatestRelease().finally(() => (pending = null));
 	return pending;

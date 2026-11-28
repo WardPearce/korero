@@ -2,6 +2,49 @@ import { expect, test } from "bun:test";
 import { fixture, openSocket, type Snapshot, until } from "../server";
 import { LOBBY } from "../../src/database";
 
+test("channel pins follow chat access, pin permissions and message deletion", async () => {
+  const server = await fixture();
+  try {
+    const owner = await server.ws(await server.owner());
+    const member = await server.register("Reader");
+    const reader = await server.ws(member);
+    const { channelId } = await owner.rpc<{ channelId: string }>("channel.create", { name: "Pinned discussion" });
+    await reader.rpc("channel.view", { channelId });
+    const first = await reader.rpc<{ messageId: string }>("message.send", { channelId, text: "First pin" });
+    const second = await owner.rpc<{ messageId: string }>("message.send", { channelId, text: "Second pin" });
+    const pin = (socket: typeof owner, messageId: string, pinned = true) => socket.rpc("message.pin", { channelId, messageId, pinned });
+    const pins = (socket: typeof owner) => socket.rpc<{ messages: { id: string }[] }>("message.pins", { channelId });
+
+    await expect(pin(reader, first.messageId)).rejects.toThrow("FORBIDDEN");
+    await expect(owner.rpc("message.pin", { channelId: LOBBY, messageId: first.messageId, pinned: true })).rejects.toThrow("NOT_FOUND");
+    await pin(owner, first.messageId);
+    await pin(owner, second.messageId);
+    await pin(owner, second.messageId);
+    await until(() => reader.received.find(({ type, payload }) =>
+      type === "message.pinChanged" && payload.messageId === first.messageId), Boolean);
+    expect((await pins(reader)).messages.map(({ id }) => id).sort()).toEqual([first.messageId, second.messageId].sort());
+    const context = await reader.rpc<{ id: string; pinnedAt: number }[]>("message.context", { channelId, ...first });
+    expect(context).toContainEqual(expect.objectContaining({ id: first.messageId, pinnedAt: expect.any(Number) }));
+    expect(context).toHaveLength(2);
+    await expect(pin(reader, first.messageId, false)).rejects.toThrow("FORBIDDEN");
+
+    await owner.rpc("role.add", { accountId: member.account.id, role: "Moderator" });
+    await owner.rpc("channel.override", { channelId, role: "Moderator", permission: "pinMessages", allow: false });
+    await expect(pin(reader, second.messageId, false)).rejects.toThrow("FORBIDDEN");
+    await owner.rpc("channel.override", { channelId, role: "Moderator", permission: "pinMessages", allow: null });
+    await pin(reader, second.messageId, false);
+    expect((await pins(reader)).messages).toMatchObject([{ id: first.messageId }]);
+    await owner.rpc("channel.override", { channelId, role: "Moderator", permission: "text", allow: false });
+    await expect(pins(reader)).rejects.toThrow("FORBIDDEN");
+    await expect(reader.rpc("message.context", { channelId, ...first })).rejects.toThrow("FORBIDDEN");
+    await owner.rpc("channel.override", { channelId, role: "Moderator", permission: "text", allow: null });
+
+    await reader.rpc("message.delete", first);
+    expect((await pins(owner)).messages).toEqual([]);
+    await expect(owner.rpc("message.context", { channelId, ...first })).rejects.toThrow("NOT_FOUND");
+  } finally { await server.cleanup(); }
+});
+
 test("connection info keeps diagnostics scoped to the session and visible channel members", async () => {
   const server = await fixture();
   try {
@@ -232,8 +275,8 @@ test("channels, inheritance, password membership, moderation and text are permis
     expect((await aliceWs.rpc<Snapshot>("state.get")).channels).toContainEqual(expect.objectContaining({
       id: parent.channelId, icon: null,
     }));
-    await expect(aliceWs.rpc("role.set", { accountId: alice.account.id, role: "Owner" })).rejects.toThrow("FORBIDDEN");
-    await expect(adminWs.rpc("role.set", { accountId: owner.account.id, role: "Member" })).rejects.toThrow("FORBIDDEN");
+    await expect(aliceWs.rpc("role.add", { accountId: alice.account.id, role: "Owner" })).rejects.toThrow("FORBIDDEN");
+    await expect(adminWs.rpc("role.add", { accountId: owner.account.id, role: "Member" })).rejects.toThrow("FORBIDDEN");
     await adminWs.rpc("channel.override", { channelId: parent.channelId, role: "Member", permission: "join", allow: false });
     await expect(aliceWs.rpc("channel.join", { channelId: child.channelId, password: "private phrase" })).rejects.toThrow("FORBIDDEN");
     await adminWs.rpc("channel.override", { channelId: child.channelId, role: "Member", permission: "join", allow: true });
@@ -278,7 +321,7 @@ test("channels, inheritance, password membership, moderation and text are permis
   } finally { await server.cleanup(); }
 });
 
-test("member moves enforce channel permissions and capacity for the whole group", async () => {
+test("member moves enforce capacity and server mute members placed without channel permissions", async () => {
   const server = await fixture();
   try {
     const owner = await server.owner();
@@ -287,7 +330,7 @@ test("member moves enforce channel permissions and capacity for the whole group"
     const bobWs = await server.ws(await server.register("Bobby"));
     const adminWs = await server.ws(owner);
     const moderatorWs = await server.ws(moderator);
-    await adminWs.rpc("role.set", { accountId: moderator.account.id, role: "Moderator" });
+    await adminWs.rpc("role.add", { accountId: moderator.account.id, role: "Moderator" });
     const create = (payload: object) => adminWs.rpc<{ channelId: string }>("channel.create", payload);
     const source = await create({ name: "Source" });
     const destination = await create({ name: "Destination", capacity: 1, password: "private phrase" });
@@ -305,10 +348,10 @@ test("member moves enforce channel permissions and capacity for the whole group"
 
     await adminWs.rpc("channel.edit", { channelId: destination.channelId, capacity: 2 });
     await adminWs.rpc("channel.override", { channelId: destination.channelId, role: "Member", permission: "join", allow: false });
-    await expect(move()).rejects.toThrow("FORBIDDEN");
-    expect(await channelOf(aliceWs)).toBe(source.channelId);
-    expect(await channelOf(bobWs)).toBe(LOBBY);
-    await adminWs.rpc("channel.override", { channelId: destination.channelId, role: "Member", permission: "join", allow: null });
+    const ownMember = async (ws: typeof aliceWs) => {
+      const state = await ws.rpc<Snapshot>("state.get");
+      return state.members.find(({ connectionId }) => connectionId === state.connectionId)!;
+    };
 
     await move();
     expect(await channelOf(aliceWs)).toBe(destination.channelId);
@@ -316,8 +359,29 @@ test("member moves enforce channel permissions and capacity for the whole group"
     expect(bobWs.received).toContainEqual(expect.objectContaining({
       type: "channel.changed", payload: { channelId: destination.channelId },
     }));
+    expect((await aliceWs.rpc<Snapshot>("state.get")).channels.map(({ id }) => id)).toContain(destination.channelId);
+    expect(await ownMember(aliceWs)).toMatchObject({ adminMuted: true });
+    expect(await ownMember(bobWs)).toMatchObject({ adminMuted: true });
+    await expect(aliceWs.rpc("channel.join", { channelId: destination.channelId })).rejects.toThrow("FORBIDDEN");
+    const codec = { mimeType: "audio/opus", clockRate: 48000, channels: 2, payloadType: 111 };
+    expect(await aliceWs.rpc("media.transport.create", { direction: "receive" })).toHaveProperty("id");
+    const outgoing = await aliceWs.rpc<{ id: string }>("media.transport.create", { direction: "send" });
+    const produce = (ws: typeof aliceWs, ssrc: number) => ws.rpc<{ id: string }>("media.producer.create", {
+      kind: "audio", transportId: outgoing.id, rtpParameters: { codecs: [codec], encodings: [{ ssrc }] } });
+    await expect(produce(aliceWs, 1001)).rejects.toThrow("FORBIDDEN");
+
+    await adminWs.rpc("moderation.mute", { connectionId: alice.connectionId, muted: false });
+    expect(await ownMember(aliceWs)).toMatchObject({ adminMuted: false });
+    expect(await ownMember(bobWs)).toMatchObject({ adminMuted: true });
+    expect(await produce(aliceWs, 1002)).toHaveProperty("id");
+    expect(await channelOf(aliceWs)).toBe(destination.channelId);
+    await adminWs.rpc("channel.override", { channelId: destination.channelId, role: "Member", permission: "join", allow: null });
+
     await moderatorWs.rpc("channel.move", { channelId: LOBBY, connectionId: alice.connectionId });
     expect(await channelOf(aliceWs)).toBe(LOBBY);
+    expect(await ownMember(aliceWs)).toMatchObject({ adminMuted: false });
+    await moderatorWs.rpc("channel.move", { channelId: destination.channelId, connectionId: alice.connectionId });
+    expect(await ownMember(aliceWs)).toMatchObject({ adminMuted: false });
   } finally { await server.cleanup(); }
 });
 
@@ -333,7 +397,7 @@ test("server deafen follows the moderation hierarchy and survives reconnects", a
     const owner = await connect(await server.owner());
     const member = await server.register("Listener");
     const moderator = await server.register("Moderator");
-    await owner.rpc("role.set", { accountId: moderator.account.id, role: "Moderator" });
+    await owner.rpc("role.add", { accountId: moderator.account.id, role: "Moderator" });
     const moderatorWs = await connect(moderator);
     const listener = await connect(member);
     const otherDevice = await connect(member);

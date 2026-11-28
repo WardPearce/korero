@@ -1,0 +1,38 @@
+{
+  "name": "korero-chat",
+  "version": "0.1.1",
+  "description": "TypeScript client for the Korero.chat v1 protocol",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./source": "./src/index.ts"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test",
+    "prepack": "npm run build && node -e \"require('node:fs').copyFileSync('../LICENSE', 'dist/LICENSE')\""
+  },
+  "dependencies": {
+    "@noble/curves": "2.4.0"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WardPearce/korero.git",
+    "directory": "sdk"
+  }
+}

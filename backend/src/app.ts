@@ -63,9 +63,14 @@ async function readBoundedJson(request: Request, limit: number, tooLarge: () => 
 }
 
 const hostedAccountPath = "/api/v1/hosted-account/";
+const hostedRegisterPath = hostedAccountPath + "register";
+const hostedLoginPath = hostedAccountPath + "login";
+const hostedUpdatePath = hostedAccountPath + "update";
+const hostedWrite = (path: string, method: string) =>
+  method === "POST" && (path === hostedRegisterPath || path === hostedUpdatePath);
 const maxEncryptedAccountLength = 4 * 1024 * 1024;
 const jsonBodyLimit = (path: string, method: string) =>
-  method === "POST" && (path === hostedAccountPath + "register" || path === hostedAccountPath + "update")
+  hostedWrite(path, method)
     ? maxEncryptedAccountLength + 256 : requestBodyLimit;
 const hostedCredentials = {
   username: t.String({ pattern: "^[a-z0-9][a-z0-9_.-]{3,31}$" }),
@@ -85,6 +90,10 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
   const profilePictureUpdates = new RateLimit(10);
   const profilePictureDownloads = new RateLimit(300);
   const attachmentUploadsInProgress = new Set<string>();
+  const hostedWritesBySource = new Map<string, number>();
+  const hostedWriteLimit = config.limits.hosted_account_requests_concurrent;
+  const hostedWritesPerSource = Math.max(1, Math.floor(hostedWriteLimit / 4));
+  let hostedWritesInProgress = 0;
   const attachmentPath = "/api/v1/chat/attachments";
   const picturePath = "/api/v1/account/picture";
   const proxyIps = new Set(config.server.trusted_proxies.map(normalizeIp));
@@ -157,15 +166,33 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
           return new Response(null, { status: 204, headers: set.headers as HeadersInit });
         }
       }
+      if (hostedWrite(path, request.method) || (path === hostedLoginPath && request.method === "POST")) {
+        if (path === hostedRegisterPath) hostedAccounts.requireOpenRegistration();
+        limit(request, path === hostedRegisterPath);
+      }
       if ((path !== attachmentPath || request.method !== "POST") &&
           Number(request.headers.get("content-length")) > jsonBodyLimit(path, request.method)) fail("LIMIT");
     })
     // Bound every body by bytes read, not by the client's content-length, before it is parsed.
     // Attachment and profile picture routes authenticate first and apply their own limits.
-    .onParse(({ request }) => {
+    .onParse(async ({ request }) => {
       const path = new URL(request.url).pathname.replace(/\/$/, "");
       if ((path === attachmentPath && request.method === "POST") || (path === picturePath && request.method === "PATCH")) return;
-      return readBoundedJson(request, jsonBodyLimit(path, request.method), () => fail("LIMIT"), true);
+      const bodyLimit = jsonBodyLimit(path, request.method);
+      if (!hostedWrite(path, request.method)) return readBoundedJson(request, bodyLimit, () => fail("LIMIT"), true);
+      const client = clientIp(request);
+      const active = hostedWritesBySource.get(client) ?? 0;
+      if (active >= hostedWritesPerSource || hostedWritesInProgress >= hostedWriteLimit) fail("RATE_LIMITED");
+      hostedWritesBySource.set(client, active + 1);
+      hostedWritesInProgress++;
+      try {
+        return await readBoundedJson(request, bodyLimit, () => fail("LIMIT"), true);
+      } finally {
+        hostedWritesInProgress--;
+        const remaining = hostedWritesBySource.get(client)! - 1;
+        if (remaining) hostedWritesBySource.set(client, remaining);
+        else hostedWritesBySource.delete(client);
+      }
     })
     .onError(({ code, error, set }) => {
       const parseCause = code === "PARSE" && error.cause instanceof ProtocolError ? error.cause : undefined;
@@ -195,21 +222,16 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
         udp: config.media.enable_udp, tcp: config.media.enable_tcp, textPersistence: config.messaging.persistence,
         ...(access ? { iceServers: config.media.ice_servers } : {}) };
     })
-    .post(hostedAccountPath + "register", async ({ request, body, set }) => {
-      limit(request, true);
+    .post(hostedRegisterPath, ({ body, set }) => {
       // Account hosting is governed only by [remote-account-host], not the server password or registration policy.
       const account = hostedAccounts.register(body.username, body.credential, body.encryptedData);
       set.status = 201;
       return account;
     }, { body: t.Object({ ...hostedCredentials, encryptedData }, { additionalProperties: false }) })
-    .post(hostedAccountPath + "login", ({ request, body }) => {
-      limit(request);
-      return hostedAccounts.read(body.username, body.credential);
-    }, { body: t.Object(hostedCredentials, { additionalProperties: false }) })
-    .post(hostedAccountPath + "update", ({ request, body }) => {
-      limit(request);
-      return hostedAccounts.update(body.username, body.credential, body.revision, body.encryptedData);
-    }, { body: t.Object({ ...hostedCredentials, encryptedData,
+    .post(hostedLoginPath, ({ body }) => hostedAccounts.read(body.username, body.credential),
+      { body: t.Object(hostedCredentials, { additionalProperties: false }) })
+    .post(hostedUpdatePath, ({ body }) => hostedAccounts.update(body.username, body.credential, body.revision, body.encryptedData),
+      { body: t.Object({ ...hostedCredentials, encryptedData,
       revision: t.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER - 1 }) }, { additionalProperties: false }) })
     .post("/api/v1/auth/identity/challenge", ({ request, body }) => {
       const client = limit(request);
@@ -296,10 +318,10 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
       { query: t.Object({ after: t.Optional(id) }) })
     .patch("/api/v1/admin/badges", ({ request, body }) =>
       realtime.setBadge(bearer(request).accountId, body.accountId, body.badge), { body: httpBodies.accountBadge })
-    .patch("/api/v1/admin/roles", ({ request, body }) => {
-      realtime.setRole(auth.account(bearer(request).accountId), body.accountId, body.role);
-      return { role: body.role };
-    }, { body: payloads["role.set"] })
+    .post("/api/v1/admin/accounts/roles", ({ request, body }) =>
+      realtime.addRole(auth.account(bearer(request).accountId), body.accountId, body.role), { body: payloads["role.add"] })
+    .delete("/api/v1/admin/accounts/roles", ({ request, body }) =>
+      realtime.removeRole(auth.account(bearer(request).accountId), body.accountId, body.role), { body: payloads["role.remove"] })
     .post("/api/v1/admin/roles", ({ request, body }) =>
       realtime.defineRole(bearer(request).accountId, body.name.trim(), body.permissions, true), { body: httpBodies.roleDefinition })
     .patch("/api/v1/admin/roles/definition", ({ request, body }) =>

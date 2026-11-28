@@ -5,6 +5,6 @@ export default {
   preprocess: vitePreprocess(),
   kit: {
     adapter: adapter({ pages: "dist", assets: "dist", fallback: "index.html" }),
-    alias: { "#lib": "./src/lib", elysia: "../backend/node_modules/elysia" },
+    alias: { "#lib": "./src/lib" },
   },
 };

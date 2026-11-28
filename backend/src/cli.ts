@@ -173,7 +173,7 @@ async function start(db: Store, auth: Auth, hosted: HostedAccounts, config: Conf
     try { await media.start(); }
     catch (error) {
       const detail = error instanceof Error ? error.message : "unknown error";
-      throw new Error(`Media worker could not start. Check OpenSSL 3.5.9+, media addresses and port availability (${detail})`);
+      throw new Error(`Media worker could not start. Check your OpenSSL branch's patch level, media addresses and port availability (${detail})`);
     }
     realtime = new Realtime(db, auth, media, config);
     const app = createApp(config, auth, hosted, media, realtime, { serverId, fingerprint: tls?.fingerprint });

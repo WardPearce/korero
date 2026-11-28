@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ChevronDown, LockKeyhole, Mail, Plus, Search, Settings2, X } from "@lucide/svelte";
+  import Avatar from "#lib/components/Avatar.svelte";
   import ChannelMember from "#lib/components/server/ChannelMember.svelte";
   import MobileChannelSheet from "#lib/components/server/MobileChannelSheet.svelte";
   import ContextActions from "#lib/components/ContextActions.svelte";
@@ -7,6 +8,7 @@
   import VoiceToolbar from "#lib/components/media/VoiceToolbar.svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
+  import { groupChannelsByParent } from "#lib/channel-tree";
   import type { Channel, Member } from "#lib/connection/client";
   import { getWorkspace, type ChannelPlacement } from "#lib/workspace";
 
@@ -80,15 +82,7 @@
     return [...placed, ...remaining.values()];
   });
   let channelsById = $derived(new Map(channels.map((channel) => [channel.id, channel])));
-  let channelsByParent = $derived.by(() => {
-    const groups = new Map<string | null, Channel[]>();
-    for (const channel of channels) {
-      const siblings = groups.get(channel.parentId);
-      if (siblings) siblings.push(channel);
-      else groups.set(channel.parentId, [channel]);
-    }
-    return groups;
-  });
+  let channelsByParent = $derived(groupChannelsByParent(channels));
   let me = $derived(snapshot?.account);
   let online = $derived(view.phase === "online");
   const movableMembers = $derived(new Map(channels.flatMap((channel) =>
@@ -212,6 +206,17 @@
 
   function membersIn(channelId: string) {
     return snapshot?.channelMembers?.[channelId] ?? (snapshot?.channelId === channelId ? snapshot?.members ?? [] : []);
+  }
+
+  const collapsedPreviewLimit = 10;
+
+  /** Everyone in a channel and all of its sub-channels, for the avatar summary on a collapsed row. */
+  function membersBeneath(channelId: string): Member[] {
+    return [...membersIn(channelId), ...(channelsByParent.get(channelId) ?? []).flatMap((child) => membersBeneath(child.id))];
+  }
+
+  function memberSpeaking(member: Member) {
+    return !member.afk && (member.speaking ?? view.speaking.includes(member.connectionId));
   }
 
   function toggleMemberSelection(channel: Channel, member: Member) {
@@ -386,42 +391,57 @@
   {@const members = membersIn(channel.id)}
   {@const expandable = children.length > 0 || members.length > 0}
   {@const isSelected = currentChannel?.id === channel.id}
+  {@const hiddenMembers = expandable && collapsed.includes(channel.id) ? membersBeneath(channel.id) : []}
   {@const image = channel.backgroundImageUrl?.startsWith("https://") ? channel.backgroundImageUrl : null}
-  <li>
-    <ContextActions disabled={!online || Boolean(pending)} actions={channelActions(channel)}>
-      {#snippet trigger(props)}
-    <div class="channel-row" role="group" data-selected={isSelected} data-drop={dropTarget?.id === channel.id ? dropTarget.placement : undefined}
-      data-dragging={draggedChannel?.id === channel.id ? "" : undefined}
-      ondragover={(event) => dragOver(event, channel)}
-      style:--depth={Math.min(depth, 6)}>
-      {#if image}
-        {#key image}
-          <img class="channel-background" src={image} alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"
-            onerror={(event) => { event.currentTarget.setAttribute("hidden", ""); }} />
-        {/key}
-      {/if}
-      {#if expandable}
-        <button type="button" class="tree-expander" onclick={() => toggleGroup(channel.id)} aria-label={collapsed.includes(channel.id) ? `Expand ${channel.name}` : `Collapse ${channel.name}`} aria-expanded={!collapsed.includes(channel.id)}>
-          <ChevronDown size={13} class={collapsed.includes(channel.id) ? "collapsed-chevron" : ""} />
-        </button>
-      {/if}
-      <button {...props} type="button" class="channel-target" data-leaf={expandable ? undefined : ""}
-        aria-current={isSelected ? "true" : undefined}
-        onclick={() => tapChannel(channel)} ondblclick={() => onjoin(channel)} draggable={canReorder && channel.canEdit === true}
-        ondragstart={(event) => startDrag(event, channel)} ondragend={endDrag}>
-        {#if channel.icon}<span class="channel-icon" aria-hidden="true">{channel.icon}</span>{/if}
-        <span class="truncate" title={channel.name}>{channel.name}</span>
-        {#if channel.passwordRequired}
-          <span class="channel-access access-lock" title="Password protected">
-            <LockKeyhole size={14} aria-hidden="true" /><span class="sr-only">Password protected</span>
-          </span>
-        {/if}
-      </button>
+  <li class="channel-item">
+    <div class="channel-heading">
+      <ContextActions disabled={!online || Boolean(pending)} actions={channelActions(channel)}>
+        {#snippet trigger(props)}
+          <div class="channel-row" role="group" data-selected={isSelected} data-drop={dropTarget?.id === channel.id ? dropTarget.placement : undefined}
+            data-dragging={draggedChannel?.id === channel.id ? "" : undefined}
+            ondragover={(event) => dragOver(event, channel)}>
+            {#if image}
+              {#key image}
+                <img class="channel-background" src={image} alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"
+                  onerror={(event) => { event.currentTarget.setAttribute("hidden", ""); }} />
+              {/key}
+            {/if}
+            {#if expandable}
+              <button type="button" class="tree-expander" onclick={() => toggleGroup(channel.id)} aria-label={collapsed.includes(channel.id) ? `Expand ${channel.name}` : `Collapse ${channel.name}`} aria-expanded={!collapsed.includes(channel.id)}>
+                <ChevronDown size={13} class={collapsed.includes(channel.id) ? "collapsed-chevron" : ""} />
+              </button>
+            {/if}
+            <button {...props} type="button" class="channel-target" data-leaf={expandable ? undefined : ""}
+              aria-current={isSelected ? "true" : undefined}
+              onclick={() => tapChannel(channel)} ondblclick={() => onjoin(channel)} draggable={canReorder && channel.canEdit === true}
+              ondragstart={(event) => startDrag(event, channel)} ondragend={endDrag}>
+              {#if channel.icon}<span class="channel-icon" aria-hidden="true">{channel.icon}</span>{/if}
+              <span class="truncate" title={channel.name}>{channel.name}</span>
+              {#if channel.passwordRequired}
+                <span class="channel-access access-lock" title="Password protected">
+                  <LockKeyhole size={14} aria-hidden="true" /><span class="sr-only">Password protected</span>
+                </span>
+              {/if}
+              {#if hiddenMembers.length}
+                <span class="channel-presence" title={hiddenMembers.map((member) => member.displayName).join(", ")}>
+                  <span class="channel-presence-avatars">
+                    {#each hiddenMembers.slice(0, collapsedPreviewLimit) as member (member.connectionId)}
+                      <Avatar name={member.displayName} accountId={member.accountId} small speaking={memberSpeaking(member)} />
+                    {/each}
+                  </span>
+                  {#if hiddenMembers.length > collapsedPreviewLimit}
+                    <span class="channel-presence-more" aria-hidden="true">+{hiddenMembers.length - collapsedPreviewLimit}</span>
+                  {/if}
+                  <span class="sr-only">{hiddenMembers.length === 1 ? "1 user" : `${hiddenMembers.length} users`}</span>
+                </span>
+              {/if}
+            </button>
+          </div>
+        {/snippet}
+      </ContextActions>
     </div>
-      {/snippet}
-    </ContextActions>
     {#if members.length && !collapsed.includes(channel.id)}
-      <ul class="member-list" aria-label={`Members in ${channel.name}`} style:--depth={Math.min(depth, 6)}>
+      <ul class="member-list" aria-label={`Members in ${channel.name}`}>
         {#each members as member (member.connectionId)}
           {@const movable = movableMembers.get(member.connectionId) === channel.id}
           <ChannelMember {channel} {member} selected={selectedMembers.has(member.connectionId)}
@@ -432,7 +452,7 @@
       </ul>
     {/if}
     {#if children.length && !collapsed.includes(channel.id)}
-      <ul>
+      <ul class="channel-children" data-indented={depth < 6 ? "" : undefined}>
         {#each children as child (child.id)}
           {@render channelRow(child, depth + 1, true)}
         {/each}
@@ -571,6 +591,33 @@
     color: var(--muted-foreground);
     font-size: var(--type-small);
   }
+  .channel-target:has(.channel-presence) { flex-wrap: wrap; row-gap: 0; }
+  .channel-presence {
+    display: flex;
+    flex-basis: 100%;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    margin-block: -2px 2px;
+  }
+  /* Wraps avatars that don't fit onto a clipped second line, so only whole avatars show. */
+  .channel-presence-avatars {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-width: 0;
+    height: 30px;
+    padding: 3px;
+    margin-inline-start: -3px;
+    overflow: hidden;
+  }
+  .channel-presence-more {
+    flex: none;
+    color: var(--muted-foreground);
+    font-size: var(--type-caption);
+    font-weight: 600;
+  }
+  .channel-row:has(.channel-background:not([hidden])) .channel-presence-more { color: rgb(255 255 255 / 75%); }
   .online-count { display: inline-flex; align-items: center; gap: .35rem; }
   .online-count::before { content: ""; width: .4rem; height: .4rem; border-radius: 50%; background: var(--success); }
 </style>

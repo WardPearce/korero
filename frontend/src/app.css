@@ -33,7 +33,6 @@
   --ring: var(--foreground);
   --control-hover: color-mix(in srgb, var(--card) 92%, var(--foreground));
   --radius: 10px;
-  --avatar-radius: min(calc(var(--radius) * 2), 50%);
   --ui-gap: 14px;
   --control-height: 36px;
   --text-scale: 1;
@@ -52,13 +51,11 @@
 
 :root, .theme-sample {
   --control-selected: color-mix(in srgb, var(--primary) 14%, var(--muted));
-}
-
-@theme static {
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
+  --avatar-radius: min(calc(var(--radius) * 2), 50%);
 }
 
 @theme inline {
@@ -141,6 +138,23 @@ body {
   grid-template-columns: var(--rail-width) 6px minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
+}
+.dev-banner {
+  box-sizing: content-box;
+  height: 24px;
+  padding-top: var(--safe-area-inset-top);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--warning);
+  color: #1a1208;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.dev-banner ~ .shell {
+  height: calc(100dvh - 24px - env(safe-area-inset-top, 0px));
+  --safe-area-inset-top: 0px;
 }
 .shell[data-workspace="true"] {
   grid-template-columns: var(--rail-width) 6px var(--channel-width) 6px minmax(0, 1fr);
@@ -317,19 +331,61 @@ body {
 .channel-search { position: relative; margin: 12px; }
 .channel-search + .channel-search { margin-top: 0; }
 .channel-scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 12px 12px; }
+.channel-list {
+  --channel-gap: 10px;
+  --channel-indent: clamp(17px, 6.5cqi, 22px);
+  --channel-label-inset: 26px;
+  --channel-guide-center: calc(1px + var(--channel-label-inset) / 2);
+  --channel-guide-color: color-mix(in srgb, var(--border) 72%, var(--foreground));
+  padding-block-end: var(--channel-gap);
+}
+.channel-heading { padding-block-start: var(--channel-gap); }
+.channel-item, .channel-heading, .member-list { position: relative; }
+.channel-children[data-indented] { padding-inline-start: var(--channel-indent); }
+.channel-children[data-indented] > .channel-item > .channel-heading::before,
+.channel-children[data-indented] > .channel-item:not(:last-child)::before,
+.member-list:has(+ .channel-children[data-indented])::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: calc(var(--channel-guide-center) - var(--channel-indent));
+  border-inline-start: 1px solid var(--channel-guide-color);
+  pointer-events: none;
+}
+.channel-children[data-indented] > .channel-item > .channel-heading::before {
+  inset-inline-end: 100%;
+  block-size: calc(50% + var(--channel-gap) / 2);
+  border-block-end: 1px solid var(--channel-guide-color);
+  border-end-start-radius: 5px;
+}
+.channel-children[data-indented] > .channel-item:not(:last-child)::before { inset-block-end: 0; }
+.channel-children[data-indented] > .channel-item:not(:last-child) > .channel-heading::before {
+  border-inline-start: 0;
+  border-end-start-radius: 0;
+}
+.member-list:has(+ .channel-children[data-indented])::before {
+  inset-block-end: 0;
+  inset-inline-start: calc(var(--channel-guide-center) - var(--channel-label-inset));
+}
 .section-label > span { display: inline-flex; align-items: center; gap: 6px; }
 .channel-row {
   position: relative;
   isolation: isolate;
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr);
-  min-height: max(40px, var(--control-height));
+  grid-template-columns: var(--channel-label-inset) minmax(0, 1fr);
+  min-height: max(44px, var(--control-height));
   min-width: 0;
-  margin: 6px 0 6px calc(var(--depth) * 10px);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--border) 85%, var(--foreground));
   border-radius: var(--radius-md);
+  background: var(--card);
+  box-shadow: var(--shadow-raised);
+  font-weight: 600;
+  transition: background-color .15s, border-color .15s;
 }
-.channel-row:hover { background: var(--control-hover); }
+.channel-row:hover, .channel-row:has(:focus-visible) {
+  background: var(--control-hover);
+  border-color: color-mix(in srgb, var(--border) 45%, var(--primary));
+}
 .channel-row[data-selected="true"] {
   background: var(--control-selected);
   border-color: var(--primary);
@@ -347,8 +403,8 @@ body {
   background: var(--primary);
   pointer-events: none;
 }
-.channel-row[data-drop="before"]::after { top: -3px; }
-.channel-row[data-drop="after"]::after { bottom: -3px; }
+.channel-row[data-drop="before"]::after { top: calc(-1 * var(--channel-gap) / 2 - 2px); }
+.channel-row[data-drop="after"]::after { bottom: calc(-1 * var(--channel-gap) / 2 - 2px); }
 .channel-row[data-drop="inside"] {
   outline: 2px solid var(--primary);
   outline-offset: -2px;
@@ -368,21 +424,22 @@ body {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 4px 8px 4px 0;
+  padding: 6px 12px 6px 0;
   border-radius: var(--radius-md);
+  cursor: pointer;
   text-align: left;
 }
 .channel-target[data-leaf] {
   grid-column: 1 / -1;
-  padding-inline-start: 26px;
+  padding-inline-start: var(--channel-label-inset);
 }
 .channel-target:focus-visible { outline-offset: -2px; }
 .channel-icon { flex: none; min-width: 1.1em; font-size: 1.1em; line-height: 1; text-align: center; }
-.channel-target[draggable="true"] { cursor: grab; }
+.channel-row[data-dragging] .channel-target { cursor: grabbing; }
 .access-lock { flex: none; color: var(--muted-foreground); }
 .channel-access { margin-left: auto; }
 .channel-empty { padding: 8px 0; color: var(--muted-foreground); font-size: var(--type-small); }
-.member-list { margin-left: calc(26px + var(--depth) * 10px); }
+.member-list { margin-inline-start: var(--channel-label-inset); padding-block-start: 4px; }
 .tree-member {
   display: flex;
   border-radius: var(--radius-sm);
@@ -542,10 +599,13 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
   background: var(--popover);
   color: var(--popover-foreground);
   box-shadow: var(--shadow-floating);
-  overflow: auto;
+  /* The body scrolls instead of the dialog: the glass theme's backdrop-filter makes the dialog the
+     containing block for fixed popovers portaled inside it, so a scrolling dialog would clip them. */
+  overflow: visible;
 }
+.app-dialog[open] { display: flex; flex-direction: column; }
 .app-dialog::backdrop { background: var(--depth-shadow); }
-.dialog-body { padding: max(16px, var(--ui-gap)); }
+.dialog-body { min-height: 0; overflow: auto; border-radius: inherit; padding: max(16px, var(--ui-gap)); }
 .dialog-body > .form-error { margin-bottom: .75rem; }
 .dialog-heading { display: flex; align-items: center; gap: 8px; }
 .dialog-heading h2 { flex: 1; font-size: 1.125rem; overflow-wrap: anywhere; }
@@ -599,6 +659,19 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
 }
 .admin-members li { padding: 8px 0; border-bottom: 1px solid var(--border); }
 .admin-members small { overflow-wrap: anywhere; }
+.role-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.role-chip { display: inline-flex; align-items: center; gap: 2px; }
+.role-chip-remove {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.role-chip-remove:hover, .role-chip-remove:focus-visible { color: var(--foreground); }
+.role-chip-remove svg { width: .8rem; height: .8rem; }
 .role-permissions {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));

@@ -1,4 +1,4 @@
-<script lang="ts">
+<script module lang="ts">
 	import { createHighlighterCoreSync } from 'shiki/core';
 	import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
 	import bash from '@shikijs/langs/bash';
@@ -6,17 +6,20 @@
 	import toml from '@shikijs/langs/toml';
 	import ini from '@shikijs/langs/ini';
 	import json from '@shikijs/langs/json';
+	import typescript from '@shikijs/langs/typescript';
 	import { korero } from '../korero-theme';
 
-	type Lang = 'bash' | 'yaml' | 'toml' | 'ini' | 'json';
-	let { code, lang, label }: { code: string; lang: Lang; label?: string } = $props();
+	type Lang = 'bash' | 'yaml' | 'toml' | 'ini' | 'json' | 'typescript';
 
 	const highlighter = createHighlighterCoreSync({
 		themes: [korero],
-		langs: [bash, yaml, toml, ini, json],
+		langs: [bash, yaml, toml, ini, json, typescript],
 		engine: createJavaScriptRegexEngine()
 	});
+</script>
 
+<script lang="ts">
+	let { code, lang, label }: { code: string; lang: Lang; label?: string } = $props();
 	const html = $derived(highlighter.codeToHtml(code, { lang, theme: 'korero' }));
 </script>
 

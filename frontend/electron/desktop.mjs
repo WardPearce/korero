@@ -7,7 +7,7 @@ const publicEndpoints = new Set(["GET /api/v1/server/info", "GET /api/v1/server/
 const endpoints = new Set([
   "GET /api/v1/account", "GET /api/v1/account/sessions", "PATCH /api/v1/account", "PATCH /api/v1/account/picture",
   "GET /api/v1/admin/accounts", "GET /api/v1/admin/invitations", "GET /api/v1/admin/audit",
-  "GET /api/v1/admin/password", "GET /api/v1/admin/preferences", "PATCH /api/v1/admin/roles",
+  "GET /api/v1/admin/password", "GET /api/v1/admin/preferences", "POST /api/v1/admin/accounts/roles", "DELETE /api/v1/admin/accounts/roles",
   "PATCH /api/v1/admin/roles/definition", "DELETE /api/v1/admin/roles/definition", "PATCH /api/v1/admin/banner",
   "PATCH /api/v1/admin/password", "PATCH /api/v1/admin/preferences", "PATCH /api/v1/admin/badges",
   "PATCH /api/v1/channels/order", "POST /api/v1/admin/invitations", "POST /api/v1/admin/roles", "POST /api/v1/chat/attachments",
@@ -20,7 +20,7 @@ const mediaOperations = new Set([
   "media.capabilities", "media.transport.create", "media.transport.connect", "media.transport.close", "media.producers",
   "media.producer.create", "media.producer.close", "media.consumer.create", "media.consumer.resume", "media.consumer.close",
 ]);
-const memberOperations = new Set(["channel.move", "moderation.mute", "moderation.deafen", "moderation.kick", "moderation.ban", "moderation.unban", "role.set"]);
+const memberOperations = new Set(["channel.move", "moderation.mute", "moderation.deafen", "moderation.kick", "moderation.ban", "moderation.unban", "role.add", "role.remove"]);
 const identityPaths = new Map([
   ["login", "/api/v1/auth/identity/login"], ["register", "/api/v1/auth/register"], ["bootstrap", "/api/v1/admin/bootstrap"],
 ]);
@@ -186,6 +186,16 @@ export class Desktop {
       case "view_channel": return this.#session(origin).viewChannel(connectionId, typeof channelId === "string" ? channelId : null);
       case "edit_message": return this.#session(origin).run((wire) => wire.rpc("message.edit", { messageId, text }));
       case "delete_message": return this.#session(origin).run((wire) => wire.rpc("message.delete", { messageId }));
+      case "pin_message": return this.#session(origin).run((wire) => wire.rpc("message.pin", { channelId, messageId, pinned: args.pinned }));
+      case "message_pins":
+      case "message_context": {
+        const session = this.#session(origin);
+        return session.run((wire) => {
+          if (session.connectionId !== connectionId) throw new Error("The server connection changed.");
+          return command === "message_pins" ? wire.rpc("message.pins", { channelId, before: args.before })
+            : wire.rpc("message.context", { channelId, messageId });
+        });
+      }
       case "save_channel": return this.#session(origin).saveChannel(payload);
       case "delete_channel": return this.#session(origin).run((wire) => wire.rpc("channel.delete", { channelId }));
       case "member_action": {

@@ -7,7 +7,7 @@ import { endpoint } from "../src/config";
 import { fingerprint } from "../src/security/tls";
 
 export type Device = {
-  account: { id: string; displayName: string; role: string };
+  account: { id: string; displayName: string; role: string; roles: string[] };
   sessionId: string;
   accessToken: string;
   refreshToken: string;
@@ -122,14 +122,15 @@ export async function fixture(options: {
         headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...(access ? { authorization: `Bearer ${access}` } : {}) } });
       return { response, payload: await response.json() as T };
     }
-    async function proof(operation: "login" | "register" | "bootstrap", identity: ReturnType<typeof testIdentity>, deviceName = "Test") {
+    async function proof(operation: "login" | "register" | "bootstrap", identity: ReturnType<typeof testIdentity>,
+      deviceName = "Test", challengeOrigin = origin) {
       const publicKey = identity.publicKey.export({ format: "jwk" }).x!;
       const { response, payload } = await call<{ id: string; serverId: string; binding: string; expiresAt: number }>(
-        "/api/v1/auth/identity/challenge", { operation, publicKey, deviceName, origin },
+        "/api/v1/auth/identity/challenge", { operation, publicKey, deviceName, origin: challengeOrigin },
       );
       if (!response.ok) throw new Error("Could not obtain an identity challenge");
       const { id, serverId, binding, expiresAt } = payload;
-      const transcript = ["korero-identity-v1", serverId, origin, operation, id, publicKey, binding, deviceName, expiresAt];
+      const transcript = ["korero-identity-v1", serverId, challengeOrigin, operation, id, publicKey, binding, deviceName, expiresAt];
       return { id, signature: sign(null, Buffer.from(JSON.stringify(transcript)), identity.privateKey).toString("base64url") };
     }
     return { directory, port, mediaPort, origin, ca, tls, command, defaultEnv, setupToken, stop, cleanup, call, proof,

@@ -43,8 +43,9 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | POST `/api/v1/chat/attachments` | Access token and matching connection | `connectionId, channelId, text, html?, name, data` | `{messageId}` |
 | GET `/api/v1/chat/attachments/:messageId` | Access token and matching connection | Query `connectionId` | `{data}` |
 | DELETE `/api/v1/account/sessions/:id` | Access token | — | `{}` |
-| GET `/api/v1/admin/accounts` | `manageRoles` | Query `after?` account ID | `accounts, next, roles, canDefineRoles, builtInRoles, customRoles, assignablePermissions, defaultRole, registrationPermissions` |
-| PATCH `/api/v1/admin/roles` | `manageRoles` | `accountId, role` | `{role}` |
+| GET `/api/v1/admin/accounts` | `manageRoles` | Query `after?` account ID; each account carries `role`, `roles`, `editable`, `banned` and `bannedUntil` (`null` when permanent or not banned) | `accounts, next, roles, canDefineRoles, builtInRoles, customRoles, assignablePermissions, defaultRole, registrationPermissions` |
+| POST `/api/v1/admin/accounts/roles` | `manageRoles` | `accountId, role` | `{roles}` after adding the role |
+| DELETE `/api/v1/admin/accounts/roles` | `manageRoles` | `accountId, role` | `{roles}` after removing the role |
 | PATCH `/api/v1/admin/badges` | `manageRoles` | `accountId, badge` | `{badge}` |
 | POST `/api/v1/admin/roles` | Administrator or Owner | `name, permissions` | `{name, permissions}` |
 | PATCH `/api/v1/admin/roles/definition` | Administrator or Owner | `name, permissions` | `{name, permissions}` |
@@ -63,7 +64,8 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | GET `/api/v1/admin/password` | `manageSettings` | — | `{passwordRequired, passwordLocked}` |
 | PATCH `/api/v1/admin/password` | `manageSettings` when `VOICE_SERVER_PASSWORD` is unset | `password` or `null` to remove it | `{passwordRequired}` |
 
-An Account object has `id, displayName, role, createdAt, badge`. Session responses have
+An Account object has `id, displayName, role, roles, createdAt, badge`. `roles` lists every
+role the account holds, highest rank first, and `role` is the first of them (the display role). Session responses have
 `sessionId, accessToken, refreshToken, accessExpiresAt, refreshExpiresAt` at the top
 level alongside `account` for sign-in and account creation. Session listings
 contain no token values. The capability response supplies ICE server settings
@@ -92,8 +94,27 @@ and custom roles through `PATCH /api/v1/admin/roles/definition`. Each `builtInRo
 entry has `name, permissions, editable, defaultPermissions`. Role grants apply to
 connected accounts immediately and trigger `state.invalidated`.
 
-Role changes require the actor to rank above both the account’s current role and
-its new role and to hold both roles’ server-wide and effective channel permissions.
+An account holds 1–25 roles and always keeps Guest or Member. New accounts receive the
+registration default role. When that is a custom role they also receive Guest, and the
+Owner also holds Member. Permissions combine across held roles:
+
+1. Holding Owner allows everything.
+2. In a channel, the server walks from that channel up through its parents. At the first
+   level where any held role has an override, an allow from any role wins. Otherwise a
+   deny there denies.
+3. Without a channel override, a permission is allowed when any held role grants it.
+
+A channel deny on one role therefore overrides a server-wide grant from another. For
+example, a Moderator also holds Member, so a channel that denies `Member` `join` needs an
+explicit `Moderator` allow to keep admitting Moderators. Upgrading writes these allows for
+existing channels.
+
+An account ranks as its highest-ranked role. Adding or removing a role requires
+`manageRoles`, a higher rank than the account and than the role, and the role’s
+server-wide and effective channel permissions. Removing the last of Guest and Member,
+or adding a 26th role, fails with `CONFLICT`. Repeating a change has no effect.
+Changes are audited as `role.added` and `role.removed` with `details.role` and
+`details.roles`. Connected peers are re-checked at once and receive `state.invalidated`.
 Editing or deleting a role requires a higher rank and the role’s existing grants.
 New role grants must stay within the actor’s permissions at every scope where they apply.
 Custom roles share a rank between Moderator and Administrator. Channel ordering
@@ -124,8 +145,10 @@ the compact JSON array below with the private key. `id` is the challenge nonce a
 ```
 
 Encode the signature as base64url without padding. Send `{id, signature}` to the
-login endpoint or as `identity` in the enrollment request. A valid login proof for
-an unregistered key returns `NOT_FOUND`.
+login endpoint or as `identity` in the enrollment request. Login challenges echo
+the requested origin. After verifying the signature, the server checks that it
+matches the enrolled origin. A valid login proof for an unregistered key returns
+`NOT_FOUND`.
 
 ## WebSocket connection and envelopes
 
@@ -174,6 +197,9 @@ members, serverPermissions, lowerRoles, assignableRoles, bannerImageUrl, canReor
 represents one online account, even when that account has multiple connected devices.
 Extended administration adds `motd` and the effective server `targetAudioBitrate`
 in bits per second. Changes to either value trigger `state.invalidated`.
+`serverPermissions` combines the grants of every held role. Callers with `manageRoles`
+also get `accountsRevision`, which increases whenever any account's roles change. Those
+callers receive `state.invalidated` on each change, so they can reload account listings.
 `lowerRoles` lists roles below the caller in the server hierarchy. `assignableRoles`
 lists roles the caller can assign to a subordinate account. The channel list has
 `id, parentId, name, description, position, capacity, temporary, passwordRequired, canDeleteMessages, canChat, canAttachFiles, canMute, canMove, canReparent, canDelete, canManagePermissions`.
@@ -183,7 +209,7 @@ are talking to an older server and should only chat in the joined channel.
 `canMove` reports whether the caller has the server-wide `move` permission.
 `canManagePermissions` reports whether the caller can use the channel permissions endpoints.
 Invisible parents are represented as null. Members have `connectionId, accountId,
-displayName, role, badge, muted, deafened, adminMuted, adminDeafened` and cover the socket's
+displayName, role, roles, badge, muted, deafened, adminMuted, adminDeafened` and cover the socket's
 current channel. Presence entries have
 `accountId, displayName, connections`. On servers with `profilePictures`, accounts
 and presence entries include a nullable `avatarId` revision. Profile pictures are
@@ -192,7 +218,7 @@ account's presence and invalidates its active sessions' snapshots.
 
 Badges are cosmetic text labels of up to 32
 characters. The badge endpoint accepts `null` to clear a badge. It only allows edits
-to other accounts below the caller's role, and records changes in the audit log.
+to other accounts that rank below the caller, and records changes in the audit log.
 
 Oversized frames, a full pending request queue or outbound backpressure may close
 the socket. Treat close code 4401 as a need to reauthenticate, 4403 as a kick, and
@@ -219,7 +245,8 @@ password or permission-override fields.
 | `channel.view` | `channelId`, or null to stop | `{}` |
 | `channel.move` | `channelId` and either `connectionId` or `connectionIds` | `{}` |
 | `presence.set` | `muted?, deafened?, afk?, afkMessage?` | Member |
-| `role.set` | `accountId, role` | `{}` |
+| `role.add` | `accountId, role` | `{roles}` |
+| `role.remove` | `accountId, role` | `{roles}` |
 | `channel.override` | `channelId, role, permission, allow` | `{}` |
 | `moderation.mute` | `connectionId, muted` | `{}` |
 | `moderation.deafen` | `connectionId, deafened` | `{}` |
@@ -235,6 +262,9 @@ password or permission-override fields.
 | `admin.audit` | `before?` audit ID | Latest 100 matching audit records |
 | `message.send` | `channelId, text, html?` | `{messageId}` |
 | `message.history` | `channelId` and optional `before` timestamp | Up to 100 channel messages in descending time order |
+| `message.context` | `channelId, messageId` | Target message and up to 20 stored messages on either side, oldest first |
+| `message.pins` | `channelId, before?: {pinnedAt, id}` | `{messages, next}` with up to 50 pinned-message previews, newest pin first |
+| `message.pin` | `channelId, messageId, pinned` | `{}` |
 | `message.edit` | `messageId, text, html?` | `{}` |
 | `message.delete` | `messageId` | `{}` |
 | `direct.peer` | `accountId` | `accountId, displayName, publicKey, ownPublicKey` |
@@ -247,11 +277,15 @@ password or permission-override fields.
 
 `channel.override` requires `manageRoles`, `editChannels`, and the permission being
 changed at server scope. The actor must also rank above the target role and hold
-its server-wide grants. In the target channel and every descendant whose effective
-permission changes, the actor needs `join`, the permission being changed, and the
-target role’s effective channel permissions.
-Moving a channel applies the same role and scope checks to changes in inherited
-permissions.
+its server-wide grants. In the target channel and every descendant that inherits the
+override, the actor needs `join`, the permission being changed, and the target role’s
+effective channel permissions.
+Moving a channel applies the same role and scope checks to every role whose inherited
+result changes, or whose inherited deny appears or disappears.
+
+Adding or removing an account role also requires the actor to hold, in each channel and at
+server scope, every permission the change would newly allow for that account. Removing a
+role that carries a channel deny can let the account's other roles' grants apply there.
 
 The channel permissions endpoints need `manageRoles` and `editChannels` at server
 scope, plus `join` in the channel. `roles` lists each role below the caller whose
@@ -269,9 +303,15 @@ requires `deleteChannels` in that channel.
 
 `channel.move` accepts one connection ID or an array of 1–1024 connection IDs.
 The caller needs the server-wide `move` grant. Each target must rank below the
-caller and have `join` in the destination. The server checks all targets and
-available capacity before moving the group. Duplicate IDs count once. A moderator
-can move a member into a password-protected channel.
+caller. The server checks all targets and available capacity before moving the
+group. Duplicate IDs count once. A moderator can move a member into a
+password-protected channel.
+A target that lacks `join` or `speak` in the destination is still moved, and its
+connection is server muted there (`adminMuted: true`). While it stays in that
+channel the move stands in for `join` and `speak`; `moderation.mute` with
+`muted: false` lifts the mute. The placement and its mute end when the connection
+leaves the channel. Other grants, such as `text`, `shareScreen` and `useCamera`,
+still come from the member's roles.
 Existing channel denials for `createChannels`, `editChannels`, `removeChannels`,
 and `move` still apply after an upgrade. Moves honor the denials in both the
 source and destination.
@@ -297,6 +337,13 @@ The server sends `channel.viewEnded` when it drops the subscription because the
 connection lost chat access. Send `channel.view` again once `canChat` is true.
 Subscribe before requesting history so no message is missed.
 History is empty when text persistence is disabled. Current live text still works.
+When `messagePins` is true on a channel in the snapshot, anyone who can read its chat
+can list its pins and open the surrounding messages. Pass the returned `next`
+cursor as `before` to continue listing pins. Each preview has `id, senderId,
+createdAt, pinnedAt, text, attachmentName`. Preview text is capped at 240 characters.
+Pinning and unpinning require `canPinMessages`, which reflects both chat access and
+the channel-scoped `pinMessages` permission. Stored message objects include
+`pinnedAt` when pinned. Deletion and ordinary message retention also remove the pin.
 Message objects contain `id, channelId, recipientId, senderId, createdAt, editedAt, text`
 and may include `html` and attachment metadata as `attachment: {name, size}`.
 `editedAt` is null until the sender replaces the message text. Editing keeps the
@@ -448,7 +495,8 @@ target bitrate defaults to 64 kbit/s. A channel's `audioBitrate` can override
 the server default with a value from 32000 to 128000 bits per second. Setting it
 requires `manageSettings` and the applicable channel editing permissions. Use
 `null` to inherit the server default. Use the effective bitrate in the sender's
-Opus codec options. Actual throughput depends on the encoder and network.
+Opus codec options. The worker applies a separate ingress ceiling for microphone
+and whisper RTP and an aggregate egress ceiling for outgoing RTP.
 
 Servers advertising `screenSharing` support a separate screen transport in each
 direction. Publishing requires `speak` and `shareScreen` in the joined channel,
@@ -493,8 +541,9 @@ in `cameras` or through `media.cameraAvailable`.
 | `state.invalidated` | `{}`, re-fetch snapshot |
 | `server.changed` | `name, registration` |
 | `message.created` | Message |
-| `message.edited` | `messageId, text, html?, editedAt` |
-| `message.deleted` | `messageId` |
+| `message.edited` | `messageId, text, html?, editedAt, channelId?` (channel ID for stored messages) |
+| `message.deleted` | `messageId, channelId?` (channel ID for stored channel messages) |
+| `message.pinChanged` | `channelId, messageId, pinnedAt` (`pinnedAt` is null after unpinning) |
 | `direct.created` | Encrypted direct message packet |
 | `direct.edited` | Encrypted direct message packet with `editedAt` |
 | `direct.deleted` | `id, senderId, recipientId` |

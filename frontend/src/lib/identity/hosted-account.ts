@@ -88,10 +88,11 @@ export function isSavedServer(value: unknown): value is SavedServer {
   const server = value as Partial<SavedServer>;
   const url = typeof server.origin === "string" ? parseUrl(server.origin) : null;
   return url?.protocol === "https:" && url.origin === server.origin && typeof server.name === "string" &&
-    (server.passwordRequired === undefined || typeof server.passwordRequired === "boolean");
+    (server.passwordRequired === undefined || typeof server.passwordRequired === "boolean") &&
+    (server.autoConnect === undefined || typeof server.autoConnect === "boolean");
 }
 
-function isBookmarkPassword(value: unknown): value is BookmarkPassword {
+export function isBookmarkPassword(value: unknown): value is BookmarkPassword {
   if (!value || typeof value !== "object") return false;
   const entry = value as Partial<BookmarkPassword>;
   return typeof entry.origin === "string" && typeof entry.serverId === "string" && entry.serverId.length > 0 &&

@@ -1,15 +1,16 @@
 <script lang="ts">
-  import { CircleAlert, Download, Headphones, MessageCircle, Pencil, PhoneOff } from "@lucide/svelte";
+  import { CircleAlert, Download, Headphones, MessageCircle, Pencil, PhoneOff, Pin } from "@lucide/svelte";
   import { tick } from "svelte";
   import ChatComposer from "#lib/components/chat/ChatComposer.svelte";
   import ChatMessage from "#lib/components/chat/ChatMessage.svelte";
   import RichMessage from "#lib/components/chat/RichMessage.svelte";
   import IconButton from "#lib/components/IconButton.svelte";
+  import Modal from "#lib/components/Modal.svelte";
   import ScreenSharing from "#lib/components/media/ScreenSharing.svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import { downloadAttachment } from "#lib/chat/chat-attachments";
   import { maxChatTextLength } from "#lib/chat/rich-chat";
-  import type { Channel } from "#lib/connection/client";
+  import { channelMessageContext, channelPins, messageFrom, type Channel, type Message, type PinCursor, type PinnedMessagePage } from "#lib/connection/client";
   import { voiceApp } from "#lib/connection/platform";
   import { playUiSound } from "#lib/ui-sounds";
   import { getWorkspace } from "#lib/workspace";
@@ -28,6 +29,7 @@
   const actionError = $derived(workspace.actionError);
   let messageList: HTMLDivElement | undefined;
   let lastChatChannel: string | null | undefined;
+  let lastLatestMessage: string | undefined;
   let knownMessageIds = new Set<string>();
   let initializedMessages = false;
 
@@ -42,6 +44,25 @@
   let canRead = $derived(online && (currentChannel?.canChat ?? isInRoom));
   let canChat = $derived(online && (currentChannel?.canChat ?? (isInRoom && snapshot?.canSendText !== false)));
   let messages = $derived(currentChannel ? view.messages.filter(({ channelId }) => channelId === currentChannel.id) : []);
+  const origin = $derived(workspace.serverOrigin);
+  const connectionId = $derived(snapshot?.connectionId);
+  const channelId = $derived(currentChannel?.id);
+  const supportsPins = $derived(currentChannel?.messagePins === true);
+  const chatScope = $derived(canRead && supportsPins && connectionId && channelId
+    ? { origin, connectionId, channelId } : null);
+  type ChatScope = NonNullable<typeof chatScope>;
+  const revision = $derived(channelId ? view.messageRevisions?.[channelId] ?? 0 : 0);
+  let pinsFor = $state.raw<ChatScope | null>(null);
+  const pinsOpen = $derived(chatScope !== null && pinsFor === chatScope);
+  let pinPage = $state.raw<PinnedMessagePage | null>(null);
+  let pinError = $state("");
+  let loadingPins = $state(false);
+  let jumpingTo = $state<string | null>(null);
+  let pinRequest = 0;
+  let history = $state.raw<{ scope: ChatScope; messageId: string; messages: Message[]; revision: number } | null>(null);
+  const showingHistory = $derived(history !== null && history.scope === chatScope);
+  const displayedMessages = $derived(showingHistory && history ? history.messages : messages);
+  let highlight = $state.raw<{ scope: ChatScope; messageId: string } | null>(null);
   let unavailableHint = $derived(!outsideChat ? "Join a channel to read and send messages."
     : currentChannel?.passwordRequired && !isInRoom ? "Join this password-protected channel to read and send messages."
     : "Your role cannot read or send messages in this channel.");
@@ -58,6 +79,8 @@
     const channelChanged = channel !== lastChatChannel;
     lastChatChannel = channel;
     const latestId = messages.at(-1)?.id;
+    const latestChanged = latestId !== lastLatestMessage;
+    lastLatestMessage = latestId;
     if (initializedMessages && !channelChanged && canRead) {
       // History arrives in bulk after switching channels. Only a single fresh arrival is a new message.
       const arrivals = messages.filter(({ id }) => !knownMessageIds.has(id));
@@ -68,10 +91,19 @@
     }
     knownMessageIds = new Set(messages.map(({ id }) => id));
     initializedMessages = true;
-    if (messages.length && messageList &&
-      (channelChanged || messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight < 90)) {
+    if (!showingHistory && messages.length && messageList &&
+      (channelChanged || (latestChanged && messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight < 90))) {
       void scrollMessages();
     }
+  });
+
+  $effect(() => {
+    if (pinsOpen && chatScope) void loadPins(chatScope, revision);
+  });
+
+  $effect(() => {
+    if (!showingHistory || !history || history.revision === revision) return;
+    void refreshHistory(history, revision);
   });
 
   function attachMessageList(element: HTMLDivElement) {
@@ -87,8 +119,82 @@
     if (messageList) messageList.scrollTop = messageList.scrollHeight;
   }
 
+  function setPinsOpen(open: boolean) {
+    pinsFor = open ? chatScope : null;
+    pinRequest++;
+    pinPage = null;
+    pinError = "";
+    jumpingTo = null;
+  }
+
+  async function loadPins(scope: ChatScope, requestedRevision: number, before?: PinCursor) {
+    const request = ++pinRequest;
+    const current = () => pinsFor === scope && chatScope === scope && revision === requestedRevision && request === pinRequest;
+    loadingPins = true;
+    pinError = "";
+    try {
+      const page = await channelPins(scope.origin, scope.connectionId, scope.channelId, before);
+      if (current()) pinPage = before && pinPage ? { ...page, messages: [...pinPage.messages, ...page.messages] } : page;
+    } catch (cause) {
+      if (current()) pinError = messageFrom(cause);
+    } finally {
+      if (current()) loadingPins = false;
+    }
+  }
+
+  async function jumpToMessage(messageId: string) {
+    const scope = chatScope;
+    if (!scope || !pinsOpen || jumpingTo) return;
+    jumpingTo = messageId;
+    pinError = "";
+    try {
+      if (messages.some((entry) => entry.id === messageId)) {
+        history = null;
+      } else if (!displayedMessages.some((entry) => entry.id === messageId)) {
+        const requestedRevision = revision;
+        const entries = await channelMessageContext(scope.origin, scope.connectionId, scope.channelId, messageId);
+        if (chatScope !== scope || !pinsOpen || jumpingTo !== messageId) return;
+        history = { scope, messageId, messages: entries, revision: requestedRevision };
+      }
+      setPinsOpen(false);
+      highlight = { scope, messageId };
+      await tick();
+      const target = document.getElementById(`chat-message-${messageId}`);
+      if (chatScope === scope && target && messageList?.contains(target)) {
+        target.tabIndex = -1;
+        target.scrollIntoView({ block: "center" });
+        target.focus({ preventScroll: true });
+      }
+    } catch (cause) {
+      if (chatScope === scope && pinsOpen) pinError = messageFrom(cause);
+    } finally {
+      if (jumpingTo === messageId) jumpingTo = null;
+    }
+  }
+
+  async function refreshHistory(current: NonNullable<typeof history>, requestedRevision: number) {
+    const { scope, messageId } = current;
+    try {
+      const entries = await channelMessageContext(scope.origin, scope.connectionId, scope.channelId, messageId);
+      if (history === current && chatScope === scope && revision === requestedRevision) {
+        history = { ...current, messages: entries, revision: requestedRevision };
+      }
+    } catch (cause) {
+      if (history === current && chatScope === scope && revision === requestedRevision) {
+        workspace.actionError = messageFrom(cause);
+        returnToLatest();
+      }
+    }
+  }
+
+  function returnToLatest() {
+    history = null;
+    highlight = null;
+    void scrollMessages();
+  }
+
   async function leaveChannel() {
-    if (await run("leave", "leave_channel")) playUiSound("disconnect");
+    await run("leave", "leave_channel");
   }
 
   async function changeMessage(action: string, command: string, args: Record<string, unknown>) {
@@ -112,6 +218,9 @@
       <p class="channel-description" title={currentChannel.description}>{currentChannel.description}</p>
     {/if}
   </div>
+  {#if chatScope}
+    <IconButton label="Pinned messages" onclick={() => setPinsOpen(true)}><Pin size={18} aria-hidden="true" /></IconButton>
+  {/if}
   {#if currentChannel?.canEdit}
     <IconButton label="Edit channel" disabled={!online || Boolean(pending)} onclick={() => onedit(currentChannel)}><Pencil size={19} aria-hidden="true" /></IconButton>
   {/if}
@@ -140,13 +249,24 @@
   {/if}
   <div class="contents" bind:this={workspace.screenShareViewerTarget}></div>
   <section class="chat-pane" aria-label="Channel chat">
+    {#if showingHistory}
+      <div class="flex items-center justify-between gap-2 border-b border-border px-3 py-2 text-sm">
+        <span>Earlier messages</span>
+        <Button variant="outline" size="sm" onclick={returnToLatest}>Back to latest</Button>
+      </div>
+    {/if}
     <div class="chat-log" {@attach attachMessageList} role="log" aria-label="Channel messages">
-      {#if canRead && messages.length}
-        {#each messages as entry, index (entry.id)}
+      {#if canRead && displayedMessages.length}
+        {#each displayedMessages as entry, index (entry.id)}
           {@const own = entry.senderId === me?.id}
-          <ChatMessage message={entry} previous={messages[index - 1]} name={senderName(entry.senderId)}
+          <ChatMessage message={entry} messageId={entry.id} pinned={Boolean(entry.pinnedAt)}
+            highlighted={highlight !== null && highlight.scope === chatScope && highlight.messageId === entry.id}
+            previous={displayedMessages[index - 1]} name={senderName(entry.senderId)}
             editText={own && canChat ? entry.text : undefined} editLimit={maxChatTextLength}
             onedit={own && canChat ? (text) => changeMessage("message-edit", "edit_message", { messageId: entry.id, text }) : undefined}
+            onpin={currentChannel?.canPinMessages && !pending ? () => {
+              void run("message-pin", "pin_message", { channelId: entry.channelId, messageId: entry.id, pinned: !entry.pinnedAt });
+            } : undefined}
             ondelete={own || currentChannel?.canDeleteMessages
               ? () => changeMessage("message-delete", "delete_message", { messageId: entry.id }) : undefined}>
             <RichMessage text={entry.text} html={entry.html} />
@@ -177,6 +297,36 @@
     {/key}
   </section>
 </div>
+
+<Modal bind:open={() => pinsOpen, setPinsOpen} title="Pinned messages" description={currentChannel?.name ?? ""}>
+  {#if pinError}<p class="form-error" role="alert">{pinError}</p>{/if}
+  {#if pinPage?.messages.length}
+    <ul class="grid max-h-[min(55vh,28rem)] gap-2 overflow-auto p-1">
+      {#each pinPage.messages as pin (pin.id)}
+        <li class="grid gap-1 rounded-md border border-border p-3">
+          <div class="flex flex-wrap items-baseline gap-x-2">
+            <strong class="wrap-anywhere">{senderName(pin.senderId)}</strong>
+            <time class="text-xs text-muted-foreground" datetime={new Date(pin.createdAt).toISOString()}>{new Date(pin.createdAt).toLocaleString()}</time>
+          </div>
+          {#if pin.text}<p class="wrap-anywhere whitespace-pre-wrap text-sm">{pin.text}</p>{/if}
+          {#if pin.attachmentName}<p class="wrap-anywhere text-sm text-muted-foreground">{pin.attachmentName}</p>{/if}
+          <Button size="sm" variant="outline" class="mt-1 justify-self-start" disabled={jumpingTo !== null} onclick={() => jumpToMessage(pin.id)}>
+            {jumpingTo === pin.id ? "Opening…" : "Go to message"}
+          </Button>
+        </li>
+      {/each}
+      {#if pinPage.next && chatScope}
+        <li><Button size="sm" variant="outline" disabled={loadingPins} onclick={() => {
+          if (chatScope && pinPage?.next) void loadPins(chatScope, revision, pinPage.next);
+        }}>{loadingPins ? "Loading…" : "Load more pins"}</Button></li>
+      {/if}
+    </ul>
+  {:else if loadingPins}
+    <p role="status">Loading pinned messages…</p>
+  {:else if pinPage}
+    <p>No pinned messages.</p>
+  {/if}
+</Modal>
 
 <style>
   .channel-description {

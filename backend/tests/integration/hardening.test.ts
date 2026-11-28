@@ -1,6 +1,29 @@
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { join } from "node:path";
 import { randomToken } from "../../src/security/credentials";
 import { fixture, testIdentity, until } from "../server";
+
+test("profile updates are rate-limited and audit history is pruned by age and count", async () => {
+  const server = await fixture({ environment: { VOICE_LIMITS_PROFILE_UPDATES_PER_MINUTE: "1",
+    VOICE_LIMITS_AUDIT_EVENTS: "3", VOICE_LIMITS_AUDIT_RETENTION_HOURS: "1" } });
+  try {
+    const owner = await server.owner();
+    const member = await server.register("Original name");
+    const update = (displayName: string) => server.fail("/api/v1/account", { displayName }, member.accessToken, "PATCH");
+    expect((await update("Updated name")).status).toBe(200);
+    expect((await update("Next name")).status).toBe(429);
+
+    const db = new Database(join(server.directory, "server.db"));
+    try {
+      db.query("INSERT INTO audit (action, created_at) VALUES ('test.expired', ?)").run(Date.now() - 7200000);
+      await until(() => db.query("SELECT count(*) AS total FROM audit").get() as { total: number }, ({ total }) => total <= 3);
+      expect(db.query("SELECT action FROM audit ORDER BY id DESC LIMIT 1").get()).toEqual({ action: "account.profile_changed" });
+      const { payload } = await server.call<{ events: unknown[] }>("/api/v1/admin/audit", undefined, owner.accessToken);
+      expect(payload.events).toHaveLength(3);
+    } finally { db.close(); }
+  } finally { await server.cleanup(); }
+});
 
 test("bodies without a content-length are bounded before parsing", async () => {
   const server = await fixture();
