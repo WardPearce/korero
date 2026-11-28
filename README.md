@@ -15,6 +15,7 @@
 # Table of Contents
 
 - [Features](#features)
+- [Quick deploy](#quick-deploy)
 - [Run a standalone server](#run-a-standalone-server)
 - [Docker deployment](#docker-deployment)
 - [Manage a server](#manage-a-server)
@@ -48,6 +49,30 @@
 - **Open**
   - The [v1 protocol](docs/protocol.md) is open to independent clients
   - Bun/Elysia server in [`backend/`](backend/), SvelteKit client for Electron, Capacitor and browsers in [`frontend/`](frontend/)
+
+# Quick deploy
+
+On a Linux host, the install script asks for the important settings from
+[`server.example.toml`](backend/server.example.toml), writes the configuration and starts the
+server with Docker Compose or as a systemd service running the release binary.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/WardPearce/korero/main/scripts/install.sh | sudo bash
+```
+
+Run it again to update; it offers to keep the existing configuration and never deletes data.
+Pass options after `bash -s --`:
+
+| Option | Effect |
+| --- | --- |
+| `--docker` / `--binary` | Choose the deploy method without asking |
+| `--dry-run` | Print the files it would write, then exit |
+| `--yes` | Accept every default; set `KORERO_PUBLIC_ADDRESS` and optionally `KORERO_PASSWORD` |
+| `--dir PATH` | Docker project directory (default `/opt/korero`) |
+| `--version TAG` | Release tag to deploy (default latest) |
+
+For example, `curl -fsSL … | sudo bash -s -- --docker --dry-run`. Read
+[the script](scripts/install.sh) before running it, or set things up by hand below.
 
 # Run a standalone server
 

@@ -82,7 +82,7 @@
 	const hostSteps = [
 		{
 			title: 'Start the server',
-			body: 'Run one Docker command or a single binary. It creates its own certificate, a Lobby channel and a setup token.'
+			body: 'Run the install script, or one Docker command. It creates its own certificate, a Lobby channel and a setup token.'
 		},
 		{
 			title: 'Claim it',
@@ -527,18 +527,21 @@
 			<div class="min-w-0 lg:pt-2">
 				<CodeBlock
 					lang="bash"
-					label="Run with Docker"
+					label="Quick deploy with Docker or the Linux binary"
+					code="curl -fsSL https://raw.githubusercontent.com/WardPearce/korero/main/scripts/install.sh | sudo bash"
+				/>
+				<p class="mt-3 text-sm text-muted-foreground">
+					The script asks a few questions, writes the configuration and starts the server. Run it
+					again to update.
+				</p>
+				<CodeBlock
+					lang="bash"
+					label="Or run the container yourself"
 					code={`docker run -d --name korero --restart unless-stopped \\
   -p 8443:8443 -p 8444:8444/udp -p 8444:8444/tcp \\
   -v korero-data:/data -e VOICE_DATA_DIR=/data \\
   wardpearce/korero-server:latest
 docker logs korero`}
-				/>
-				<CodeBlock
-					lang="bash"
-					label="Or run the standalone Linux binary"
-					code={`chmod +x voice-server-linux-amd64
-./voice-server-linux-amd64 --data-dir ./data`}
 				/>
 				<p class="tech-note mt-6">
 					One Bun process, a few media workers and a SQLite database, all in one data folder.

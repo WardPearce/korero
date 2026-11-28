@@ -14,6 +14,7 @@
 	const deploymentGuide = `${repo}/blob/main/docs/deployment.md`;
 
 	const toc = [
+		{ id: 'quick', label: 'Quick deploy', kicker: 'One command install' },
 		{ id: 'before', label: 'Before you start', kicker: 'Host, ports and addresses' },
 		{ id: 'docker', label: 'Deploy with Docker', kicker: 'Compose, AMD64 and ARM64' },
 		{ id: 'binary', label: 'Deploy the binary', kicker: 'Linux executable and systemd' },
@@ -72,6 +73,10 @@
 		],
 		['server.max_users', 'How many people can be online at once. 128 by default.'],
 		['media.announced_address', 'The public IP or hostname clients send media to.'],
+		[
+			'media.workers',
+			'How many media worker processes to run, from 1 to 32. 1 by default. Each extra worker uses the next port up from 8444, so open and forward those too.'
+		],
 		['media.target_audio_bitrate', 'Voice quality, from 32 to 128 kbit/s. 64 kbit/s by default.'],
 		['messaging.persistence', 'Keep message history on the server. On by default.'],
 		['messaging.retention_hours', 'How long history is kept, up to one year. One week by default.'],
@@ -152,6 +157,24 @@
 	<DocsToc items={toc} source={{ href: deploymentGuide, label: 'Read the full guide' }} />
 
 	<main id="main" class="docs host-docs max-w-[48rem] min-w-0">
+		<h2 id="quick"><a href="#quick" class="heading-link">Quick deploy</a></h2>
+		<p>
+			On a fresh Linux host, the install script asks for the important settings, writes the
+			configuration and starts the server with Docker or as a systemd service. Run it again to
+			update.
+		</p>
+		<CodeBlock
+			lang="bash"
+			code="curl -fsSL https://raw.githubusercontent.com/WardPearce/korero/main/scripts/install.sh | sudo bash"
+		/>
+		<p>
+			Add <code>-s -- --dry-run</code> after <code>bash</code> to see the files it would write
+			without changing anything, or
+			<a href="{repo}/blob/main/scripts/install.sh" target="_blank" rel="noopener noreferrer">
+				read the script
+			</a> first. The rest of this page sets up the same thing by hand.
+		</p>
+
 		<h2 id="before"><a href="#before" class="heading-link">Before you start</a></h2>
 		<p>You need:</p>
 		<ul>
@@ -393,7 +416,7 @@ sudo -u korero voice-server --data-dir /var/lib/korero config validate`}
 			</table>
 		</div>
 		<p>
-			Rate limits, storage quotas and media workers are under <code>[limits]</code>,
+			Rate limits, storage quotas and other media options are under <code>[limits]</code>,
 			<code>[messaging]</code> and <code>[media]</code> in the example file.
 		</p>
 
