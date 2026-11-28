@@ -4,6 +4,9 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.media.AudioDeviceInfo;
+import android.media.AudioManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -65,11 +68,37 @@ public class CallAudioPlugin extends Plugin {
     @PluginMethod
     public void stop(PluginCall call) {
         stopService();
+        routeToSpeaker(false);
         call.resolve();
+    }
+
+    /** Moves call audio between the loudspeaker and the default route (earpiece or headset). */
+    @PluginMethod
+    public void setSpeaker(PluginCall call) {
+        if (routeToSpeaker(Boolean.TRUE.equals(call.getBoolean("on")))) call.resolve();
+        else call.reject("This device has no loudspeaker for calls.");
+    }
+
+    private boolean routeToSpeaker(boolean on) {
+        AudioManager audio = getContext().getSystemService(AudioManager.class);
+        if (audio == null) return false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (!on) {
+                audio.clearCommunicationDevice();
+                return true;
+            }
+            for (AudioDeviceInfo device : audio.getAvailableCommunicationDevices()) {
+                if (device.getType() == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) return audio.setCommunicationDevice(device);
+            }
+            return false;
+        }
+        audio.setSpeakerphoneOn(on);
+        return true;
     }
 
     @Override
     protected void handleOnDestroy() {
         stopService();
+        routeToSpeaker(false);
     }
 }

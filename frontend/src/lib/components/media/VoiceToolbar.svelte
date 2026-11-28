@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, HeadphoneOff, Headphones, Mic, MicOff, PhoneOff } from "@lucide/svelte";
+  import { ChevronDown, HeadphoneOff, Headphones, Mic, MicOff, PhoneOff, Speaker } from "@lucide/svelte";
   import { Button, buttonVariants } from "#lib/components/ui/button/index.js";
   import * as DropdownMenu from "#lib/components/ui/dropdown-menu/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
@@ -7,6 +7,7 @@
   import Modal from "#lib/components/Modal.svelte";
   import { desktopApp } from "#lib/connection/client";
   import { getAudioSettings } from "#lib/media/audio.svelte";
+  import { speakerphone } from "#lib/media/speakerphone.svelte";
   import { getWorkspace } from "#lib/workspace";
   import QuickAudio from "./QuickAudio.svelte";
   import WhisperControls from "./WhisperControls.svelte";
@@ -64,10 +65,16 @@
     </IconButton>
     <QuickAudio direction="output" />
   </div>
+  {#if speakerphone.available() && voice}
+    <IconButton label="Speaker"
+      active={speakerphone.on} onclick={() => speakerphone.toggle()}>
+      <Speaker size={18} aria-hidden="true" />
+    </IconButton>
+  {/if}
   {#if onleave}
-    <Button variant="outline" disabled={Boolean(pending)} onclick={onleave}>
-      <PhoneOff size={16} aria-hidden="true" /> Leave voice
-    </Button>
+    <IconButton label="Leave voice" disabled={Boolean(pending)} onclick={onleave}>
+      <PhoneOff size={18} aria-hidden="true" />
+    </IconButton>
   {/if}
   <div class="voice-afk" role="group" aria-label="AFK">
     <Button variant="outline" type="button" class="afk-main" disabled={!canSetAfk}

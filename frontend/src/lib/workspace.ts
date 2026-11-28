@@ -34,6 +34,8 @@ interface Workspace {
   screenShareViewerTarget: HTMLElement | undefined;
   screenShareControlsTarget: HTMLElement | undefined;
   readonly channelAudioQuality: boolean;
+  /** The voice toolbar is docked at the bottom of the shell, so panes must not render their own. */
+  readonly mobileVoice: boolean;
   readonly channelWidth: number;
   readonly channelMax: number;
   resizeChannel(value: number, commit: boolean): void;

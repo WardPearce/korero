@@ -452,7 +452,7 @@
       <span class="online-count">{snapshot.presence.length.toLocaleString()} online</span>
     </div>
   {/if}
-  <VoiceToolbar />
+  {#if !workspace.mobileVoice}<VoiceToolbar />{/if}
   {#if snapshot?.directMessages && workspace.serverId}
     <div class="channel-direct border-b border-border px-3 py-2.5">
       <Button variant={workspace.roomView === "directMessages" ? "default" : "secondary"} class="w-full justify-start gap-2.5 font-semibold"

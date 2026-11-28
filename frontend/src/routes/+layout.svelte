@@ -238,6 +238,7 @@
     get screenShareControlsTarget() { return screenShareControlsTarget; },
     set screenShareControlsTarget(value) { screenShareControlsTarget = value; },
     get channelAudioQuality() { return Boolean(serverInfo?.channelAudioQuality); },
+    get mobileVoice() { return mobileVoice; },
     get channelWidth() { return channelWidth; },
     get channelMax() { return channelMax; },
     resizeChannel(value, commit) { resizePane("channel", value, commit); },

@@ -1,10 +1,10 @@
-import { Capacitor } from "@capacitor/core";
 import type { Consumer, ConsumerOptions, Producer, RtpCapabilities, Transport, TransportOptions } from "mediasoup-client/types";
 import type { Snapshot, VoiceState } from "../connection/client";
 import type { AudioPreferences } from "../preferences";
 import { microphoneProcessor, openMicrophone } from "./desktop-audio";
 import type { MobileCallAudio } from "./mobile-call-audio";
 import type { MediaRequest } from "./screen-media";
+import { speakerphone } from "./speakerphone.svelte";
 
 interface Source {
   producerId: string;
@@ -26,7 +26,7 @@ interface RemoteAudio {
   node: MediaStreamAudioSourceNode;
   gain: GainNode;
   accountId: string;
-  element?: HTMLAudioElement;
+  element: HTMLAudioElement;
 }
 
 export class WebVoice {
@@ -300,6 +300,7 @@ export class WebVoice {
           return;
         }
         this.microphone = microphone;
+        speakerphone.reapply();
         microphone.addEventListener("ended", () => {
           if (current()) void this.failSending("The microphone disconnected. Rejoin the channel to try again.");
         }, { once: true });
@@ -466,14 +467,12 @@ export class WebVoice {
       const gain = this.audio.createGain();
       gain.gain.value = (this.volumes[options.accountId] ?? 100) / 100;
       node.connect(gain).connect(this.output);
-      let element: HTMLAudioElement | undefined;
-      if (Capacitor.getPlatform() === "android") {
-        // Android WebView can leave a remote track silent in Web Audio until an element starts playback.
-        element = new Audio();
-        element.muted = true;
-        element.srcObject = stream;
-        void element.play().catch(() => {});
-      }
+      // Chromium (Electron, Android WebView) renders a remote WebRTC track as silence in Web Audio
+      // unless a media element is also playing it. The element stays muted; Web Audio does the output.
+      const element = new Audio();
+      element.muted = true;
+      element.srcObject = stream;
+      void element.play().catch(() => {});
       this.remote.set(producerId, { consumer, node, gain, accountId: options.accountId, element });
       consumer = undefined;
       consumerId = undefined;
@@ -491,10 +490,8 @@ export class WebVoice {
     if (!entry) return;
     entry.node.disconnect();
     entry.gain.disconnect();
-    if (entry.element) {
-      entry.element.pause();
-      entry.element.srcObject = null;
-    }
+    entry.element.pause();
+    entry.element.srcObject = null;
     entry.consumer.close();
     this.remote.delete(producerId);
   }

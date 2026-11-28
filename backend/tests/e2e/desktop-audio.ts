@@ -9,6 +9,7 @@ declare global {
     harness: typeof harness;
     koreroDesktop: { invoke<T>(command: string, args: Record<string, unknown>): Promise<T> };
     voiceConnections: RTCPeerConnection[];
+    playbackLevels: Map<string, () => number>;
   }
 }
 
@@ -45,6 +46,22 @@ try {
             return connection;
           },
         });
+        // Packets arriving is not enough: Chromium can leave a remote track silent in Web Audio.
+        const levels = new Map<string, () => number>();
+        window.playbackLevels = levels;
+        const createSource = AudioContext.prototype.createMediaStreamSource;
+        AudioContext.prototype.createMediaStreamSource = function (stream) {
+          const source = createSource.call(this, stream);
+          const analyser = this.createAnalyser();
+          const samples = new Float32Array(analyser.fftSize);
+          source.connect(analyser);
+          const track = stream.getAudioTracks()[0];
+          if (track) levels.set(track.id, () => {
+            analyser.getFloatTimeDomainData(samples);
+            return Math.max(...samples.map(Math.abs));
+          });
+          return source;
+        };
       });
       await page.waitForFunction(async () => (await indexedDB.databases()).some(({ name }) => name === "korero-device"));
       await page.evaluate(async ({ origin, serverId }) => {
@@ -120,6 +137,11 @@ try {
         }
         return false;
       }, undefined, { timeout: 8000 });
+      await page.waitForFunction(() => window.voiceConnections.some((connection) => connection.getReceivers()
+        .some(({ track }) => track.kind === "audio" && (window.playbackLevels.get(track.id)?.() ?? 0) > 0.01)),
+      undefined, { timeout: 8000 }).catch(() => {
+        throw new Error("Electron received remote audio but Web Audio rendered silence");
+      });
 
       for (const audioBitrate of [32000, 128000, null]) {
         await owner.rpc("channel.edit", { channelId, audioBitrate });
@@ -138,17 +160,19 @@ try {
       await owner.rpc("channel.join", { channelId });
       await peer.evaluate((id) => window.harness.join(id), whisperRoom);
       await page.getByRole("button", { name: "Whisper to another channel" }).click();
-      await page.getByLabel("Target channel").click();
+      // Narrow windows mount a second voice toolbar in the mobile dock, so its closed dialog's fields also exist.
+      const whisperDialog = page.getByRole("dialog", { name: "Channel whisper" });
+      await whisperDialog.getByLabel("Target channel").click();
       await page.getByRole("option", { name: "Whisper destination", exact: true }).click();
-      await page.getByLabel("Activation").click();
+      await whisperDialog.getByLabel("Activation").click();
       await page.getByRole("option", { name: "Toggle-to-talk", exact: true }).click();
-      await page.getByRole("button", { name: "Start whisper" }).click();
+      await whisperDialog.getByRole("button", { name: "Start whisper" }).click();
       const whisper = await until(async () => (await producers()).find((entry) => entry.connectionId === connectionId), Boolean);
       if (!whisper) throw new Error("Electron did not publish a whisper");
       await peer.evaluate((id) => window.harness.consume(id, false), whisper.producerId);
       const publicProducers = await owner.rpc<{ connectionId: string }[]>("media.producers");
       if (publicProducers.some((entry) => entry.connectionId === connectionId)) throw new Error("Public audio remained active during the whisper");
-      await page.getByRole("button", { name: "Stop whisper" }).click();
+      await whisperDialog.getByRole("button", { name: "Stop whisper" }).click();
       await until(async () => !(await producers()).some(({ connectionId: id }) => id === connectionId), Boolean);
       await until(async () => (await owner.rpc<{ connectionId: string }[]>("media.producers"))
         .some((entry) => entry.connectionId === connectionId), Boolean);

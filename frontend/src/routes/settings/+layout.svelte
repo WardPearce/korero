@@ -19,7 +19,7 @@
 </script>
 
 <div class="settings-shell" data-connected={connected || undefined}>
-  {#if connected}
+  {#if connected && !workspace.mobileVoice}
     <div class="settings-voice"><VoiceToolbar /></div>
   {/if}
   <nav class="settings-nav" aria-label="Settings categories">

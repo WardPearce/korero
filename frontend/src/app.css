@@ -713,7 +713,6 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
 .audio-settings-link { display: flex; align-items: center; gap: 6px; }
 .audio-fields { display: grid; gap: .75rem; min-width: 0; }
 .audio-fields small { color: var(--muted-foreground); font-size: var(--type-small); }
-.shell[data-mobile-voice="true"] :is(.channel-pane > .voice-toolbar, .settings-voice) { display: none; }
 .shell[data-mobile-voice="true"] .settings-shell [data-desktop-only] { display: none; }
 .mobile-voice {
   grid-column: 1 / -1;
