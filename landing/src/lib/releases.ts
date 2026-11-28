@@ -44,19 +44,22 @@ const formats: Record<PlatformId, { primary: Format; alternatives: Format[] }> =
 		alternatives: [
 			{ label: 'Debian package', pattern: /\.deb$/i },
 			{ label: 'RPM package', pattern: /\.rpm$/i },
-			{ label: 'Zip archive', pattern: /korero-chat-frontend-.*\.zip$/i }
+			{
+				label: 'Zip archive',
+				pattern: /(?:korero\.chat-linux-[\w]+|korero-chat-frontend-.*)\.zip$/i
+			}
 		]
 	},
 	windows: {
-		primary: { label: 'Installer', pattern: /Setup\..*\.exe$/i },
+		primary: { label: 'Installer', pattern: /(?:korero\.chat-win-[\w]+|Setup\..*)\.exe$/i },
 		alternatives: [
-			{ label: '7z archive', pattern: /-win\.7z$/i },
-			{ label: 'Zip archive', pattern: /-win\.zip$/i }
+			{ label: '7z archive', pattern: /-win(?:-[\w]+)?\.7z$/i },
+			{ label: 'Zip archive', pattern: /-win(?:-[\w]+)?\.zip$/i }
 		]
 	},
 	macos: {
 		primary: { label: 'Disk image', pattern: /\.dmg$/i },
-		alternatives: [{ label: 'Zip archive', pattern: /-mac\.zip$/i }]
+		alternatives: [{ label: 'Zip archive', pattern: /-mac(?:-[\w]+)?\.zip$/i }]
 	},
 	android: {
 		primary: { label: 'APK', pattern: /\.apk$/i },

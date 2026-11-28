@@ -1,5 +1,6 @@
 appId: app.korero.voice
 productName: Korero.chat
+artifactName: ${productName}-${os}-${arch}.${ext}
 npmRebuild: false
 directories:
   output: desktop-dist
