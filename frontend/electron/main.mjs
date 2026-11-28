@@ -1,7 +1,8 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, net, protocol, session, shell } from "electron";
+import { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, session, shell } from "electron";
 import { stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { ApplicationAudio } from "./application-audio.mjs";
 import { Desktop } from "./desktop.mjs";
 import { startUpdater } from "./updater.mjs";
 
@@ -14,6 +15,7 @@ let window;
 let desktop;
 let quitting = false;
 let pendingCommands = 0;
+const applicationAudio = new ApplicationAudio(() => app.getAppMetrics().map(({ pid }) => pid));
 
 protocol.registerSchemesAsPrivileged([{
   scheme: "korero",
@@ -45,23 +47,55 @@ function sendToWindow(event, payload) {
   if (window && !window.webContents.isDestroyed()) window.webContents.send(event, payload);
 }
 
+const pendingCaptures = new Map();
+
+function captureThumbnail(image) {
+  return image && !image.isEmpty() ? `data:image/jpeg;base64,${image.toJPEG(80).toString("base64")}` : null;
+}
+
+function captureIcon(image) {
+  return image && !image.isEmpty() ? image.toDataURL() : null;
+}
+
+function cancelCaptures() {
+  for (const resolve of pendingCaptures.values()) resolve(null);
+  pendingCaptures.clear();
+}
+
+function pickCapture(sources) {
+  cancelCaptures();
+  const id = crypto.randomUUID();
+  return new Promise((resolve) => {
+    pendingCaptures.set(id, resolve);
+    sendToWindow("korero:capture-sources", {
+      id,
+      sources: sources.map((source) => ({
+        id: source.id,
+        name: source.name,
+        kind: source.id.startsWith("screen:") ? "screen" : "window",
+        thumbnail: captureThumbnail(source.thumbnail),
+        icon: captureIcon(source.appIcon),
+      })),
+    });
+  }).then((sourceId) => sources.find((source) => source.id === sourceId));
+}
+
 async function chooseCapture(request, callback) {
   if (!window || request.frame !== window.webContents.mainFrame || !isAppPage(request.securityOrigin) || !request.userGesture) {
     callback({});
     return;
   }
   try {
-    const sources = await desktopCapturer.getSources({ types: ["screen", "window"], thumbnailSize: { width: 0, height: 0 } });
     // PipeWire presents the system picker and returns the one source it selected.
     const portal = process.platform === "linux" && process.env.XDG_SESSION_TYPE === "wayland";
-    const selected = await new Promise((resolve) => {
-      if (!window || sources.length === 0 || (portal && sources.length === 1)) {
-        resolve(window ? sources[0] : undefined);
-        return;
-      }
-      const menu = Menu.buildFromTemplate(sources.map((source) => ({ label: source.name, click: () => resolve(source) })));
-      menu.popup({ window, callback: () => resolve(undefined) });
+    const sources = await desktopCapturer.getSources({
+      types: ["screen", "window"],
+      thumbnailSize: portal ? { width: 0, height: 0 } : { width: 480, height: 270 },
+      fetchWindowIcons: !portal,
     });
+    const selected = !window || sources.length === 0 ? undefined
+      : portal && sources.length === 1 ? sources[0]
+      : await pickCapture(sources);
     callback(selected ? {
       video: selected,
       audio: request.audioRequested && process.platform !== "linux" ? "loopback" : undefined,
@@ -89,6 +123,9 @@ function openWindow() {
     },
   });
   const contents = window.webContents;
+  const resetCaptures = () => { cancelCaptures(); applicationAudio.reset(); };
+  contents.on("did-start-loading", resetCaptures);
+  contents.on("render-process-gone", resetCaptures);
   contents.on("will-navigate", (event, url) => {
     if (!isAppPage(url)) event.preventDefault();
   });
@@ -107,7 +144,7 @@ function openWindow() {
     popup.webContents.on("will-navigate", (event) => event.preventDefault());
     popup.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   });
-  window.once("closed", () => { window = undefined; });
+  window.once("closed", () => { window = undefined; resetCaptures(); });
   void window.loadURL(appUrl);
 }
 
@@ -134,8 +171,25 @@ else {
       }
       if (pendingCommands >= 128) throw new Error("Too many pending desktop requests.");
       pendingCommands++;
-      try { return await desktop.invoke(command, args); }
+      try {
+        switch (command) {
+          case "application_audio_list": return await applicationAudio.list();
+          case "application_audio_start": return await applicationAudio.start(args.applications);
+          case "application_audio_read": return applicationAudio.read(args.id);
+          case "application_audio_stop": return applicationAudio.stop(args.id);
+          default: return await desktop.invoke(command, args);
+        }
+      }
       finally { pendingCommands--; }
+    });
+    ipcMain.handle("korero:capture-choice", (event, id, sourceId) => {
+      if (event.sender !== window?.webContents || event.senderFrame !== event.sender.mainFrame || !isAppPage(event.senderFrame?.url) ||
+          typeof id !== "string" || (sourceId !== null && typeof sourceId !== "string")) {
+        throw new Error("Invalid desktop request.");
+      }
+      const resolve = pendingCaptures.get(id);
+      pendingCaptures.delete(id);
+      resolve?.(sourceId);
     });
     openWindow();
     startUpdater();
@@ -145,6 +199,7 @@ else {
     if (!desktop || quitting) return;
     event.preventDefault();
     quitting = true;
+    applicationAudio.reset();
     void desktop.close().finally(() => app.quit());
   });
 }

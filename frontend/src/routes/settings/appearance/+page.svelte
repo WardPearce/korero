@@ -7,9 +7,10 @@
   import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
   import SelectField from "#lib/components/fields/SelectField.svelte";
   import Modal from "#lib/components/Modal.svelte";
+  import { getWorkspace } from "#lib/workspace";
   import {
-    applyAppearance, builtInThemes, colorFields, contrast, defaultTheme, parseTheme, playfulThemes, readAppearance,
-    saveAppearance, swatchColors, themeFor, themeStyle, type Appearance, type SavedTheme, type Theme,
+    applyAppearance, builtInThemes, colorFields, contrast, defaultTheme, parseTheme, playfulThemes,
+    swatchColors, themeFor, themeStyle, type Appearance, type SavedTheme, type Theme,
   } from "#lib/theme";
 
   const sampleStatuses = [
@@ -28,7 +29,8 @@
     { value: "spacious", label: "Spacious" },
   ] as const;
 
-  let appearance = $state.raw(readAppearance());
+  const settings = getWorkspace();
+  let appearance = $derived(settings.appearance);
   let active = $derived(themeFor(appearance));
   let activeIsCustom = $derived(appearance.custom.some(({ id }) => id === active.id));
   let filter = $state<(typeof themeFilters)[number][0]>("all");
@@ -43,6 +45,7 @@
   let confirmDelete = $state(false);
   let status = $state("");
   let error = $state("");
+  let saving = $state(false);
   let fileInput: HTMLInputElement;
   let workspace: HTMLDivElement;
   let importButton = $state<HTMLButtonElement | null>(null);
@@ -67,19 +70,34 @@
     if (previewInApp) applyAppearance(appearance);
   });
 
-  function updateAppearance(next: Appearance, message: string) {
-    appearance = next;
-    status = saveAppearance(next) ? message : "This device blocked storage. Changes apply until you close or reload the app.";
+  async function updateAppearance(edit: (appearance: Appearance) => Appearance, message: string) {
+    if (saving) return false;
+    saving = true;
     error = "";
+    try {
+      status = await settings.updateAppearance(edit) ? message : "This device blocked storage. Changes apply until you close or reload the app.";
+      return true;
+    } catch (cause) {
+      status = "";
+      error = cause instanceof Error ? cause.message : "Could not sync your appearance.";
+      return false;
+    } finally {
+      saving = false;
+    }
   }
 
   function select(theme: SavedTheme) {
     previewInApp = false;
-    updateAppearance({ ...appearance, active: theme.id }, theme.name + " applied.");
+    void updateAppearance((current) => {
+      const next = { ...current, active: theme.id };
+      if (themeFor(next).id !== theme.id) throw new Error("This theme was deleted on another device.");
+      return next;
+    }, theme.name + " applied.");
   }
 
   function toggleGlassmorphism(glassmorphism: boolean) {
-    updateAppearance({ ...appearance, glassmorphism }, glassmorphism ? "Frosted glass enabled." : "Frosted glass disabled.");
+    void updateAppearance((current) => ({ ...current, glassmorphism }),
+      glassmorphism ? "Frosted glass enabled." : "Frosted glass disabled.");
   }
 
   function applyImageUrl(event: Event & { currentTarget: HTMLInputElement }) {
@@ -152,31 +170,32 @@
     editorTrigger = null;
   }
 
-  function save(event: SubmitEvent) {
+  async function save(event: SubmitEvent) {
     event.preventDefault();
     const theme = parseTheme(draft);
     if (!theme) {
       error = "Enter a theme name and valid appearance values.";
       return;
     }
+    const editing = editingId !== undefined;
     const id = editingId ?? "custom-" + crypto.randomUUID();
     const saved = { ...theme, id };
-    const custom = editingId
-      ? appearance.custom.map((entry) => entry.id === id ? saved : entry)
-      : [...appearance.custom, saved];
-    updateAppearance({ ...appearance, active: id, custom }, theme.name + " saved and applied.");
-    void closeEditor();
+    if (await updateAppearance((current) => {
+      if (editing && !current.custom.some((entry) => entry.id === id)) throw new Error("This theme was deleted on another device.");
+      const custom = editing ? current.custom.map((entry) => entry.id === id ? saved : entry) : [...current.custom, saved];
+      return { ...current, active: id, custom };
+    }, theme.name + " saved and applied.")) await closeEditor();
   }
 
-  function deleteTheme() {
-    if (!editingId) return;
-    const custom = appearance.custom.filter(({ id }) => id !== editingId);
-    updateAppearance({
-      ...appearance,
-      active: appearance.active === editingId ? defaultTheme.id : appearance.active,
-      custom,
-    }, "Theme deleted.");
-    void closeEditor();
+  async function deleteTheme() {
+    const id = editingId;
+    if (!id) return;
+    confirmDelete = false;
+    if (await updateAppearance((current) => ({
+      ...current,
+      active: current.active === id ? defaultTheme.id : current.active,
+      custom: current.custom.filter((entry) => entry.id !== id),
+    }), "Theme deleted.")) await closeEditor();
   }
 
   async function importTheme(event: Event & { currentTarget: HTMLInputElement }) {
@@ -210,7 +229,7 @@
 <svelte:head><title>Appearance · Korero.chat</title></svelte:head>
 
 {#snippet themeTile(theme: SavedTheme)}
-  <button class="theme-tile" type="button" aria-pressed={active.id === theme.id} onclick={() => select(theme)}>
+  <button class="theme-tile" type="button" aria-pressed={active.id === theme.id} disabled={saving} onclick={() => select(theme)}>
     <span class="tile-preview" style={themeStyle(theme)} aria-hidden="true">
       <span class="tile-window">
         <span class="tile-sidebar"><span></span><span></span><span></span></span>
@@ -276,7 +295,7 @@
           </Button>
           <Button variant="ghost" aria-label="Export selected theme" onclick={exportTheme}><Download /> Export</Button>
         </div>
-        <Checkbox label="Frosted glass" bind:checked={() => appearance.glassmorphism, toggleGlassmorphism} />
+        <Checkbox label="Frosted glass" disabled={saving} bind:checked={() => appearance.glassmorphism, toggleGlassmorphism} />
         <p class="field-hint theme-status" role="status">{status}</p>
       </div>
       {@render channelPreview(active)}
@@ -343,10 +362,10 @@
           </div>
           {#if error}<p class="form-error" role="alert">{error}</p>{/if}
           <div class="theme-actions theme-footer">
-            {#if editingId}<Button variant="destructive" onclick={() => { confirmDelete = true; }}>Delete theme</Button>{/if}
+            {#if editingId}<Button variant="destructive" disabled={saving} onclick={() => { confirmDelete = true; }}>Delete theme</Button>{/if}
             <span class="flex-content"></span>
-            <Button variant="outline" onclick={closeEditor}>Cancel</Button>
-            <Button type="submit">Save theme</Button>
+            <Button variant="outline" disabled={saving} onclick={closeEditor}>Cancel</Button>
+            <Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save theme"}</Button>
           </div>
         </form>
       </section>

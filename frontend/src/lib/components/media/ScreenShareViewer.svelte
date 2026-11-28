@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Portal } from "bits-ui";
-  import { ExternalLink, Maximize, Minimize, PanelTop, Pencil, Play, Square, Volume2, VolumeX, X } from "@lucide/svelte";
+  import { ExternalLink, LayoutGrid, Maximize, Minimize, PanelTop, Pencil, Play, Square, Volume2, VolumeX, X } from "@lucide/svelte";
   import { onDestroy, onMount, tick } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
   import { Button } from "#lib/components/ui/button/index.js";
@@ -48,7 +48,8 @@
     error: string;
   } = $props();
 
-  let fullscreen = $state<string | true>();
+  let fullscreenGrid = $state(false);
+  let focusedShare = $state<string>();
   let fullscreenDialog = $state<HTMLDialogElement>();
   let inlineViewer = $state<HTMLElement>();
   let popoutError = $state("");
@@ -63,7 +64,8 @@
   ]);
   const playing = $derived(tiles.filter(({ id, stream }) => stream && !popouts.has(id)));
   const active = $derived(tiles.filter((tile) => tile.stream || tile.share?.loading));
-  const stage = $derived(fullscreen === true ? playing : playing.filter(({ id }) => id === fullscreen));
+  const focusedTile = $derived(playing.find(({ id }) => id === focusedShare));
+  const stage = $derived(focusedTile ? [focusedTile] : playing);
 
   $effect(() => {
     for (const [id, popup] of popouts) {
@@ -72,7 +74,8 @@
     for (const id of playback.keys()) {
       if (!tiles.some((tile) => tile.id === id && tile.stream)) playback.delete(id);
     }
-    if (fullscreen && !stage.length) fullscreen = undefined;
+    if (focusedShare && !focusedTile) focusedShare = undefined;
+    if (fullscreenGrid && !playing.length) fullscreenGrid = false;
   });
 
   onMount(() => {
@@ -170,13 +173,40 @@
     };
   }
 
-  async function exitFullscreen() {
-    const trigger = fullscreen;
-    fullscreen = undefined;
+  function openFullscreenGrid() {
+    fullscreenGrid = true;
+    focusedShare = undefined;
+  }
+
+  async function focusShare(id: string) {
+    focusedShare = id;
     await tick();
-    const buttons = inlineViewer?.querySelectorAll<HTMLButtonElement>("button[data-fullscreen]");
+    fullscreenDialog?.querySelector<HTMLButtonElement>("[data-back-to-grid]")?.focus();
+  }
+
+  async function backToGrid() {
+    if (!fullscreenGrid) {
+      await exitFullscreen();
+      return;
+    }
+    const trigger = focusedShare;
+    focusedShare = undefined;
+    await tick();
+    restoreFocus(fullscreenDialog, trigger);
+  }
+
+  async function exitFullscreen() {
+    const trigger = fullscreenGrid ? "true" : focusedShare;
+    fullscreenGrid = false;
+    focusedShare = undefined;
+    await tick();
+    restoreFocus(inlineViewer, trigger);
+  }
+
+  function restoreFocus(viewer: HTMLElement | undefined, trigger: string | undefined) {
+    const buttons = viewer?.querySelectorAll<HTMLButtonElement>("button[data-fullscreen]");
     for (const button of buttons ?? []) {
-      if (button.dataset.fullscreen === String(trigger)) {
+      if (button.dataset.fullscreen === trigger) {
         button.focus();
         return;
       }
@@ -184,7 +214,7 @@
   }
 </script>
 
-{#snippet tileContent(tile: Tile, expanded: boolean)}
+{#snippet tileContent(tile: Tile, canFocus: boolean)}
   {@const id = tile.id}
   {@const stream = tile.stream}
   {@const popup = popouts.get(id)}
@@ -196,9 +226,9 @@
           {#if tile.live}<span class="live-dot" aria-label="Live" role="img"></span>{/if}
           <span class="tile-name truncate" title={tile.title}>{tile.title}</span>
           {#if tile.stream && !popup}
-            {#if !expanded || fullscreen === true}
+            {#if canFocus}
               <Button size="icon-sm" variant="ghost" data-fullscreen={tile.id}
-                aria-label={`Fullscreen ${tile.title}`} title="Fullscreen in app" onclick={() => { fullscreen = tile.id; }}>
+                aria-label={`Fullscreen ${tile.title}`} title="Fullscreen in app" onclick={() => focusShare(id)}>
                 <Maximize aria-hidden="true" />
               </Button>
             {/if}
@@ -228,8 +258,14 @@
             <Button size="sm" variant="ghost" onclick={popup.close}><PanelTop aria-hidden="true" /> Return to app</Button>
           </div>
         {:else if stream}
-          <video autoplay playsinline aria-label={tile.title}
-            {@attach (node) => attachStream(node, id, stream)}></video>
+          <div class="tile-video">
+            <video autoplay playsinline aria-label={tile.title}
+              {@attach (node) => attachStream(node, id, stream)}></video>
+            {#if canFocus}
+              <button type="button" class="focus-preview" aria-label={`Focus ${tile.title}`}
+                onclick={() => focusShare(id)}></button>
+            {/if}
+          </div>
         {:else if tile.share?.loading}
           <div class="tile-placeholder" role="status">Opening screen share…</div>
         {:else if tile.share}
@@ -286,22 +322,31 @@
   {#if popoutError}<p class="form-error" role="alert">{popoutError}</p>{/if}
 {/snippet}
 
-{#if fullscreen && stage.length}
+{#if (fullscreenGrid || focusedTile) && stage.length}
   <dialog class="share-fullscreen" aria-label="Fullscreen screen shares" {@attach showFullscreen}
     oncancel={(event) => { event.preventDefault(); void exitFullscreen(); }}>
     <header class="viewer-header">
-      <h2 class="truncate">{fullscreen === true ? "Screen shares" : stage[0].title}</h2>
-      {#if fullscreen !== true && playing.length > 1}
-        <Button size="sm" variant="outline" onclick={() => { fullscreen = true; }}>View all</Button>
+      <h2 class="truncate">{focusedTile?.title ?? "Screen shares"}</h2>
+      {#if focusedTile}
+        <Button size="sm" variant="outline" data-back-to-grid onclick={backToGrid}>
+          <LayoutGrid aria-hidden="true" /> Back to grid
+        </Button>
+        {#if !fullscreenGrid && playing.length > 1}
+          <Button size="sm" variant="outline" onclick={openFullscreenGrid}>
+            <Maximize aria-hidden="true" /> Fullscreen grid
+          </Button>
+        {/if}
       {/if}
-      <Button size="sm" variant="outline" onclick={exitFullscreen}>
-        <Minimize aria-hidden="true" /> Exit fullscreen
-      </Button>
+      {#if fullscreenGrid}
+        <Button size="sm" variant="outline" onclick={exitFullscreen}>
+          <Minimize aria-hidden="true" /> Exit fullscreen
+        </Button>
+      {/if}
     </header>
     {@render errors()}
     <div class={["share-grid", { single: stage.length === 1 }]}>
       {#each stage as tile (tile.id)}
-        {@render tileContent(tile, true)}
+        {@render tileContent(tile, !focusedTile)}
       {/each}
     </div>
   </dialog>
@@ -311,14 +356,14 @@
       <header class="viewer-header">
         <h2>Screen shares</h2>
         {#if playing.length > 1}
-          <Button size="sm" variant="outline" data-fullscreen="true" onclick={() => { fullscreen = true; }}>
+          <Button size="sm" variant="outline" data-fullscreen="true" onclick={openFullscreenGrid}>
             <Maximize aria-hidden="true" /> Fullscreen grid
           </Button>
         {/if}
       </header>
       <div class="share-grid">
         {#each (visible ? tiles : active) as tile (tile.id)}
-          {@render tileContent(tile, false)}
+          {@render tileContent(tile, true)}
         {/each}
       </div>
       {@render errors()}
@@ -416,6 +461,9 @@
   .join-share-title { font-size: var(--type-small); font-weight: 650; }
   .join-share-hint { font-size: var(--type-caption); color: var(--muted-foreground); overflow-wrap: anywhere; }
   .tile-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; font-size: var(--type-small); }
+  .tile-video { position: relative; display: flex; flex-direction: column; }
+  .focus-preview { position: absolute; inset: 0; cursor: zoom-in; }
+  .focus-preview:focus-visible { outline: var(--focus-ring); outline-offset: -4px; }
   video { display: block; width: 100%; aspect-ratio: 16 / 9; max-height: 32dvh; background: #111; object-fit: contain; }
   .share-viewer p, .share-fullscreen p { padding: 6px var(--ui-gap); }
   .share-fullscreen {
@@ -436,6 +484,7 @@
     grid-auto-rows: minmax(min(35dvh, 16rem), 1fr);
   }
   .share-fullscreen .share-grid.single { grid-template-columns: minmax(0, 1fr); }
+  .share-fullscreen .tile-video { flex: 1; min-height: 0; }
   .share-fullscreen video { flex: 1; height: 0; min-height: 0; max-height: none; aspect-ratio: auto; }
   @media (max-width: 560px) {
     .share-fullscreen .share-grid { grid-template-columns: 1fr; }

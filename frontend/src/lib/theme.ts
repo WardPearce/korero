@@ -182,6 +182,19 @@ export function themeFor(appearance: Appearance): SavedTheme {
     ?? appearance.custom.find(({ id }) => id === appearance.active) ?? defaultTheme;
 }
 
+export function parseAppearance(value: unknown): Appearance | undefined {
+  const data = record(value);
+  if (!data || typeof data.active !== "string" || !Array.isArray(data.custom)) return;
+  const custom = new Map<string, SavedTheme>();
+  for (const entry of data.custom) {
+    const id = record(entry)?.id;
+    const theme = parseTheme(entry);
+    if (theme && typeof id === "string" && /^custom-[\da-f-]{36}$/.test(id)) custom.set(id, { ...theme, id });
+  }
+  const appearance = { active: data.active, custom: [...custom.values()], glassmorphism: data.glassmorphism === true };
+  return { ...appearance, active: themeFor(appearance).id };
+}
+
 export function readAppearance(): Appearance {
   if (session) return session;
   if (browser) {
@@ -189,21 +202,8 @@ export function readAppearance(): Appearance {
       const saved = localStorage.getItem(storageKey);
       if (saved) {
         const data = record(JSON.parse(saved));
-        if (data?.version === 1) {
-          const custom = new Map<string, SavedTheme>();
-          for (const entry of Array.isArray(data.custom) ? data.custom : []) {
-            const id = record(entry)?.id;
-            const theme = parseTheme(entry);
-            if (theme && typeof id === "string" && /^custom-[\da-f-]{36}$/.test(id)) custom.set(id, { ...theme, id });
-          }
-          const appearance = {
-            active: typeof data.active === "string" ? data.active : "",
-            custom: [...custom.values()],
-            glassmorphism: data.glassmorphism === true,
-          };
-          appearance.active = themeFor(appearance).id;
-          return appearance;
-        }
+        const appearance = data?.version === 1 && parseAppearance(data);
+        if (appearance) return appearance;
       }
       return {
         active: legacyThemes.get(localStorage.getItem(legacyKey) ?? "") ?? defaultTheme.id,

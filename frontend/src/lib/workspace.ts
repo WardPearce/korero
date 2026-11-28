@@ -2,6 +2,7 @@ import { createContext, type Snippet } from "svelte";
 import type { DirectMessageChange, Member, MemberRequest, VoiceState } from "./connection/client";
 import type { DeviceLink } from "./identity/device-link";
 import type { VoicePresence } from "./media/voice-shortcuts";
+import type { Appearance } from "./theme";
 
 export type MobilePane = "servers" | "channels" | "room";
 export type RoomView = "chat" | "directMessages" | "channelSettings" | "serverSettings";
@@ -12,6 +13,8 @@ interface Workspace {
   showAccountSetup(): void;
   createDeviceLink(): Promise<DeviceLink>;
   signOut(): Promise<boolean>;
+  readonly appearance: Appearance;
+  updateAppearance(edit: (appearance: Appearance) => Appearance): Promise<boolean>;
   readonly view: VoiceState;
   /** The joined voice connection, which may belong to a server other than the focused one. */
   readonly activeVoice: { origin: string; view: VoiceState } | undefined;

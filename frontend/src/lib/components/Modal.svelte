@@ -10,6 +10,7 @@
     children,
     icon,
     dismissible = true,
+    class: className = "",
   }: {
     open: boolean;
     title: string;
@@ -17,6 +18,7 @@
     children: Snippet;
     icon?: Snippet;
     dismissible?: boolean;
+    class?: string;
   } = $props();
 
   const id = $props.id();
@@ -32,7 +34,7 @@
   }
 </script>
 
-<dialog {@attach syncDialog} class="app-dialog" aria-labelledby={id + "-title"} aria-describedby={id + "-description"}
+<dialog {@attach syncDialog} class={["app-dialog", className]} aria-labelledby={id + "-title"} aria-describedby={id + "-description"}
   oncancel={(event) => { event.preventDefault(); dismiss(); }}
   onpointerdown={(event) => { pressedBackdrop = event.target === event.currentTarget; }}
   onclick={(event) => { if (pressedBackdrop && event.target === event.currentTarget) dismiss(); }}>

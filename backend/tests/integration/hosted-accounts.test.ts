@@ -10,7 +10,7 @@ test("hosted accounts preserve encrypted data and ignore voice registration and 
   const directory = await mkdtemp(join(tmpdir(), "korero-account-test-"));
   const credentials = { username: "member", credential: randomToken() };
   const original = "A".repeat(64);
-  const updated = "B".repeat(64);
+  const updated = "B".repeat(4 * 1024 * 1024);
   try {
     const open = await fixture({ directory, environment: { VOICE_REMOTE_ACCOUNT_HOST_REGISTRATION: "open", VOICE_SERVER_REGISTRATION: "disabled", VOICE_SERVER_PASSWORD: "voice-server-secret" } });
     try {
@@ -22,6 +22,8 @@ test("hosted accounts preserve encrypted data and ignore voice registration and 
       expect((await open.call(path + "login", credentials)).payload).toEqual({ revision: 1, encryptedData: original });
       expect((await open.call(path + "update", { ...credentials, revision: 1, encryptedData: updated })).payload)
         .toEqual({ revision: 2 });
+      expect(await open.fail(path + "update", { ...credentials, revision: 2, encryptedData: updated + "B" }))
+        .toMatchObject({ status: 400 });
       expect(await open.fail(path + "update", { ...credentials, revision: 1, encryptedData: original })).toMatchObject({ status: 409 });
     } finally { await open.cleanup(); }
 

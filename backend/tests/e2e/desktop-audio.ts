@@ -10,6 +10,7 @@ declare global {
     koreroDesktop: { invoke<T>(command: string, args: Record<string, unknown>): Promise<T> };
     voiceConnections: RTCPeerConnection[];
     playbackLevels: Map<string, () => number>;
+    screenCaptures: MediaStreamTrack[];
   }
 }
 
@@ -35,6 +36,7 @@ try {
     });
     try {
       const page = await app.firstWindow();
+      page.setDefaultTimeout(8000);
       page.on("pageerror", (error) => console.error(error.message));
       await page.addInitScript(() => {
         const connections: RTCPeerConnection[] = [];
@@ -178,10 +180,82 @@ try {
         .some((entry) => entry.connectionId === connectionId), Boolean);
       await microphoneEnabled(false);
 
-      await command("leave_channel");
+      await whisperDialog.getByRole("button", { name: "Close dialog" }).click();
+      for (const direction of ["send", "receive"]) {
+        const result = await command("media_request", { connectionId, channelId: whisperRoom, kind: "media.transport.create",
+          payload: { direction, kind: "video" } }).then(() => "allowed", (error: Error) => error.message);
+        if (!result.includes("The active channel changed")) throw new Error(`Unexpected desktop screen transport result across channels: ${result}`);
+      }
+      await peer.evaluate((id) => window.harness.join(id), channelId);
+      const peerScreen = await peer.evaluate(() => window.harness.publishVideo(false, "screen"));
+      const watch = page.getByRole("button", { name: "Join screenshare from Chromium voice peer’s screen" });
+      await watch.click();
+      const stopWatching = page.getByRole("button", { name: "Stop watching Chromium voice peer’s screen" });
+      await stopWatching.waitFor();
+      await page.waitForFunction(() => window.voiceConnections.some((connection) => connection.getReceivers()
+        .some(({ track }) => track.kind === "video" && track.readyState === "live")));
+      await page.evaluate(() => {
+        window.screenCaptures = [];
+        navigator.mediaDevices.getDisplayMedia = async () => {
+          const canvas = document.createElement("canvas");
+          const context = canvas.getContext("2d")!;
+          const stream = canvas.captureStream(10);
+          const track = stream.getVideoTracks()[0]!;
+          window.screenCaptures.push(track);
+          const timer = setInterval(() => {
+            if (track.readyState === "ended") clearInterval(timer);
+            else context.fillRect(0, 0, canvas.width, canvas.height);
+          }, 100);
+          return stream;
+        };
+      });
+      async function shareScreen(button: string) {
+        await page.getByRole("button", { name: button, exact: true }).click();
+        const setup = page.getByRole("dialog", { name: "Share screen" });
+        await setup.getByRole("button", { name: "Choose source" }).click();
+        await setup.getByRole("button", { name: "Go live" }).click();
+        await setup.waitFor({ state: "hidden" });
+      }
+      const activeScreens = () => owner.rpc<{ screens: { connectionId: string }[] }>("state.get")
+        .then(({ screens }) => screens.filter((entry) => entry.connectionId === connectionId).length);
+      await shareScreen("Screenshare");
+      await shareScreen("Share another screen");
+      await until(activeScreens, (count) => count === 2);
+
+      await page.getByRole("button", { name: "Leave voice", exact: true }).first().click();
+      await stopWatching.waitFor({ state: "hidden" });
+      await until(activeScreens, (count) => count === 0);
+      await page.waitForFunction(() => window.screenCaptures.every(({ readyState }) => readyState === "ended") &&
+        window.voiceConnections.every((connection) => connection.getReceivers()
+          .every(({ track }) => track.kind !== "video" || track.readyState === "ended")), undefined, { timeout: 3000 })
+        .catch(() => { throw new Error("Leaving voice retained an outgoing capture or an incoming screen track"); });
+      if (await watch.count()) throw new Error("A screen could still be watched from outside voice");
       await until(async () => !(await owner.rpc<{ connectionId: string }[]>("media.producers"))
         .some((entry) => entry.connectionId === connectionId), Boolean);
-      console.log("Electron and Chromium decoded Opus in both directions. Push-to-talk, bitrate changes, mute, whisper and leave passed.");
+
+      await command("join_channel", { channelId });
+      await watch.waitFor();
+      if (await stopWatching.count() || await activeScreens()) throw new Error("Rejoining voice restored a previous screen share");
+      await shareScreen("Screenshare");
+      await until(activeScreens, (count) => count === 1);
+      await command("join_channel", { channelId: whisperRoom });
+      await until(activeScreens, (count) => count === 0);
+      await page.waitForFunction(() => window.screenCaptures.at(-1)?.readyState === "ended");
+      if (await watch.count()) throw new Error("Switching channels kept the previous channel’s screen-share controls");
+
+      await owner.rpc("channel.leave");
+      for (const direction of ["send", "receive"]) {
+        const result = await owner.rpc("media.transport.create", { direction, kind: "video" })
+          .then(() => "allowed", (error: Error) => error.message);
+        if (!result.includes("FORBIDDEN")) throw new Error(`Unexpected screen transport result outside voice: ${result}`);
+      }
+      await owner.rpc("channel.join", { channelId: whisperRoom });
+      const { id: transportId } = await owner.rpc<{ id: string }>("media.transport.create", { direction: "receive", kind: "video" });
+      const { codecs } = await owner.rpc<{ codecs: unknown }>("media.capabilities", { kind: "video" });
+      const foreignScreen = await owner.rpc("media.consumer.create", { transportId, producerId: peerScreen, rtpCapabilities: { codecs } })
+        .then(() => "allowed", (error: Error) => error.message);
+      if (!foreignScreen.includes("NOT_FOUND")) throw new Error(`Unexpected screen subscription result across channels: ${foreignScreen}`);
+      console.log("Desktop voice and screen sharing passed, including cleanup on leave and channel switch and channel-scoped access.");
     } finally { await app.close(); }
   } finally { await browser.close(); owner.close(); }
 } finally { await server.cleanup(); }

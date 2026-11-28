@@ -6,7 +6,12 @@ const header = encoder.encode("KORERO-IDENTITY-1");
 const pkcs8Header = [0x30, 0x51, 2, 1, 1, 0x30, 5, 6, 3, 0x2b, 0x65, 0x70, 4, 0x22, 4, 0x20];
 
 export function encodeBase64Url(bytes: ArrayBuffer | Uint8Array) {
-  return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let binary = "";
+  for (let offset = 0; offset < data.length; offset += 8192) {
+    binary += String.fromCharCode(...data.subarray(offset, offset + 8192));
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 export function decodeBase64Url(value: string) {

@@ -7,9 +7,12 @@
   import { Input } from "#lib/components/ui/input/index.js";
   import Checkbox from "#lib/components/fields/LabeledCheckbox.svelte";
   import SelectField from "#lib/components/fields/SelectField.svelte";
+  import SliderField from "#lib/components/fields/SliderField.svelte";
   import Modal from "#lib/components/Modal.svelte";
   import ScreenShareViewer from "./ScreenShareViewer.svelte";
   import { messageFrom, type ScreenShare, type Snapshot } from "#lib/connection/client";
+  import { supportsApplicationAudio } from "#lib/connection/platform";
+  import { listApplicationAudio, mixApplicationAudio, type ApplicationAudioMix, type ApplicationAudioSetting, type ApplicationAudioSource } from "#lib/media/application-audio";
   import { chooseScreen, ScreenMedia, supportsWebRtc, type ScreenSettings, type ScreenSubscription, type VideoSource } from "#lib/media/screen-media";
   import {
     defaultCameraCapture, defaultScreenCapture, getCapturePreferences, saveCapturePreferences, type CapturePreferences,
@@ -18,6 +21,7 @@
   let { snapshot, visible, controlsTarget, inlineTarget, source = "screen" }: {
     snapshot: Snapshot; visible: boolean; controlsTarget?: HTMLElement; inlineTarget?: HTMLElement; source?: VideoSource;
   } = $props();
+  type AudioMode = "none" | "source" | "applications";
   interface Publication {
     id: string;
     title: string;
@@ -25,8 +29,9 @@
     preview: MediaStream;
     settings: ScreenSettings;
     requestedAudio: boolean;
+    applicationAudio?: ApplicationAudioMix;
     session?: ScreenMedia;
-    channel?: string;
+    readonly channel: string;
     producerId?: string;
     seen: boolean;
     starting: boolean;
@@ -56,13 +61,25 @@
   let resolution = $state(String(initialCapture.resolution ?? 0));
   let frameRate = $state(String(initialCapture.frameRate));
   let videoKbps = $state<number | undefined>(initialCapture.videoBitrate / 1000);
-  let shareAudio = $state(false);
+  let audioMode = $state<AudioMode>("none");
+  let canMixApplications = $state(false);
+  let audioApplications = $state<ApplicationAudioSetting[]>([]);
+  let availableApplications = $state.raw<ApplicationAudioSource[]>([]);
+  let loadingApplications = $state(false);
+  let applicationError = $state("");
   let audioKbps = $state("128");
   let sourceHasAudio = $state(false);
   let requestedAudio = $state(false);
   let destroyed = false;
 
   const camera = $derived(source === "camera");
+  const sourceAudio = $derived(audioMode === "source");
+  const applicationAudioEnded = "Application audio capture ended. Edit the share to reconnect it.";
+  const audioModes: { value: AudioMode; label: string }[] = [
+    { value: "none", label: "No audio" },
+    { value: "source", label: "Share source audio" },
+    { value: "applications", label: "Selected applications" },
+  ];
   const CaptureIcon = $derived(camera ? Video : MonitorUp);
   const WatchIcon = $derived(camera ? Video : Monitor);
   const StopIcon = $derived(camera ? VideoOff : Square);
@@ -86,8 +103,7 @@
     title: entry.title,
     stream: entry.preview,
     live: Boolean(entry.producerId && entry.channel === snapshot.channelId),
-    status: entry.failure || (!snapshot.channelId ? "Sharing paused. Join a voice channel to resume."
-      : !canShare ? "Sharing paused. Screen sharing is unavailable in this channel."
+    status: entry.failure || (!canShare ? "Sharing paused. Screen sharing is unavailable in this channel."
       : !entry.producerId ? "Connecting screen share…" : ""),
     error: Boolean(entry.failure),
     edit: () => openSetup(entry),
@@ -119,10 +135,14 @@
     const live = availableShares ?? [];
     if (!canShare && !editing && setupOpen && !publishing) setupOpen = false;
     for (const entry of publications) {
+      if (entry.channel !== channel) {
+        untrack(() => { void stopPublication(entry); });
+        continue;
+      }
       const present = live.some(({ producerId }) => producerId === entry.producerId);
       if (present) entry.seen = true;
       const ended = entry.seen && !present;
-      if (!canShare || entry.channel !== channel) {
+      if (!canShare) {
         entry.failure = "";
         if (entry.session) {
           if (camera) untrack(() => { void stopPublication(entry); });
@@ -151,6 +171,7 @@
   });
 
   onMount(() => {
+    canMixApplications = !camera && supportsApplicationAudio();
     void getCapturePreferences(source).then((saved) => {
       if (destroyed) return;
       captureDefaults = saved;
@@ -167,6 +188,7 @@
     clearDraft();
     for (const entry of publications) {
       stopCapture(entry.capture);
+      entry.applicationAudio?.stop();
       void entry.session?.close();
     }
     void incoming?.close();
@@ -184,6 +206,10 @@
     if (draft && draft !== editing?.capture && !publications.some((entry) => entry.capture === draft)) stopCapture(draft);
     draft = undefined;
     editing = undefined;
+    audioApplications = [];
+    availableApplications = [];
+    applicationError = "";
+    loadingApplications = false;
   }
 
   function openSetup(entry?: Publication) {
@@ -200,18 +226,48 @@
     resolution = entry ? String(entry.settings.resolution ?? 0) : String(captureDefaults.resolution ?? 0);
     frameRate = String(entry?.settings.frameRate ?? captureDefaults.frameRate);
     videoKbps = entry ? entry.settings.videoBitrate / 1000 : captureDefaults.videoBitrate / 1000;
-    shareAudio = entry?.settings.audio ?? false;
+    audioMode = entry?.applicationAudio ? "applications" : entry?.settings.audio ? "source" : "none";
+    audioApplications = entry?.applicationAudio?.settings.map((application) => ({ ...application })) ?? [];
+    availableApplications = audioApplications;
     audioKbps = String((entry?.settings.audioBitrate ?? 128000) / 1000);
     requestedAudio = entry?.requestedAudio ?? false;
     sourceHasAudio = Boolean(draft?.getAudioTracks().some((track) => track.readyState === "live"));
     setupOpen = true;
+    if (audioMode === "applications") void refreshApplications();
+  }
+
+  async function refreshApplications() {
+    const version = setupVersion;
+    loadingApplications = true;
+    applicationError = "";
+    try {
+      const applications = await listApplicationAudio();
+      if (!setupOpen || version !== setupVersion) return;
+      availableApplications = applications;
+      audioApplications = audioApplications.filter(({ id }) => applications.some((application) => application.id === id));
+    } catch (failure) {
+      if (setupOpen && version === setupVersion) applicationError = messageFrom(failure);
+    } finally {
+      if (version === setupVersion) loadingApplications = false;
+    }
+  }
+
+  function changeAudioMode(mode: AudioMode | undefined) {
+    if (!mode) return;
+    audioMode = mode;
+    if (mode === "applications" && !loadingApplications) void refreshApplications();
+  }
+
+  function selectApplication(application: ApplicationAudioSource, selected: boolean) {
+    if (!selected) audioApplications = audioApplications.filter(({ id }) => id !== application.id);
+    else if (!audioApplications.some(({ id }) => id === application.id)) audioApplications.push({ ...application, volume: 100 });
   }
 
   async function selectSource() {
     if (choosing || publishing || (!canShare && !editing)) return;
     choosing = true;
     setupError = "";
-    const audio = shareAudio;
+    const audio = sourceAudio;
     const version = setupVersion;
     try {
       const stream = camera ? await navigator.mediaDevices.getUserMedia({
@@ -241,33 +297,54 @@
   async function submitShare(event: SubmitEvent) {
     event.preventDefault();
     const stream = draft;
-    if (!stream || publishing || videoKbps === undefined || (!canShare && !editing)) return;
+    const channel = snapshot.channelId;
+    if (!channel || !stream || publishing || videoKbps === undefined || (!canShare && !editing)) return;
+    if (sourceAudio && !requestedAudio) return;
+    const applications = audioMode === "applications" ? audioApplications.map((application) => ({ ...application })) : undefined;
+    if (applications && (!applications.length || loadingApplications || applicationError)) return;
     const settings = {
       resolution: Number(resolution) || null, frameRate: Number(frameRate), videoBitrate: videoKbps * 1000,
-      audio: shareAudio, audioBitrate: Number(audioKbps) * 1000,
+      audio: audioMode !== "none", audioBitrate: Number(audioKbps) * 1000,
     };
+    const entryBeingEdited = editing;
+    let mix: ApplicationAudioMix | undefined;
+    let mixInUse = false;
     publishing = true;
     setupError = "";
     try {
-      if (editing) {
-        await editPublication(editing, stream, settings);
+      if (applications) {
+        mix = await mixApplicationAudio(applications, () => {
+          if (mixInUse) error = applicationAudioEnded;
+          else setupError = applicationAudioEnded;
+        });
+        if (destroyed || !setupOpen || draft !== stream || snapshot.channelId !== channel ||
+            (entryBeingEdited ? !publications.includes(entryBeingEdited) : !canShare)) return;
+        if (mix.track.readyState !== "live") throw new Error("The selected applications are no longer available to share.");
+      }
+      if (entryBeingEdited) {
+        mixInUse = await editPublication(entryBeingEdited, stream, settings, mix);
       } else {
         let number = 1;
         while (publications.some(({ id }) => id === `local-${number}`)) number++;
         publications.push({
           id: `local-${number}`, title: number === 1 ? "Your screen" : `Your screen ${number}`,
-          capture: stream, preview: new MediaStream(stream.getVideoTracks()), settings, requestedAudio,
+          channel, capture: stream, preview: new MediaStream(stream.getVideoTracks()), settings, requestedAudio,
+          applicationAudio: mix,
           seen: false, starting: false, closing: false, editing: false, failure: "",
         });
         const entry = publications[publications.length - 1];
         watchCapture(entry, stream);
         await publish(entry);
+        if (destroyed || !publications.includes(entry)) return;
         if (entry.failure) {
           publications = publications.filter(({ id }) => id !== entry.id);
           setupError = entry.failure;
           return;
         }
+        mixInUse = true;
       }
+      if (mixInUse && mix?.track.readyState === "ended") error = applicationAudioEnded;
+      else if (error === applicationAudioEnded) error = "";
       captureDefaults = {
         resolution: settings.resolution, frameRate: settings.frameRate, videoBitrate: settings.videoBitrate,
       };
@@ -276,6 +353,7 @@
     } catch (failure) {
       setupError = messageFrom(failure);
     } finally {
+      if (!mixInUse) mix?.stop();
       publishing = false;
     }
   }
@@ -286,18 +364,22 @@
     }, { once: true });
   }
 
-  async function editPublication(entry: Publication, stream: MediaStream, settings: ScreenSettings) {
+  function outgoingCapture(stream: MediaStream, mix?: ApplicationAudioMix) {
+    return mix ? new MediaStream([...stream.getVideoTracks(), mix.track]) : stream;
+  }
+
+  async function editPublication(entry: Publication, stream: MediaStream, settings: ScreenSettings, mix?: ApplicationAudioMix) {
     const previous = entry.capture;
     const session = entry.session;
     entry.editing = true;
     try {
       if (session && entry.producerId) {
         try {
-          await session.updateShare(stream, settings);
+          await session.updateShare(outgoingCapture(stream, mix), settings);
         } catch (failure) {
           if (entry.session === session) {
             try {
-              await session.updateShare(previous, entry.settings);
+              await session.updateShare(outgoingCapture(previous, entry.applicationAudio), entry.settings);
             } catch {
               await closePublication(entry);
             }
@@ -305,7 +387,7 @@
           throw failure;
         }
       }
-      if (destroyed || !publications.includes(entry)) return;
+      if (destroyed || !publications.includes(entry)) return false;
       if (stream !== previous) {
         for (const track of entry.preview.getTracks()) entry.preview.removeTrack(track);
         for (const track of stream.getVideoTracks()) entry.preview.addTrack(track);
@@ -315,16 +397,18 @@
       }
       entry.settings = settings;
       entry.requestedAudio = requestedAudio;
+      entry.applicationAudio?.stop();
+      entry.applicationAudio = mix;
       entry.failure = "";
+      return true;
     } finally {
       entry.editing = false;
     }
   }
 
   async function publish(entry: Publication) {
-    const channel = snapshot.channelId;
-    if (!channel || destroyed || !canShare || entry.session || entry.starting || entry.closing) return;
-    entry.channel = channel;
+    const { channel } = entry;
+    if (channel !== snapshot.channelId || destroyed || !canShare || entry.session || entry.starting || entry.closing) return;
     entry.starting = true;
     const session = media((message) => {
       if (entry.session !== session) return;
@@ -338,7 +422,7 @@
     });
     entry.session = session;
     try {
-      const id = await session.share(entry.capture, entry.settings);
+      const id = await session.share(outgoingCapture(entry.capture, entry.applicationAudio), entry.settings);
       if (entry.session === session && snapshot.channelId === channel) entry.producerId = id;
     } catch (failure) {
       if (entry.session !== session) return;
@@ -353,6 +437,7 @@
     publications = publications.filter(({ id }) => id !== entry.id);
     if (editing === entry) setupOpen = false;
     stopCapture(entry.capture);
+    entry.applicationAudio?.stop();
     await closePublication(entry);
   }
 
@@ -485,7 +570,7 @@
 {/if}
 
 <Modal bind:open={setupOpen} {title} description={camera ? "Preview your camera and choose the quality before sharing video with this channel."
-    : editing ? "Change the source or quality of this screen share." : "Choose a window, tab, or entire display to share with this channel."}
+    : editing ? "Change the source or quality of this screen share." : "Choose a window, tab, or entire display to share with your current voice channel."}
     dismissible={!publishing}>
     <form class="dialog-form" bind:this={setupForm} onsubmit={submitShare}>
       {#if draft}
@@ -505,24 +590,60 @@
             <label>Video bitrate (kbps)
               <Input type="number" required min={camera ? 200 : 500} max={camera ? 6000 : 12000} step={100} bind:value={videoKbps} disabled={publishing} />
             </label>
-            {#if shareAudio}
+            {#if canMixApplications}
+              <SelectField label="Screen share audio" options={audioModes} bind:value={() => audioMode, changeAudioMode} disabled={choosing || publishing} />
+            {/if}
+            {#if audioMode !== "none"}
               <SelectField label="Audio bitrate (kbps)" options={audioBitrates} bind:value={audioKbps} disabled={publishing} />
             {/if}
           </div>
         </BitsConfig>
       {/if}
-      {#if !camera}<Checkbox label="Share source audio" bind:checked={shareAudio} disabled={choosing || publishing} />{/if}
-      {#if shareAudio && !draft}
+      {#if !camera && !canMixApplications}
+        <Checkbox label="Share source audio" bind:checked={() => sourceAudio, (checked) => changeAudioMode(checked ? "source" : "none")}
+          disabled={choosing || publishing} />
+      {/if}
+      {#if audioMode === "applications"}
+        <fieldset class="application-audio" disabled={publishing}>
+          <legend>Application audio</legend>
+          <div class="application-audio-header">
+            <p class="field-hint">Play audio in an app, then refresh to find it. Set the volume your viewers will hear.</p>
+            <Button type="button" size="sm" variant="outline" class="shrink-0" onclick={refreshApplications} disabled={loadingApplications || publishing}>
+              {loadingApplications ? "Refreshing…" : "Refresh apps"}
+            </Button>
+          </div>
+          {#if applicationError}
+            <p class="form-error" role="alert">{applicationError}</p>
+          {:else if !loadingApplications && !availableApplications.length}
+            <p class="field-hint" role="status">No applications with active audio streams found.</p>
+          {/if}
+          {#if availableApplications.length}
+            <ul class="application-audio-list">
+              {#each availableApplications as application (application.id)}
+                {@const selected = audioApplications.find(({ id }) => id === application.id)}
+                <li>
+                  <Checkbox label={application.name} bind:checked={() => Boolean(selected), (checked) => selectApplication(application, checked)}
+                    disabled={publishing} />
+                  {#if selected}
+                    <SliderField label={`${application.name} volume`} unit="%" bind:value={selected.volume} disabled={publishing} />
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </fieldset>
+      {:else if sourceAudio && !draft}
         <p class="field-hint">Audio availability depends on the selected source and your browser or operating system.</p>
-      {:else if shareAudio && draft && !requestedAudio}
+      {:else if sourceAudio && draft && !requestedAudio}
         <p class="field-hint">Choose the source again to request its audio.</p>
-      {:else if shareAudio && draft && !sourceHasAudio}
+      {:else if sourceAudio && draft && !sourceHasAudio}
         <p class="field-hint">This source supplied video only. Choose a different source to include audio.</p>
       {/if}
       {#if setupError}<p class="form-error" role="alert">{setupError}</p>{/if}
       <div class="dialog-actions">
         <Button type="button" variant="outline" onclick={() => { setupOpen = false; }} disabled={publishing}>Cancel</Button>
-        <Button type="submit" variant="default" disabled={!draft || choosing || publishing || (shareAudio && !requestedAudio)}>
+        <Button type="submit" variant="default" disabled={!draft || choosing || publishing || (sourceAudio && !requestedAudio) ||
+          (audioMode === "applications" && (!audioApplications.length || loadingApplications || Boolean(applicationError)))}>
           {publishing ? (editing ? "Saving…" : "Starting…") : editing ? "Save changes" : camera ? "Start camera" : "Go live"}
         </Button>
       </div>
@@ -543,4 +664,9 @@
     object-fit: contain;
   }
   .capture-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .application-audio { display: grid; min-width: 0; gap: 6px; }
+  .application-audio legend { font-size: .875rem; font-weight: 500; }
+  .application-audio-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .application-audio-list { display: grid; max-height: 11rem; overflow-y: auto; padding: 0 8px 0 2px; }
+  .application-audio-list li { min-width: 0; padding: 4px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 </style>

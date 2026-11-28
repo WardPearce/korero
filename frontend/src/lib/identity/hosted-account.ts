@@ -1,10 +1,11 @@
 import { argon2idAsync } from "@noble/hashes/argon2.js";
 import { preferences, type SavedServer } from "../preferences";
+import { parseAppearance, type Appearance } from "../theme";
 import { decodeBase64Url, encodeBase64Url, identityFromPrivateKey } from "./browser-identity";
 
 const encoder = new TextEncoder();
 const context = "korero-hosted-account-v1";
-const maxEncryptedLength = 65536;
+const maxEncryptedLength = 4 * 1024 * 1024;
 const sessionKey = "hosted-account";
 
 export const defaultAccountProvider = import.meta.env.DEV
@@ -38,9 +39,16 @@ async function accountKeys(password: string, origin: string, username: string) {
   return { credential: encodeBase64Url(credential), encryption };
 }
 
-interface Profile {
-  privateKey: string;
+export interface BookmarkPassword { origin: string; serverId: string; password: string }
+
+export interface AccountPreferences {
   servers: SavedServer[];
+  serverPasswords?: BookmarkPassword[];
+  appearance?: Appearance;
+}
+
+interface Profile extends AccountPreferences {
+  privateKey: string;
 }
 
 interface Envelope { encryptedData: string; revision: number }
@@ -63,7 +71,10 @@ async function storedSession() {
 async function encrypt(key: CryptoKey, plain: Uint8Array<ArrayBuffer>, additionalData: Uint8Array<ArrayBuffer>) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const sealed = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData }, key, plain);
-  return encodeBase64Url(Uint8Array.of(...iv, ...new Uint8Array(sealed)));
+  const bytes = new Uint8Array(iv.length + sealed.byteLength);
+  bytes.set(iv);
+  bytes.set(new Uint8Array(sealed), iv.length);
+  return encodeBase64Url(bytes);
 }
 
 async function decrypt(key: CryptoKey, ciphertext: string, additionalData: Uint8Array<ArrayBuffer>) {
@@ -80,6 +91,13 @@ export function isSavedServer(value: unknown): value is SavedServer {
     (server.passwordRequired === undefined || typeof server.passwordRequired === "boolean");
 }
 
+function isBookmarkPassword(value: unknown): value is BookmarkPassword {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Partial<BookmarkPassword>;
+  return typeof entry.origin === "string" && typeof entry.serverId === "string" && entry.serverId.length > 0 &&
+    typeof entry.password === "string" && entry.password.length > 0 && entry.password.length <= 128;
+}
+
 class ProviderError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
@@ -89,7 +107,7 @@ export class HostedAccount {
     private readonly credential: string, private readonly encryption: CryptoKey, private readonly sessionId: string) {}
 
   static async open(provider: string, name: string, password: string,
-    registration?: { privateKey: () => Promise<string>; servers: SavedServer[] }) {
+    registration?: AccountPreferences & { privateKey: () => Promise<string> }) {
     const origin = providerOrigin(provider);
     const username = name.trim().toLowerCase();
     if (!/^[a-z0-9][a-z0-9_.-]{3,31}$/.test(username)) {
@@ -103,7 +121,7 @@ export class HostedAccount {
     let profile: Profile;
     let envelope: Envelope;
     if (registration) {
-      profile = { privateKey: await registration.privateKey(), servers: registration.servers };
+      profile = { ...registration, privateKey: await registration.privateKey(), serverPasswords: registration.serverPasswords ?? [] };
       const encryptedData = await account.seal(profile, 1);
       await account.request("register", { encryptedData });
       envelope = { encryptedData, revision: 1 };
@@ -166,8 +184,8 @@ export class HostedAccount {
     });
   }
 
-  private identityResult(profile: Profile) {
-    return { account: this, identity: identityFromPrivateKey(profile.privateKey), servers: profile.servers };
+  private identityResult({ privateKey, ...data }: Profile) {
+    return { account: this, identity: identityFromPrivateKey(privateKey), data };
   }
 
   private async cache(envelope: Envelope) {
@@ -206,7 +224,9 @@ export class HostedAccount {
 
   private async seal(profile: Profile, revision: number) {
     const plain = encoder.encode(JSON.stringify(profile));
-    if (plain.byteLength + 28 > maxEncryptedLength * 3 / 4) throw new Error("Saved servers exceed the account storage limit.");
+    if (plain.byteLength + 28 > maxEncryptedLength * 3 / 4) {
+      throw new Error("Your saved servers and themes exceed the account storage limit.");
+    }
     return encrypt(this.encryption, plain, this.additionalData(revision));
   }
 
@@ -225,6 +245,12 @@ export class HostedAccount {
       if (typeof profile.privateKey !== "string" || !Array.isArray(profile.servers) || !profile.servers.every(isSavedServer)) {
         throw new Error();
       }
+      if (profile.serverPasswords !== undefined) {
+        if (!Array.isArray(profile.serverPasswords) || !profile.serverPasswords.every(isBookmarkPassword)) throw new Error();
+        const origins = new Set(profile.servers.map(({ origin }) => origin));
+        profile.serverPasswords = profile.serverPasswords.filter(({ origin }) => origins.has(origin));
+      }
+      if (profile.appearance !== undefined) profile.appearance = parseAppearance(profile.appearance);
       return profile;
     } catch {
       throw new Error("The account data could not be decrypted or is damaged.");
@@ -235,29 +261,30 @@ export class HostedAccount {
     if (providerOrigin(provider) === this.origin) throw new Error("Enter a different account provider.");
     const { profile } = await this.read();
     return HostedAccount.open(provider, username, password, {
+      ...profile,
       privateKey: async () => profile.privateKey,
-      servers: profile.servers,
     });
   }
 
-  async updateServers(edit: (servers: SavedServer[]) => SavedServer[]) {
+  async updatePreferences(edit: (data: AccountPreferences) => AccountPreferences) {
     for (let attempt = 0; attempt < 3; attempt++) {
       const { profile, envelope } = await this.read();
       const { revision } = envelope;
-      const servers = edit(profile.servers);
-      if (JSON.stringify(servers) === JSON.stringify(profile.servers)) {
+      const { privateKey, ...current } = profile;
+      const updated = edit(current);
+      if (updated === current || JSON.stringify(updated) === JSON.stringify(current)) {
         await this.cache(envelope);
-        return servers;
+        return current;
       }
-      const encryptedData = await this.seal({ ...profile, servers }, revision + 1);
+      const encryptedData = await this.seal({ ...updated, privateKey }, revision + 1);
       try {
         await this.request("update", { encryptedData, revision });
         await this.cache({ encryptedData, revision: revision + 1 });
-        return servers;
+        return updated;
       } catch (error) {
         if (!(error instanceof ProviderError) || error.status !== 409 || attempt === 2) throw error;
       }
     }
-    throw new Error("Could not update saved servers.");
+    throw new Error("Could not sync account preferences.");
   }
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ChevronDown, LockKeyhole, Mail, Plus, Search, Settings2, X } from "@lucide/svelte";
   import ChannelMember from "#lib/components/server/ChannelMember.svelte";
+  import MobileChannelSheet from "#lib/components/server/MobileChannelSheet.svelte";
   import ContextActions from "#lib/components/ContextActions.svelte";
   import IconButton from "#lib/components/IconButton.svelte";
   import VoiceToolbar from "#lib/components/media/VoiceToolbar.svelte";
@@ -114,6 +115,18 @@
     workspace.selectedChannelId = channel.id;
     workspace.mobilePane = "room";
     workspace.actionError = "";
+  }
+
+  // On mobile, a tap asks whether to join voice or only read the chat, since double-tap isn't discoverable.
+  let sheetChannelId = $state<string | null>(null);
+  const sheetChannel = $derived(sheetChannelId && workspace.mobileVoice ? channelsById.get(sheetChannelId) ?? null : null);
+
+  function tapChannel(channel: Channel) {
+    if (workspace.mobileVoice && online && channel.id !== snapshot?.channelId) {
+      sheetChannelId = channel.id;
+      return;
+    }
+    selectChannel(channel);
   }
 
   function toggleGroup(id: string) {
@@ -394,7 +407,7 @@
       {/if}
       <button {...props} type="button" class="channel-target" data-leaf={expandable ? undefined : ""}
         aria-current={isSelected ? "true" : undefined}
-        onclick={() => selectChannel(channel)} ondblclick={() => onjoin(channel)} draggable={canReorder && channel.canEdit === true}
+        onclick={() => tapChannel(channel)} ondblclick={() => onjoin(channel)} draggable={canReorder && channel.canEdit === true}
         ondragstart={(event) => startDrag(event, channel)} ondragend={endDrag}>
         {#if channel.icon}<span class="channel-icon" aria-hidden="true">{channel.icon}</span>{/if}
         <span class="truncate" title={channel.name}>{channel.name}</span>
@@ -503,6 +516,11 @@
     <div class="contents" bind:this={workspace.screenShareControlsTarget}></div>
   </div>
 </aside>
+
+<MobileChannelSheet channel={sheetChannel} members={sheetChannel ? membersIn(sheetChannel.id) : []} disabled={Boolean(pending)}
+  onjoin={(channel) => { sheetChannelId = null; onjoin(channel); }}
+  onchat={(channel) => { sheetChannelId = null; selectChannel(channel); }}
+  onclose={() => { sheetChannelId = null; }} />
 
 <style>
   .channel-top { position: relative; }

@@ -55,6 +55,12 @@ export function getSavedPassword(origin: string, serverId: string, channelId = "
   return preferences.passwords.get([origin, serverId, channelId]).then((record) => record?.password);
 }
 
+export async function getLocalBookmarkPasswords(servers: SavedServer[]) {
+  const origins = servers.map(({ origin }) => origin);
+  const records = await preferences.passwords.where("origin").anyOf(origins).and(({ channelId }) => !channelId).toArray();
+  return records.map(({ origin, serverId, password }) => ({ origin, serverId, password }));
+}
+
 export function savePassword(origin: string, serverId: string, password: string, channelId = "") {
   return preferences.passwords.put({ origin, serverId, channelId, password });
 }

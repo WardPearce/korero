@@ -12,11 +12,17 @@ accounts can sign in after registration closes. Account providers use HTTPS in p
 
 The client derives a key from the password using Argon2id. HKDF produces separate
 keys for authentication and AES-256-GCM encryption. The client encrypts the
-Ed25519 private key and saved server list before sending them to the provider.
+Ed25519 private key, server bookmarks, bookmarked server passwords, and appearance
+settings before sending them to the provider. A saved server password is used
+only for the bookmarked origin and server ID. Channel passwords are stored on
+the device. Appearance sync includes the active theme, custom themes and their
+backgrounds, and the frosted glass setting. Profiles larger than 64 KiB require
+a provider and clients that support the 4 MiB encrypted profile limit.
 The provider stores the username, a verifier for the derived sign-in credential,
 and the encrypted data. The password and encryption key stay in the client.
 Sign in with the same provider address, username, and password to restore the
 data on another device. An encrypted identity export can also restore the key.
+The app refreshes the hosted profile when it opens and returns to focus.
 The app saves an encrypted copy of the hosted profile and the keys needed to
 reopen it in device storage. Use **Sign out** in Account settings to clear the
 saved sign-in on that device.
@@ -34,8 +40,8 @@ code, and type the 16-character link code shown beside it.
 For a local identity, the QR code carries the private key, username, and saved
 servers. The transfer is offline. For a hosted account, it carries the provider
 address, username, sign-in credential, and encryption key, but not the password.
-The new device signs in to the provider and decrypts the identity and saved
-servers there, so both devices share the same saved servers. Hosted sessions
+The new device signs in to the provider and decrypts the account profile,
+including bookmarked server passwords and themes. Hosted sessions
 started before device links were added cannot be shared. Sign out and sign in
 again on that device first.
 
@@ -52,9 +58,10 @@ the app's content security protections.
 
 Use **Identity** settings to convert a local identity to a hosted account or to
 transfer a hosted identity to another provider. Choose a username and password
-for the destination account. The app encrypts the existing private key and
-saved servers for the destination and switches providers after registration
-succeeds. The original identity remains available from its previous location.
+for the destination account. The app encrypts the existing private key, server
+bookmarks and their passwords, and appearance settings for the destination. It
+switches providers after registration succeeds. The original identity remains
+available from its previous location.
 
 ## Voice server accounts
 

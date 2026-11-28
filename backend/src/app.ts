@@ -30,7 +30,7 @@ export function clientKey(address: string) {
   return groups.slice(0, 4).map((group) => parseInt(group, 16).toString(16)).join(":") + "::/64";
 }
 
-// Request bodies other than attachments and profile pictures.
+// Default limit for JSON request bodies.
 const requestBodyLimit = 393728;
 
 // Allow worst-case JSON escaping of the caption, formatting and filename.
@@ -63,11 +63,15 @@ async function readBoundedJson(request: Request, limit: number, tooLarge: () => 
 }
 
 const hostedAccountPath = "/api/v1/hosted-account/";
+const maxEncryptedAccountLength = 4 * 1024 * 1024;
+const jsonBodyLimit = (path: string, method: string) =>
+  method === "POST" && (path === hostedAccountPath + "register" || path === hostedAccountPath + "update")
+    ? maxEncryptedAccountLength + 256 : requestBodyLimit;
 const hostedCredentials = {
   username: t.String({ pattern: "^[a-z0-9][a-z0-9_.-]{3,31}$" }),
   credential: t.String({ pattern: "^[A-Za-z0-9_-]{43}$" }),
 };
-const encryptedData = t.String({ pattern: "^[A-Za-z0-9_-]+$", minLength: 40, maxLength: 65536 });
+const encryptedData = t.String({ pattern: "^[A-Za-z0-9_-]+$", minLength: 40, maxLength: maxEncryptedAccountLength });
 
 export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAccounts, media: Media, realtime: Realtime,
   info: { serverId: string; fingerprint?: string }) {
@@ -153,14 +157,15 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
           return new Response(null, { status: 204, headers: set.headers as HeadersInit });
         }
       }
-      if ((path !== attachmentPath || request.method !== "POST") && Number(request.headers.get("content-length")) > requestBodyLimit) fail("LIMIT");
+      if ((path !== attachmentPath || request.method !== "POST") &&
+          Number(request.headers.get("content-length")) > jsonBodyLimit(path, request.method)) fail("LIMIT");
     })
     // Bound every body by bytes read, not by the client's content-length, before it is parsed.
     // Attachment and profile picture routes authenticate first and apply their own limits.
     .onParse(({ request }) => {
       const path = new URL(request.url).pathname.replace(/\/$/, "");
       if ((path === attachmentPath && request.method === "POST") || (path === picturePath && request.method === "PATCH")) return;
-      return readBoundedJson(request, requestBodyLimit, () => fail("LIMIT"), true);
+      return readBoundedJson(request, jsonBodyLimit(path, request.method), () => fail("LIMIT"), true);
     })
     .onError(({ code, error, set }) => {
       const parseCause = code === "PARSE" && error.cause instanceof ProtocolError ? error.cause : undefined;

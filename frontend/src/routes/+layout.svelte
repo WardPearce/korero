@@ -14,7 +14,7 @@
   import type { VoicePresence } from "#lib/media/voice-shortcuts";
   import { DesktopVoice, type DesktopMediaEvent } from "#lib/media/desktop-voice";
   import PaneDivider from "#lib/components/PaneDivider.svelte";
-  import { defaultMemberVolume, forgetPassword, getMemberVolumes, getSavedPassword, preferences, saveMemberVolumes, savePassword, type SavedServer } from "#lib/preferences";
+  import { defaultMemberVolume, forgetPassword, getLocalBookmarkPasswords, getMemberVolumes, getSavedPassword, preferences, saveMemberVolumes, savePassword, type SavedServer } from "#lib/preferences";
   import AccountSetup from "#lib/components/AccountSetup.svelte";
   import LocalIdentitySetup from "#lib/components/LocalIdentitySetup.svelte";
   import DeviceLinkImport from "#lib/components/DeviceLinkImport.svelte";
@@ -24,6 +24,7 @@
   import ConnectServerModal from "#lib/components/server/ConnectServerModal.svelte";
   import ConnectionInfo from "#lib/components/server/ConnectionInfo.svelte";
   import ScreenSharing from "#lib/components/media/ScreenSharing.svelte";
+  import CapturePicker from "#lib/components/media/CapturePicker.svelte";
   import VoiceToolbar from "#lib/components/media/VoiceToolbar.svelte";
   import CallPictureInPicture from "#lib/components/media/CallPictureInPicture.svelte";
   import { callPip } from "#lib/media/call-pip";
@@ -35,12 +36,12 @@
   } from "#lib/connection/client";
   import { mobileApp, voiceApp, watchDesktop } from "#lib/connection/platform";
   import { authenticateIdentity, getIdentity, identityError, setIdentity } from "#lib/identity/identity";
-  import { HostedAccount } from "#lib/identity/hosted-account";
+  import { HostedAccount, type AccountPreferences, type BookmarkPassword } from "#lib/identity/hosted-account";
   import { identityModeKey, readLocalIdentity, rememberIdentityMode, type LocalProfile } from "#lib/identity/local-identity";
   import { createProfilePictureCache } from "#lib/identity/profile-picture";
   import { browserServerOrigin, browserSessions } from "#lib/connection/browser-session";
   import { certificateApproval, inspectServer, trustServer, type CertificateContact } from "#lib/connection/server-trust";
-  import { applyAppearance, readAppearance } from "#lib/theme";
+  import { applyAppearance, readAppearance, saveAppearance, type Appearance } from "#lib/theme";
   import { readChatDisplay, saveChatDisplay, setChatDisplay, type ChatDisplay } from "#lib/chat/chat-display";
   import { mobilePaneSwipe } from "#lib/mobile-pane-swipe";
   import { setWorkspace, type ChannelPlacement, type MobilePane, type RoomView } from "#lib/workspace";
@@ -107,11 +108,14 @@
   // Desktop sessions survive a renderer reload. Wait for them before connecting saved servers.
   const restored = new Promise<void>((resolve) => { resolveRestored = resolve; });
   let savedServers = $state.raw<SavedServer[]>([]);
+  let bookmarkPasswords: BookmarkPassword[] = [];
   let hostedAccount = $state.raw<HostedAccount>();
+  let deviceAppearance = readAppearance();
+  let appearance = $state.raw(deviceAppearance);
   let username = $state("");
   let identityReady = $derived(Boolean(username));
   let setup = $state<"hosted" | "local" | "link" | "transfer" | null>(null);
-  let bookmarkUpdate = Promise.resolve();
+  let profileUpdate = Promise.resolve();
   let connectOpen = $state(false);
   let connectBusy = $state(false);
   let connectError = $state("");
@@ -188,7 +192,10 @@
       return name && name !== entry.name ? [{ ...entry, name }] : [];
     });
     if (!renamed.length) return;
-    void updateSavedServers("", (servers) => servers.map((entry) => renamed.find(({ origin }) => origin === entry.origin) ?? entry)).catch(() => {});
+    void updateSavedServers((servers) => servers.map((entry) => {
+      const renamedEntry = renamed.find(({ origin }) => origin === entry.origin);
+      return renamedEntry ? { ...entry, name: renamedEntry.name } : entry;
+    })).catch(() => {});
   });
   let serverTitle = $derived(serverInfo?.name ?? (serverOrigin ? shortHost(serverOrigin) : online ? "Connected server" : "No server connected"));
   let bannerImageUrl = $derived(view.snapshot?.bannerImageUrl === undefined ? serverInfo?.bannerImageUrl ?? null : view.snapshot.bannerImageUrl);
@@ -213,6 +220,8 @@
       return createLocalDeviceLink(profile);
     },
     signOut,
+    get appearance() { return appearance; },
+    updateAppearance,
     get view() { return view; },
     get activeVoice() {
       return voiceConnection ? { origin: voiceConnection.origin, view: voiceConnection.view } : undefined;
@@ -286,7 +295,7 @@
   });
 
   onMount(() => {
-    applyAppearance(readAppearance());
+    applyAppearance(appearance);
     void audio.load();
     void shortcuts.load();
     void restoreIdentityMode();
@@ -343,8 +352,19 @@
     try {
       const hosted = await HostedAccount.restore();
       if (hosted) {
-        useHostedIdentity(hosted);
-        void updateSavedServers("", (servers) => servers).then(connectSaved).catch(() => {});
+        useHostedIdentity(hosted, false);
+        const { account, data } = hosted;
+        const legacy = data.serverPasswords === undefined ? await getLocalBookmarkPasswords(data.servers).catch(() => []) : [];
+        try {
+          await updateAccount(account, (current) => {
+            if (!legacy.length || current.serverPasswords !== undefined) return current;
+            const origins = new Set(current.servers.map(({ origin }) => origin));
+            return { ...current, serverPasswords: legacy.filter(({ origin }) => origins.has(origin)) };
+          });
+        } catch {
+          if (hostedAccount === account && data.serverPasswords === undefined) bookmarkPasswords = legacy;
+        }
+        if (hostedAccount === account) void connectSaved();
         return;
       }
       if (localStorage.getItem(identityModeKey) === "local") {
@@ -371,24 +391,36 @@
   }
 
   async function transferIdentity(provider: string, name: string, password: string) {
-    await bookmarkUpdate;
+    await profileUpdate;
     if (hostedAccount) return hostedAccount.transfer(provider, name, password);
     const profile = await readLocalIdentity();
     if (!profile) throw new Error("The local identity could not be loaded.");
     return HostedAccount.open(provider, name, password, {
       privateKey: async () => profile.identity.privateKey,
       servers: profile.servers,
+      serverPasswords: await getLocalBookmarkPasswords(profile.servers),
+      appearance: deviceAppearance,
     });
   }
 
-  function useHostedIdentity({ account, identity, servers }: Awaited<ReturnType<typeof HostedAccount.open>>) {
+  function applyAccountPreferences(data: AccountPreferences) {
+    savedServers = data.servers;
+    bookmarkPasswords = data.serverPasswords ?? [];
+    const next = data.appearance ?? deviceAppearance;
+    if (JSON.stringify(appearance) !== JSON.stringify(next)) {
+      appearance = next;
+      applyAppearance(next);
+    }
+  }
+
+  function useHostedIdentity({ account, identity, data }: Awaited<ReturnType<typeof HostedAccount.open>>, connect = true) {
     setIdentity(identity);
     username = account.username;
-    savedServers = servers;
     hostedAccount = account;
+    applyAccountPreferences(data);
     setup = null;
     rememberIdentityMode("hosted");
-    void connectSaved();
+    if (connect) void connectSaved();
   }
 
   async function signOut() {
@@ -400,25 +432,67 @@
       setIdentity();
       username = "";
       savedServers = [];
+      bookmarkPasswords = [];
       hostedAccount = undefined;
+      appearance = deviceAppearance;
+      applyAppearance(appearance);
+      resetConnect("");
+      connectOpen = false;
       setup = "hosted";
     });
   }
 
-  function updateSavedServers(origin: string, edit: (servers: SavedServer[]) => SavedServer[]) {
+  function queueProfileUpdate(work: () => Promise<void>) {
+    const next = profileUpdate.then(work);
+    profileUpdate = next.catch(() => {});
+    return next;
+  }
+
+  function updateAccount(account: HostedAccount, edit: (data: AccountPreferences) => AccountPreferences) {
+    return queueProfileUpdate(async () => {
+      if (hostedAccount !== account) return;
+      const data = await account.updatePreferences(edit);
+      if (hostedAccount === account) applyAccountPreferences(data);
+    });
+  }
+
+  function refreshHostedAccount() {
     const account = hostedAccount;
-    const work = bookmarkUpdate.then(async () => {
-      const servers = account ? await account.updateServers(edit) : await preferences.transaction("rw", preferences.servers, async () => {
-        const entries = edit(await preferences.servers.toArray());
-        const entry = entries.find((server) => server.origin === origin);
-        if (entry) await preferences.servers.put(entry);
-        else await preferences.servers.delete(origin);
+    if (account) void updateAccount(account, (data) => data).catch(() => {});
+  }
+
+  async function updateAppearance(edit: (appearance: Appearance) => Appearance) {
+    const account = hostedAccount;
+    if (account) {
+      await updateAccount(account, (data) => ({ ...data, appearance: edit(data.appearance ?? deviceAppearance) }));
+      return true;
+    }
+    deviceAppearance = edit(deviceAppearance);
+    appearance = deviceAppearance;
+    return saveAppearance(appearance);
+  }
+
+  function updateSavedServers(edit: (servers: SavedServer[]) => SavedServer[], password?: BookmarkPassword) {
+    const account = hostedAccount;
+    if (account) return updateAccount(account, (data) => {
+      const servers = edit(data.servers);
+      const origins = new Set(servers.map(({ origin }) => origin));
+      const serverPasswords = data.serverPasswords?.filter(({ origin }) => origins.has(origin) && origin !== password?.origin);
+      if (password) return { ...data, servers, serverPasswords: [...serverPasswords ?? [], password] };
+      return { ...data, servers, serverPasswords };
+    });
+    return queueProfileUpdate(async () => {
+      if (hostedAccount) return;
+      const servers = await preferences.transaction("rw", preferences.servers, async () => {
+        const previous = await preferences.servers.toArray();
+        const entries = edit(previous);
+        const origins = new Set(entries.map(({ origin }) => origin));
+        await preferences.servers.bulkDelete(previous.filter(({ origin }) => !origins.has(origin)).map(({ origin }) => origin));
+        await preferences.servers.bulkPut(entries);
         return entries;
       });
-      if (hostedAccount === account) savedServers = servers;
+      if (!hostedAccount) savedServers = servers;
     });
-    bookmarkUpdate = work.catch(() => {});
-    return work;
   }
 
   /** Adds or updates a connection. `create` is false for late updates that must not revive a removed server. */
@@ -569,7 +643,7 @@
       if (!info.identityAuthentication || !info.identityEnrollment || info.setupRequired) {
         throw new Error("Open this server to finish connecting.");
       }
-      const password = info.passwordRequired ? await getSavedPassword(origin, info.serverId).catch(() => undefined) : undefined;
+      const password = info.passwordRequired ? await getBookmarkPassword(origin, info.serverId) : undefined;
       if (!connections.has(origin)) return;
       const login = await authenticateIdentity(origin, info.serverId, deviceName, { operation: "login", password });
       if (login.status === 401 && info.passwordRequired && !password) throw new Error("Enter the server password to connect.");
@@ -653,7 +727,7 @@
       throw new Error("Update this server to a Korero.chat version that supports identity sign-in.");
     }
     if (target.info.passwordRequired) {
-      savedServerPassword = await getSavedPassword(origin, target.info.serverId).catch(() => undefined);
+      savedServerPassword = await getBookmarkPassword(origin, target.info.serverId);
     }
     if (target.info.setupRequired) {
       accessPrompt = true;
@@ -670,10 +744,22 @@
     return result.data;
   }
 
+  async function getBookmarkPassword(origin: string, serverId: string) {
+    if (hostedAccount) return bookmarkPasswords.find((entry) => entry.origin === origin && entry.serverId === serverId)?.password;
+    return getSavedPassword(origin, serverId).catch(() => undefined);
+  }
+
   function promptServerPassword(target: Target, rejectedPassword?: string) {
     if (rejectedPassword && rejectedPassword === savedServerPassword) {
       savedServerPassword = undefined;
-      void forgetPassword(target.origin, target.info.serverId, "", rejectedPassword).catch(() => {});
+      const { origin, info: { serverId } } = target;
+      const account = hostedAccount;
+      const forget = account ? updateAccount(account, (data) => ({
+        ...data,
+        serverPasswords: data.serverPasswords?.filter((entry) =>
+          entry.origin !== origin || entry.serverId !== serverId || entry.password !== rejectedPassword),
+      })) : forgetPassword(origin, serverId, "", rejectedPassword);
+      void forget.catch(() => {});
     }
     accessPrompt = true;
     connectOpen = true;
@@ -844,15 +930,18 @@
       actionError = messageFrom(error);
     }
     if (connections.get(target.origin)?.view.phase === "online") playUiSound("connect");
-    if (password && password !== savedServerPassword) {
+    if (!hostedAccount && password && password !== savedServerPassword) {
       await savePassword(target.origin, target.info.serverId, password).catch(() => {
         actionError = "This device could not save the server password.";
       });
     }
     if (remembered) {
       const entry = { name: target.info.name, origin: target.origin, passwordRequired: target.info.passwordRequired };
+      const credential = password && password !== savedServerPassword
+        ? { origin: entry.origin, serverId: target.info.serverId, password }
+        : undefined;
       try {
-        await updateSavedServers(entry.origin, (servers) => [entry, ...servers.filter(({ origin }) => origin !== entry.origin)]);
+        await updateSavedServers((servers) => [entry, ...servers.filter(({ origin }) => origin !== entry.origin)], credential);
       } catch (error) { actionError = messageFrom(error); }
     }
     connectOpen = false;
@@ -1095,8 +1184,8 @@
     removeError = "";
     try {
       if (connections.has(origin) && !await disconnect(origin)) throw new Error(actionError || "Could not disconnect from the server.");
-      await updateSavedServers(origin, (servers) => servers.filter((server) => server.origin !== origin));
-      await preferences.passwords.where("origin").equals(origin).delete();
+      await updateSavedServers((servers) => servers.filter((server) => server.origin !== origin));
+      if (!hostedAccount) await preferences.passwords.where("origin").equals(origin).delete();
       removeServerOpen = false;
     } catch (error) {
       removeError = messageFrom(error);
@@ -1110,7 +1199,8 @@
   <title>Korero.chat</title>
 </svelte:head>
 
-<svelte:window bind:innerWidth={viewport} onkeydown={handleShortcut} onkeyup={audio.talkKeyUp} onblur={audio.talkWindowBlur} />
+<svelte:window bind:innerWidth={viewport} onkeydown={handleShortcut} onkeyup={audio.talkKeyUp} onblur={audio.talkWindowBlur}
+  onfocus={refreshHostedAccount} />
 
 {#if pictureInPicture && voiceConnection}
   <CallPictureInPicture origin={voiceConnection.origin} view={voiceConnection.view} />
@@ -1125,8 +1215,9 @@
 
 
   {@render children()}
-  {#if online && view.snapshot}
-    {#key view.snapshot.connectionId}
+  {#if desktopApp()}<CapturePicker />{/if}
+  {#if online && view.snapshot?.channelId}
+    {#key view.snapshot.connectionId + "/" + view.snapshot.channelId}
       <ScreenSharing snapshot={view.snapshot} controlsTarget={screenShareControlsTarget}
         inlineTarget={screenShareViewerTarget} visible={Boolean(screenShareViewerTarget)} />
     {/key}

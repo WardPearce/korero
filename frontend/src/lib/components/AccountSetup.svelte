@@ -7,6 +7,7 @@
   import { messageFrom } from "#lib/connection/client";
   import { defaultAccountProvider, HostedAccount } from "#lib/identity/hosted-account";
   import { preparePrivateKey } from "#lib/identity/local-identity";
+  import { readAppearance } from "#lib/theme";
   import Modal from "./Modal.svelte";
 
   type AccountResult = Awaited<ReturnType<typeof HostedAccount.open>>;
@@ -63,7 +64,8 @@
     error = "";
     try {
       const result = migration ? await migration.submit(provider, username, password)
-        : await HostedAccount.open(provider, username, password, creating ? { privateKey: createPrivateKey, servers: [] } : undefined);
+        : await HostedAccount.open(provider, username, password,
+          creating ? { privateKey: createPrivateKey, servers: [], appearance: readAppearance() } : undefined);
       password = "";
       passphrase = "";
       file = undefined;
@@ -78,8 +80,8 @@
 
 <Modal {open} title={migration ? (migration.origin ? "Transfer to another provider" : "Convert to a hosted account")
     : creating ? "Create your account" : "Sign in to Korero.chat"}
-  description={migration ? "Create an account with your chosen provider to store your existing identity and saved servers."
-    : "A hosted account is recommended. Sign in on any device to restore your encrypted identity and saved servers."}
+  description={migration ? "Create an account with your chosen provider to carry over your identity, server bookmarks and themes."
+    : "Sign in on any device to restore your encrypted identity, server bookmarks, saved server passwords and themes."}
   dismissible={false}>
   {#snippet icon()}<Fingerprint size={22} />{/snippet}
   {#if error}<p class="form-error" role="alert">{error}</p>{/if}
