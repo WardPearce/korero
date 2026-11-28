@@ -1,7 +1,7 @@
 import { copyFile, mkdir, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { workerBuildPolicy } from "../src/security/files";
 import { dependencies } from "../package.json";
+import { workerSubprojects } from "./worker";
 
 const root = resolve(import.meta.dir, "..");
 const out = resolve(process.argv[2] ?? join(root, "dist", "licenses"));
@@ -31,7 +31,6 @@ async function include(name: string, from: string) {
 }
 for (const name of Object.keys(dependencies)) await include(name, root);
 
-const workerSubprojects = join(root, "node_modules", "mediasoup", "worker", "out", workerBuildPolicy, "source", "subprojects");
 for (const name of await readdir(workerSubprojects)) {
   if (!/^(libuv-v|libsrtp-|flatbuffers-|unordered_dense-)/.test(name)) continue;
   const directory = join(workerSubprojects, name);

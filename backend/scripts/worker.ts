@@ -6,6 +6,11 @@ import { version } from "mediasoup";
 import { atomicWrite, sha256, workerBuildPolicy } from "../src/security/files";
 
 const root = resolve(import.meta.dir, "../node_modules/mediasoup/worker");
+// Keep Meson's build directory stable across policy changes so it can reuse its dependency cache.
+const work = join(root, "out", "system-openssl-3.5.9-v1");
+const source = join(work, "source");
+
+export const workerSubprojects = join(source, "subprojects");
 
 export const workerPath = join(root, "out", "Release", "mediasoup-worker");
 const stamp = workerPath + ".korero-build.json";
@@ -36,9 +41,6 @@ export async function prepareWorker() {
   }
   if (version !== "3.32.2") throw new Error("Review the native worker build adjustment before upgrading mediasoup");
   await command(["pkg-config", "--atleast-version=3.5.9", "openssl"]);
-  // Keep Meson's build directory stable across policy changes so it can reuse its dependency cache.
-  const work = join(root, "out", "system-openssl-3.5.9-v1");
-  const source = join(work, "source");
   const build = join(work, "build");
   await mkdir(source, { recursive: true });
   // The npm cache and lockfile remain untouched. Only the isolated build copy is adjusted.
