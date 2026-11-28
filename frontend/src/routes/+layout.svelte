@@ -21,6 +21,7 @@
   import { createHostedDeviceLink, createLocalDeviceLink } from "#lib/identity/device-link";
   import IconButton from "#lib/components/IconButton.svelte";
   import Modal from "#lib/components/Modal.svelte";
+  import WindowTitleBar from "#lib/components/WindowTitleBar.svelte";
   import ConnectServerModal from "#lib/components/server/ConnectServerModal.svelte";
   import ConnectionInfo from "#lib/components/server/ConnectionInfo.svelte";
   import ScreenSharing from "#lib/components/media/ScreenSharing.svelte";
@@ -34,7 +35,7 @@
     apiFor, call, directRequest, messageFrom, desktopApp, offline, requestError, shortHost, startSession, watchDesktopSession,
     type DesktopSessionState, type DirectMessageChange, type Member, type MemberRequest, type Poke, type ServerInfo, type VoiceState,
   } from "#lib/connection/client";
-  import { mobileApp, voiceApp, watchDesktop } from "#lib/connection/platform";
+  import { framelessDesktopWindow, mobileApp, setNativeTitleBar, voiceApp, watchDesktop } from "#lib/connection/platform";
   import { authenticateIdentity, getIdentity, identityError, setIdentity } from "#lib/identity/identity";
   import { HostedAccount, type AccountPreferences, type BookmarkPassword } from "#lib/identity/hosted-account";
   import { identityModeKey, readLocalIdentity, rememberIdentityMode, type LocalProfile } from "#lib/identity/local-identity";
@@ -295,6 +296,11 @@
     setMemberVolume,
     reorderChannel,
     disconnect,
+  });
+
+  // Keep the desktop window's frame in step with the appearance preference.
+  $effect(() => {
+    if (desktopApp()) void setNativeTitleBar(appearance.nativeTitleBar === true).catch(() => {});
   });
 
   onMount(() => {
@@ -1245,6 +1251,10 @@
 
 {#if pictureInPicture && voiceConnection}
   <CallPictureInPicture origin={voiceConnection.origin} view={voiceConnection.view} />
+{/if}
+
+{#if desktopApp() && framelessDesktopWindow() && !appearance.nativeTitleBar && !(pictureInPicture && Boolean(voiceConnection))}
+  <WindowTitleBar />
 {/if}
 
 <div class="shell" hidden={pictureInPicture && Boolean(voiceConnection)} data-pane={onWorkspace ? mobilePane : "room"} data-workspace={onWorkspace} data-mobile-voice={mobileVoice}

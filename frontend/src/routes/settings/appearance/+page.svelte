@@ -8,6 +8,7 @@
   import SelectField from "#lib/components/fields/SelectField.svelte";
   import Modal from "#lib/components/Modal.svelte";
   import { getWorkspace } from "#lib/workspace";
+  import { framelessDesktopWindow } from "#lib/connection/platform";
   import {
     applyAppearance, builtInThemes, colorFields, contrast, defaultTheme, parseTheme, playfulThemes,
     swatchColors, themeFor, themeStyle, type Appearance, type SavedTheme, type Theme,
@@ -98,6 +99,11 @@
   function toggleGlassmorphism(glassmorphism: boolean) {
     void updateAppearance((current) => ({ ...current, glassmorphism }),
       glassmorphism ? "Frosted glass enabled." : "Frosted glass disabled.");
+  }
+
+  function toggleNativeTitleBar(nativeTitleBar: boolean) {
+    void updateAppearance((current) => ({ ...current, nativeTitleBar }),
+      nativeTitleBar ? "Native title bar enabled." : "Custom title bar enabled.");
   }
 
   function applyImageUrl(event: Event & { currentTarget: HTMLInputElement }) {
@@ -307,6 +313,9 @@
           <Button variant="ghost" aria-label="Export selected theme" onclick={exportTheme}><Download /> Export</Button>
         </div>
         <Checkbox label="Frosted glass" disabled={saving} bind:checked={() => appearance.glassmorphism, toggleGlassmorphism} />
+        {#if framelessDesktopWindow()}
+          <Checkbox label="Use native title bar" disabled={saving} bind:checked={() => appearance.nativeTitleBar, toggleNativeTitleBar} />
+        {/if}
         <p class="field-hint theme-status" role="status">{status}</p>
       </div>
       {@render channelPreview(active)}

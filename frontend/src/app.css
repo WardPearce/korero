@@ -10,6 +10,7 @@
   --safe-area-inset-right: env(safe-area-inset-right, 0px);
   --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-inset-left: env(safe-area-inset-left, 0px);
+  --titlebar-height: 38px;
   --background: #0c1218;
   --foreground: #f2f6fa;
   --card: #18232d;
@@ -139,6 +140,9 @@ body {
   height: 100dvh;
   overflow: hidden;
 }
+.title-bar ~ .shell {
+  height: calc(100dvh - var(--titlebar-height));
+}
 .dev-banner {
   box-sizing: content-box;
   height: 24px;
@@ -155,6 +159,9 @@ body {
 .dev-banner ~ .shell {
   height: calc(100dvh - 24px - env(safe-area-inset-top, 0px));
   --safe-area-inset-top: 0px;
+}
+.dev-banner ~ .title-bar ~ .shell {
+  height: calc(100dvh - 24px - var(--titlebar-height) - env(safe-area-inset-top, 0px));
 }
 .shell[data-workspace="true"] {
   grid-template-columns: var(--rail-width) 6px var(--channel-width) 6px minmax(0, 1fr);

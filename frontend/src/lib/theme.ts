@@ -23,7 +23,7 @@ export type Theme = {
   image: string;
 };
 export type SavedTheme = Theme & { id: string };
-export type Appearance = { active: string; custom: SavedTheme[]; glassmorphism: boolean };
+export type Appearance = { active: string; custom: SavedTheme[]; glassmorphism: boolean; nativeTitleBar: boolean };
 
 export const swatchColors = ["primary", "secondary", "accent", "success", "danger", "warning", "info"] as const;
 
@@ -191,7 +191,7 @@ export function parseAppearance(value: unknown): Appearance | undefined {
     const theme = parseTheme(entry);
     if (theme && typeof id === "string" && /^custom-[\da-f-]{36}$/.test(id)) custom.set(id, { ...theme, id });
   }
-  const appearance = { active: data.active, custom: [...custom.values()], glassmorphism: data.glassmorphism === true };
+  const appearance = { active: data.active, custom: [...custom.values()], glassmorphism: data.glassmorphism === true, nativeTitleBar: data.nativeTitleBar === true };
   return { ...appearance, active: themeFor(appearance).id };
 }
 
@@ -209,12 +209,13 @@ export function readAppearance(): Appearance {
         active: legacyThemes.get(localStorage.getItem(legacyKey) ?? "") ?? defaultTheme.id,
         custom: [],
         glassmorphism: false,
+        nativeTitleBar: false,
       };
     } catch {
       // An unavailable or damaged preference store falls back to the default appearance.
     }
   }
-  return { active: defaultTheme.id, custom: [], glassmorphism: false };
+  return { active: defaultTheme.id, custom: [], glassmorphism: false, nativeTitleBar: false };
 }
 
 function luminance(color: string) {

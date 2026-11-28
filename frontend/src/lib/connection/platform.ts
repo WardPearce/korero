@@ -1,12 +1,18 @@
 import { Capacitor } from "@capacitor/core";
 
-type DesktopEvent = "korero:state" | "korero:media" | "korero:talk-shortcut" | "korero:capture-sources" | "korero:capture-previews";
+type DesktopEvent = "korero:state" | "korero:media" | "korero:talk-shortcut" | "korero:capture-sources" | "korero:capture-previews" | "korero:window-state";
+
+type WindowControl = "minimize" | "maximize" | "close";
 
 interface DesktopBridge {
   applicationAudio?: boolean;
+  platform?: string;
   invoke<T>(command: string, args: Record<string, unknown>): Promise<T>;
   listen<T>(event: DesktopEvent, callback: (payload: T) => void): () => void;
   chooseCapture(id: string, sourceId: string | null): Promise<void>;
+  windowControl(action: WindowControl): void;
+  isWindowMaximized(): Promise<boolean>;
+  setNativeTitleBar(enabled: boolean): Promise<void>;
 }
 
 export interface CaptureSource {
@@ -66,4 +72,33 @@ export function chooseCapture(id: string, sourceId: string | null) {
   const bridge = desktop();
   if (bridge) return bridge.chooseCapture(id, sourceId);
   return Promise.reject(new Error("This operation requires the Korero.chat desktop app."));
+}
+
+/** The Electron process platform (`win32`, `linux`, `darwin`), or undefined outside the desktop app. */
+export function desktopPlatform() {
+  return desktop()?.platform;
+}
+
+/** Whether the desktop window uses a custom frameless title bar (Windows and Linux only). */
+export function framelessDesktopWindow() {
+  const platform = desktopPlatform();
+  return platform === "win32" || platform === "linux";
+}
+
+export function windowControl(action: WindowControl) {
+  desktop()?.windowControl(action);
+}
+
+export function isWindowMaximized() {
+  return desktop()?.isWindowMaximized() ?? Promise.resolve(false);
+}
+
+export function watchWindowState(callback: (state: { maximized: boolean }) => void) {
+  const bridge = desktop();
+  if (!bridge) throw new Error("This operation requires the Korero.chat desktop app.");
+  return bridge.listen("korero:window-state", callback);
+}
+
+export function setNativeTitleBar(enabled: boolean) {
+  return desktop()?.setNativeTitleBar(enabled) ?? Promise.resolve();
 }

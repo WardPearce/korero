@@ -61,7 +61,7 @@
   let resolution = $state(String(initialCapture.resolution ?? 0));
   let frameRate = $state(String(initialCapture.frameRate));
   let videoKbps = $state<number | undefined>(initialCapture.videoBitrate / 1000);
-  let audioMode = $state<AudioMode>("none");
+  let audioMode = $state<AudioMode>(initialCapture.audioMode);
   let canMixApplications = $state(false);
   let audioApplications = $state<ApplicationAudioSetting[]>([]);
   let availableApplications = $state.raw<ApplicationAudioSource[]>([]);
@@ -179,6 +179,7 @@
         resolution = String(saved.resolution ?? 0);
         frameRate = String(saved.frameRate);
         videoKbps = saved.videoBitrate / 1000;
+        audioMode = saved.audioMode === "applications" && !canMixApplications ? "source" : saved.audioMode;
       }
     }).catch(() => {});
   });
@@ -226,7 +227,8 @@
     resolution = entry ? String(entry.settings.resolution ?? 0) : String(captureDefaults.resolution ?? 0);
     frameRate = String(entry?.settings.frameRate ?? captureDefaults.frameRate);
     videoKbps = entry ? entry.settings.videoBitrate / 1000 : captureDefaults.videoBitrate / 1000;
-    audioMode = entry?.applicationAudio ? "applications" : entry?.settings.audio ? "source" : "none";
+    audioMode = entry?.applicationAudio ? "applications" : entry?.settings.audio ? "source"
+      : captureDefaults.audioMode === "applications" && !canMixApplications ? "source" : captureDefaults.audioMode;
     audioApplications = entry?.applicationAudio?.settings.map((application) => ({ ...application })) ?? [];
     availableApplications = audioApplications;
     audioKbps = String((entry?.settings.audioBitrate ?? 128000) / 1000);
@@ -346,7 +348,7 @@
       if (mixInUse && mix?.track.readyState === "ended") error = applicationAudioEnded;
       else if (error === applicationAudioEnded) error = "";
       captureDefaults = {
-        resolution: settings.resolution, frameRate: settings.frameRate, videoBitrate: settings.videoBitrate,
+        resolution: settings.resolution, frameRate: settings.frameRate, videoBitrate: settings.videoBitrate, audioMode,
       };
       void saveCapturePreferences(source, captureDefaults).catch(() => {});
       setupOpen = false;

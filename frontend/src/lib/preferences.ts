@@ -76,15 +76,18 @@ export function forgetPassword(origin: string, serverId: string, channelId = "",
   return records.and(({ password }) => rejectedPassword === undefined || rejectedPassword === password).delete();
 }
 
+export type CaptureAudioMode = "none" | "source" | "applications";
+
 export interface CapturePreferences {
   /** null shares the source's native resolution. */
   resolution: number | null;
   frameRate: number;
   videoBitrate: number;
+  audioMode: CaptureAudioMode;
 }
 
-export const defaultScreenCapture: CapturePreferences = { resolution: 1080, frameRate: 30, videoBitrate: 6_000_000 };
-export const defaultCameraCapture: CapturePreferences = { resolution: 720, frameRate: 30, videoBitrate: 2_000_000 };
+export const defaultScreenCapture: CapturePreferences = { resolution: 1080, frameRate: 30, videoBitrate: 6_000_000, audioMode: "source" };
+export const defaultCameraCapture: CapturePreferences = { resolution: 720, frameRate: 30, videoBitrate: 2_000_000, audioMode: "none" };
 
 export async function getCapturePreferences(source: "screen" | "camera"): Promise<CapturePreferences> {
   const fallback = source === "camera" ? defaultCameraCapture : defaultScreenCapture;
@@ -99,7 +102,9 @@ export async function getCapturePreferences(source: "screen" | "camera"): Promis
   const maximum = source === "camera" ? 6_000_000 : 12_000_000;
   const videoBitrate = typeof saved.videoBitrate === "number" && Number.isFinite(saved.videoBitrate) &&
     saved.videoBitrate >= minimum && saved.videoBitrate <= maximum ? saved.videoBitrate : fallback.videoBitrate;
-  return { resolution, frameRate, videoBitrate };
+  const audioModes: CaptureAudioMode[] = source === "camera" ? ["none"] : ["none", "source", "applications"];
+  const audioMode = audioModes.includes(saved.audioMode as CaptureAudioMode) ? saved.audioMode! : fallback.audioMode;
+  return { resolution, frameRate, videoBitrate, audioMode };
 }
 
 export function saveCapturePreferences(source: "screen" | "camera", value: CapturePreferences) {

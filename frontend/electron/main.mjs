@@ -1,5 +1,5 @@
 import { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, session, shell } from "electron";
-import { stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ApplicationAudio } from "./application-audio.mjs";
@@ -15,6 +15,9 @@ let window;
 let desktop;
 let quitting = false;
 let pendingCommands = 0;
+let nativeTitleBar = false;
+// Bounds to restore while recreating the window to switch between native and custom title bars.
+let restore;
 const applicationAudio = new ApplicationAudio(() => app.getAppMetrics().map(({ pid }) => pid));
 
 protocol.registerSchemesAsPrivileged([{
@@ -126,15 +129,50 @@ async function chooseCapture(request, callback) {
   }
 }
 
-function openWindow() {
+function windowStateFile() {
+  return join(app.getPath("userData"), "window.json");
+}
+
+async function readNativeTitleBar() {
+  try {
+    const data = JSON.parse(await readFile(windowStateFile(), "utf8"));
+    return data?.nativeTitleBar === true;
+  } catch {
+    return false;
+  }
+}
+
+async function writeNativeTitleBar(enabled) {
+  try {
+    await mkdir(app.getPath("userData"), { recursive: true });
+    await writeFile(windowStateFile(), JSON.stringify({ nativeTitleBar: enabled }));
+  } catch {}
+}
+
+/** Switches between the native OS title bar and the custom one by recreating the window. */
+async function applyNativeTitleBar(enabled) {
+  if (nativeTitleBar === enabled) return;
+  nativeTitleBar = enabled;
+  await writeNativeTitleBar(enabled);
+  if (!window || window.isDestroyed()) return;
+  const bounds = window.getBounds();
+  restore = { width: bounds.width, height: bounds.height, x: bounds.x, y: bounds.y, maximized: window.isMaximized() };
+  window.close();
+}
+
+function openWindow(bounds) {
   window = new BrowserWindow({
-    width: 1280,
-    height: 820,
+    width: bounds?.width ?? 1280,
+    height: bounds?.height ?? 820,
+    x: bounds?.x,
+    y: bounds?.y,
     minWidth: 385,
     minHeight: 600,
     autoHideMenuBar: true,
     title: "Korero.chat",
     icon: join(dist, "icon.png"),
+    // Windows and Linux render their own top bar; macOS keeps the native traffic lights.
+    ...(nativeTitleBar || process.platform === "darwin" ? {} : { frame: false }),
     webPreferences: {
       backgroundThrottling: false,
       preload: join(directory, "preload.cjs"),
@@ -143,6 +181,9 @@ function openWindow() {
       sandbox: true,
     },
   });
+  if (bounds?.maximized) window.maximize();
+  window.on("maximize", () => sendToWindow("korero:window-state", { maximized: true }));
+  window.on("unmaximize", () => sendToWindow("korero:window-state", { maximized: false }));
   const contents = window.webContents;
   const resetCaptures = () => { cancelCaptures(); applicationAudio.reset(); };
   contents.on("did-start-loading", resetCaptures);
@@ -165,7 +206,13 @@ function openWindow() {
     popup.webContents.on("will-navigate", (event) => event.preventDefault());
     popup.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   });
-  window.once("closed", () => { window = undefined; resetCaptures(); });
+  window.once("closed", () => {
+    window = undefined;
+    resetCaptures();
+    const next = restore;
+    restore = undefined;
+    if (next) openWindow(next);
+  });
   void window.loadURL(appUrl);
 }
 
@@ -175,7 +222,7 @@ else {
     if (window?.isMinimized()) window.restore();
     window?.focus();
   });
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     protocol.handle("korero", serveApp);
     const appSession = session.defaultSession;
     const permissions = new Set(["media", "display-capture", "speaker-selection", "clipboard-sanitized-write"]);
@@ -203,6 +250,24 @@ else {
       }
       finally { pendingCommands--; }
     });
+    ipcMain.on("korero:window-control", (event, action) => {
+      if (event.sender !== window?.webContents || event.senderFrame !== event.sender.mainFrame || !isAppPage(event.senderFrame?.url)) return;
+      if (action === "minimize") window?.minimize();
+      else if (action === "maximize") { if (window?.isMaximized()) window.unmaximize(); else window?.maximize(); }
+      else if (action === "close") window?.close();
+    });
+    ipcMain.handle("korero:window-maximized", (event) => {
+      if (event.sender !== window?.webContents || event.senderFrame !== event.sender.mainFrame || !isAppPage(event.senderFrame?.url)) {
+        throw new Error("Invalid desktop request.");
+      }
+      return window?.isMaximized() ?? false;
+    });
+    ipcMain.handle("korero:set-native-title-bar", async (event, enabled) => {
+      if (event.sender !== window?.webContents || event.senderFrame !== event.sender.mainFrame || !isAppPage(event.senderFrame?.url) || typeof enabled !== "boolean") {
+        throw new Error("Invalid desktop request.");
+      }
+      await applyNativeTitleBar(enabled);
+    });
     ipcMain.handle("korero:capture-choice", (event, id, sourceId) => {
       if (event.sender !== window?.webContents || event.senderFrame !== event.sender.mainFrame || !isAppPage(event.senderFrame?.url) ||
           typeof id !== "string" || (sourceId !== null && typeof sourceId !== "string")) {
@@ -212,10 +277,13 @@ else {
       pendingCaptures.delete(id);
       resolve?.(sourceId);
     });
+    nativeTitleBar = await readNativeTitleBar();
     openWindow();
     startUpdater();
   }).catch((error) => { console.error(error); app.quit(); });
-  app.on("window-all-closed", () => app.quit());
+  app.on("window-all-closed", () => {
+    if (!restore) app.quit();
+  });
   app.on("before-quit", (event) => {
     if (!desktop || quitting) return;
     event.preventDefault();
