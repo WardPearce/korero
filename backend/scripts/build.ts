@@ -18,7 +18,7 @@ if (bytes.length < 64 || elf.getUint32(0) !== 0x7f454c46 || bytes[4] !== 2 || by
 const output = resolve(process.argv[2] ?? join(root, "dist", `voice-server-linux-${target.name}`));
 await mkdir(dirname(output), { recursive: true });
 const define = JSON.stringify({ path: "/$bunfs/root/mediasoup-worker", sha256, version });
-const build = Bun.spawn([process.execPath, "build", "./src/index.ts", "--compile", "--minify",
+const build = Bun.spawn([process.execPath, "build", "./src/index.ts", "./src/modules/message-search-worker.ts", "--compile", "--minify",
   "--no-compile-autoload-dotenv", "--no-compile-autoload-bunfig", "--asset", worker,
   "--asset", "./src/database/migrations", "--define", `EMBEDDED_WORKER=${define}`, "--outfile", output],
 { cwd: root, stdout: "inherit", stderr: "inherit" });

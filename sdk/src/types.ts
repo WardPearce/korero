@@ -25,7 +25,11 @@ export interface ChannelData {
   canDeleteMessages?: boolean;
   /** The server supports pins in this channel. */
   messagePins?: boolean;
+  /** The server can search this channel's stored messages with `message.search`. */
+  messageSearch?: boolean;
   canPinMessages?: boolean;
+  /** The server stores reactions on this channel's messages. */
+  messageReactions?: boolean;
   /**
    * The account may read and send this channel's messages, even without joining it.
    * Servers that predate outside chat omit this; chat then needs membership.
@@ -78,6 +82,8 @@ export interface Snapshot {
   targetAudioBitrate?: number;
   maxAttachmentBytes?: number;
   canReorderChannels?: boolean;
+  /** Roles that messages may mention. */
+  mentionableRoles?: string[];
   canSendText?: boolean;
   canAttachFiles?: boolean;
   directMessages?: { maxBytes: number; persistent: boolean; offlineDelivery?: boolean; canSend?: boolean };
@@ -109,12 +115,56 @@ export interface Message {
   channelId: string | null;
   recipientId?: string | null;
   senderId: string;
+  senderName?: string;
   createdAt: number;
   text: string;
   html?: string;
   editedAt?: number | null;
   pinnedAt?: number | null;
   attachment?: { name: string; size: number };
+  /** The message this one answers. `missing` once the original is deleted or expires. */
+  replyTo?: ReplyPreview | { id: string; missing: true };
+  mentions?: MessageMentions;
+  /** Present only on stored messages with reactions; `me` reflects the reading account. */
+  reactions?: MessageReaction[];
+}
+
+export interface ReplyPreview {
+  id: string;
+  senderId: string;
+  senderName: string;
+  /** Up to 120 characters of the original text. */
+  text: string;
+  attachmentName?: string;
+}
+
+export interface MessageMentions {
+  accounts: string[];
+  roles: string[];
+}
+
+export interface MessageReaction {
+  emoji: string;
+  count: number;
+  me: boolean;
+}
+
+/** Sent to each mentioned reader, including those not following the channel. */
+export interface MessageMention {
+  channelId: string;
+  messageId: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+}
+
+export interface ReactionChange {
+  channelId: string;
+  messageId: string;
+  emoji: string;
+  count: number;
+  accountId: string;
+  reacted: boolean;
 }
 
 export interface PinCursor {
@@ -123,8 +173,19 @@ export interface PinCursor {
 }
 
 export interface PinnedMessagePage {
-  messages: (PinCursor & Pick<Message, "senderId" | "createdAt" | "text"> & { attachmentName: string | null })[];
+  messages: (PinCursor & Pick<Message, "senderId" | "senderName" | "createdAt" | "text"> & { attachmentName: string | null })[];
   next: PinCursor | null;
+}
+
+export interface SearchCursor {
+  id: string;
+  createdAt: number;
+}
+
+export interface MessageSearchPage {
+  /** `text` is a preview of up to 240 characters around the first match, with "…" where it was cut. */
+  messages: (SearchCursor & Pick<Message, "senderId" | "senderName" | "text"> & { attachmentName: string | null })[];
+  next: SearchCursor | null;
 }
 
 export interface DirectMessageReference {
@@ -174,6 +235,8 @@ export interface VoiceState {
   /** A live change to apply to any history the client has already loaded. */
   directChange?: DirectMessageChange;
   lastPoke?: Poke | null;
+  /** The latest message that mentioned this account or one of its roles. */
+  lastMention?: MessageMention | null;
   speaking: string[];
   voice: "idle" | "active" | "muted" | "deafened" | "error";
   voiceError: string | null;

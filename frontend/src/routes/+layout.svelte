@@ -33,10 +33,11 @@
   import ServerRail from "#lib/components/server/ServerRail.svelte";
   import {
     apiFor, call, directRequest, messageFrom, desktopApp, offline, requestError, shortHost, startSession, watchDesktopSession,
-    type DesktopSessionState, type DirectMessageChange, type Member, type MemberRequest, type Poke, type ServerInfo, type VoiceState,
+    type DesktopSessionState, type DirectMessageChange, type DirectMessageReference, type Member, type MemberRequest, type Poke, type ServerInfo, type VoiceState,
   } from "#lib/connection/client";
   import { framelessDesktopWindow, mobileApp, setNativeTitleBar, voiceApp, watchDesktop } from "#lib/connection/platform";
   import { authenticateIdentity, getIdentity, identityError, setIdentity } from "#lib/identity/identity";
+  import { archiveChange, archiveMessages, forgetIdentityArchive, forgetServerArchive } from "#lib/chat/direct-archive";
   import { HostedAccount, type AccountPreferences, type BookmarkPassword } from "#lib/identity/hosted-account";
   import { identityModeKey, readLocalIdentity, rememberIdentityMode, type LocalProfile } from "#lib/identity/local-identity";
   import { createProfilePictureCache } from "#lib/identity/profile-picture";
@@ -109,6 +110,8 @@
   // Desktop sessions survive a renderer reload. Wait for them before connecting saved servers.
   const restored = new Promise<void>((resolve) => { resolveRestored = resolve; });
   let savedServers = $state.raw<SavedServer[]>([]);
+  let serverOrder = $state.raw<string[]>();
+  let serverOrderUpdate = Promise.resolve(false);
   let bookmarkPasswords: BookmarkPassword[] = [];
   let hostedAccount = $state.raw<HostedAccount>();
   let deviceAppearance = readAppearance();
@@ -148,6 +151,7 @@
   let screenShareViewerTarget = $state<HTMLElement>();
   let screenShareControlsTarget = $state<HTMLElement>();
   let directAccountId = $state<string | null>(null);
+  let directFocus = $state.raw<{ id: string; createdAt: number } | null>(null);
   const directChangeListeners = new Set<(origin: string, connectionId: string, change: DirectMessageChange) => void>();
   let connectionInfo = $state.raw<{ origin: string; viewerId: string; connectionId: string } | null>(null);
   const unreadDirectCounts = $derived(focused?.unread ?? new Map<string, number>());
@@ -174,6 +178,11 @@
         .map((origin) => ({ origin, name: serverName(origin) })),
       ...savedServers.map((entry) => ({ ...entry, name: connections.get(entry.origin)?.info?.name ?? entry.name })),
     ];
+    if (serverOrder?.length) {
+      const positions = new Map(serverOrder.map((origin, index) => [origin, index]));
+      const end = serverOrder.length;
+      entries.sort((a, b) => (positions.get(a.origin) ?? end) - (positions.get(b.origin) ?? end));
+    }
     return entries.map((entry) => {
       const connection = connections.get(entry.origin);
       return {
@@ -272,6 +281,7 @@
     get roomView() { return roomView; },
     set roomView(value) { roomView = value; },
     get directAccountId() { return directAccountId; },
+    get directFocus() { return directFocus; },
     get unreadDirectCounts() { return unreadDirectCounts; },
     get unreadDirectCount() { return unreadDirectCount; },
     watchDirectChanges(connectionId, listener) {
@@ -308,10 +318,11 @@
     void audio.load();
     void shortcuts.load();
     void restoreIdentityMode();
-    void preferences.local.bulkGet(["rail", "channel"])
-      .then(([rail, channel]) => {
+    void preferences.local.bulkGet(["rail", "channel", "server-order"])
+      .then(([rail, channel, order]) => {
         if (typeof rail?.value === "number") savedRailWidth = Math.max(180, Math.min(340, rail.value));
         if (typeof channel?.value === "number") savedChannelWidth = Math.max(222, Math.min(500, channel.value));
+        if (Array.isArray(order?.value)) serverOrder ??= order.value.filter((origin): origin is string => typeof origin === "string");
       }).catch((error) => { actionError = messageFrom(error); });
     if (!desktopApp()) {
       resolveRestored();
@@ -438,6 +449,8 @@
     if (!await runAction("disconnect", disconnectAll)) return false;
     return runAction("sign-out", async () => {
       await account.signOut();
+      const identity = getIdentity();
+      if (identity) await forgetIdentityArchive(identity.publicKey);
       setIdentity();
       username = "";
       savedServers = [];
@@ -544,6 +557,8 @@
       poke = { ...state.lastPoke, origin };
       playUiSound("poke");
     }
+    if (notify && state.lastMention && state.lastMention.messageId !== previous.lastMention?.messageId) playUiSound("mention");
+    archiveDirectMessages(entry, previous, state);
     let unread = entry.unread;
     if (state.directMessages?.at(-1)?.id !== previous.directMessages?.at(-1)?.id) {
       const seen = new Set(previous.directMessages?.map(({ id }) => id));
@@ -568,6 +583,19 @@
       for (const receive of directChangeListeners) receive(origin, state.snapshot.connectionId, state.directChange);
     }
     updateTalkContext();
+  }
+
+  /** Stores new direct messages and their edits and deletes in this device's archive, so they stay readable and searchable. */
+  function archiveDirectMessages(entry: ServerConnection, previous: VoiceState, state: VoiceState) {
+    const serverId = entry.info?.serverId;
+    const snapshot = state.snapshot;
+    if (!serverId || !snapshot) return;
+    const scope = { serverId, ownerId: snapshot.account.id, connectionId: snapshot.connectionId };
+    const key = ({ id, senderId, recipientId }: DirectMessageReference) => `${senderId}/${recipientId}/${id}`;
+    const seen = new Set(previous.directMessages?.map(key));
+    const arrived = state.directMessages?.filter((message) => !seen.has(key(message))) ?? [];
+    if (arrived.length) void archiveMessages(scope, arrived).catch(() => {});
+    if (state.directChange) void archiveChange(scope, state.directChange).catch(() => {});
   }
 
   /**
@@ -1065,9 +1093,12 @@
       if (command === "delete_channel") return session.deleteChannel(args?.channelId as string);
       if (command === "leave_channel") return session.leaveChannel();
       if (command === "set_presence") return session.setPresence(args);
-      if (command === "send_message") return session.channel(args?.channelId as string).send({ text: args?.text as string, html: args?.html as string | undefined });
+      if (command === "send_message") return session.channel(args?.channelId as string).send({ text: args?.text as string, html: args?.html as string | undefined,
+        replyTo: args?.replyTo as string | undefined, mentions: args?.mentions as { accounts?: string[]; roles?: string[] } | undefined });
       if (command === "edit_message") return session.editMessage(args?.messageId as string, args?.text as string);
       if (command === "delete_message") return session.deleteMessage(args?.messageId as string);
+      if (command === "react_message") return session.reactToMessage(args?.channelId as string, args?.messageId as string,
+        args?.emoji as string, args?.reacted === true);
       if (command === "pin_message") return session.setMessagePin(args?.channelId as string, args?.messageId as string, args?.pinned === true);
       throw new Error("Open Korero.chat in the desktop app to use voice.");
     });
@@ -1145,9 +1176,10 @@
     openWorkspace("room");
   }
 
-  function showDirectMessages(accountId?: string) {
+  function showDirectMessages(accountId?: string, focus?: { id: string; createdAt: number }) {
     if (!online || !view.snapshot?.directMessages || !serverInfo?.serverId) return;
     directAccountId = accountId ?? null;
+    directFocus = accountId && focus ? focus : null;
     if (accountId && unreadDirectCounts.has(accountId)) {
       const unread = new Map(unreadDirectCounts);
       unread.delete(accountId);
@@ -1212,6 +1244,23 @@
     return actions;
   }
 
+  function reorderServer(source: string, target: string, after: boolean) {
+    serverOrderUpdate = serverOrderUpdate.then(async () => {
+      const origins = railServers.map(({ origin }) => origin);
+      if (source === target || !origins.includes(source) || !origins.includes(target)) return false;
+      const next = origins.filter((origin) => origin !== source);
+      next.splice(next.indexOf(target) + Number(after), 0, source);
+      if (next.every((origin, index) => origin === origins[index])) return false;
+      await preferences.local.put({ key: "server-order", value: next });
+      serverOrder = next;
+      return true;
+    }).catch((error) => {
+      actionError = messageFrom(error);
+      return false;
+    });
+    return serverOrderUpdate;
+  }
+
   function setAutoConnect(origin: string, enabled: boolean) {
     void updateSavedServers((servers) => servers.map((server) => {
       if (server.origin !== origin) return server;
@@ -1223,12 +1272,17 @@
   async function removeServer() {
     if (!removingServer || removing || pending || connectBusy) return;
     const { origin } = removingServer;
+    const serverId = connections.get(origin)?.info?.serverId;
     removing = true;
     removeError = "";
     try {
       if (connections.has(origin) && !await disconnect(origin)) throw new Error(actionError || "Could not disconnect from the server.");
       await updateSavedServers((servers) => servers.filter((server) => server.origin !== origin));
       if (!hostedAccount) await preferences.passwords.where("origin").equals(origin).delete();
+      // Another saved address can reach the same server and keeps its archive.
+      if (serverId && ![...connections.values()].some((entry) => entry.origin !== origin && entry.info?.serverId === serverId)) {
+        await forgetServerArchive(serverId);
+      }
       removeServerOpen = false;
     } catch (error) {
       removeError = messageFrom(error);
@@ -1261,7 +1315,7 @@
   style:--rail-width={railWidth + "px"} style:--channel-width={channelWidth + "px"}
   {@attach viewport <= 760 ? swipePanes : undefined}>
   <ServerRail servers={railServers} {identityReady} {connectBusy} {pending} {username} {me} {online} {status}
-    onconnect={() => showConnect()} onselect={selectServer} ondisconnect={(origin) => { void disconnect(origin); }} />
+    onconnect={() => showConnect()} onselect={selectServer} ondisconnect={(origin) => { void disconnect(origin); }} onreorder={reorderServer} />
   <PaneDivider label="Resize server sidebar" controls="server-rail" value={railWidth} min={180} max={railMax} resize={(value, commit) => resizePane("rail", value, commit)} />
 
 

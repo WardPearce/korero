@@ -48,10 +48,12 @@ interface Workspace {
   mobilePane: MobilePane;
   roomView: RoomView;
   readonly directAccountId: string | null;
+  /** The message to scroll to when the direct conversation opens, such as a search result. */
+  readonly directFocus: { id: string; createdAt: number } | null;
   readonly unreadDirectCounts: ReadonlyMap<string, number>;
   readonly unreadDirectCount: number;
   watchDirectChanges(connectionId: string, listener: (change: DirectMessageChange) => void): () => void;
-  showDirectMessages(accountId?: string): void;
+  showDirectMessages(accountId?: string, focus?: { id: string; createdAt: number }): void;
   showPoke(member: Pick<Member, "accountId" | "displayName">): void;
   showConnectionInfo(connectionId: string): void;
   showConnect(address?: string): void;

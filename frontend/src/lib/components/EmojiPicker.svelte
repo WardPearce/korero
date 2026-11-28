@@ -3,6 +3,7 @@
   import type { Picker } from "emoji-picker-element";
   import emojiData from "emoji-picker-element-data/en/github/data.json?url";
   import * as Popover from "#lib/components/ui/popover/index.js";
+  import { pushRecentEmoji, readRecentEmoji, saveRecentEmoji } from "#lib/recent-emoji";
 
   let {
     open = $bindable(false),
@@ -24,14 +25,30 @@
     children: Snippet;
   } = $props();
 
+  let recent = $state<string[]>([]);
+
+  $effect(() => {
+    if (open) recent = readRecentEmoji();
+  });
+
+  function pick(emoji: string) {
+    recent = pushRecentEmoji(recent, emoji);
+    saveRecentEmoji(recent);
+    onpick(emoji);
+  }
+
   function mountPicker(container: HTMLDivElement) {
     let mounted = true;
     let picker: Picker | undefined;
     void import("emoji-picker-element").then(({ Picker }) => {
       if (!mounted) return;
       picker = new Picker({ dataSource: emojiData });
+      // The built-in favourites bar ranks by frequency; the recently used row replaces it.
+      const style = document.createElement("style");
+      style.textContent = ".favorites { display: none !important; }";
+      picker.shadowRoot?.append(style);
       picker.addEventListener("emoji-click", ({ detail }) => {
-        if (detail.unicode) onpick(detail.unicode);
+        if (detail.unicode) pick(detail.unicode);
       });
       container.replaceChildren(picker);
     }).catch(() => {
@@ -49,11 +66,50 @@
     {@render children()}
   </Popover.Trigger>
   <Popover.Content {side} {align} class="w-auto p-0" aria-label="Emoji picker">
-    {#if open}<div class="picker" {@attach mountPicker}></div>{/if}
+    {#if open}
+      <div class="picker" {@attach mountPicker}></div>
+      {#if recent.length > 0}
+        <div class="recent" role="group" aria-label="Recently used" title="Recently used">
+          {#each recent as emoji (emoji)}
+            <button type="button" class="recent-emoji" aria-label={emoji} onclick={() => pick(emoji)}>{emoji}</button>
+          {/each}
+        </div>
+      {/if}
+    {/if}
   </Popover.Content>
 </Popover.Root>
 
 <style>
+  .recent {
+    display: grid;
+    grid-template-columns: repeat(8, 2.375rem);
+    justify-content: space-around;
+    width: min(315px, calc(100vw - 24px));
+    padding: 2px 0;
+    border-top: 1px solid var(--border);
+    background: var(--popover);
+  }
+
+  .recent-emoji {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.375rem;
+    height: 2.375rem;
+    border-radius: 100%;
+    font-size: 1.375rem;
+    line-height: 1;
+  }
+
+  .recent-emoji:hover {
+    background: var(--control-hover);
+  }
+
+  .recent-emoji:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+  }
+
   .picker :global(emoji-picker) {
     width: min(315px, calc(100vw - 24px));
     height: min(360px, 54dvh);

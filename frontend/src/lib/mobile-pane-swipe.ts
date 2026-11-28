@@ -41,6 +41,7 @@ export function mobilePaneSwipe(currentPane: () => SwipePane, navigate: (pane: S
 
     function move(event: TouchEvent) {
       if (!gesture) return;
+      if (event.defaultPrevented) return cancel();
       const touch = event.touches[0];
       if (event.touches.length !== 1 || touch.identifier !== gesture.start.identifier || !event.cancelable) return cancel();
       if (!gesture.swiping) {
@@ -63,6 +64,9 @@ export function mobilePaneSwipe(currentPane: () => SwipePane, navigate: (pane: S
       const x = touch.clientX - completed.start.clientX;
       const y = touch.clientY - completed.start.clientY;
       if (Math.abs(x) < swipeDistance || Math.abs(x) < Math.abs(y) * horizontalRatio) return;
+      // Swiping a chat message left replies to it instead of changing panes.
+      const target = completed.start.target;
+      if (x < 0 && target instanceof Element && target.closest(".chat-message.swipe-reply")) return;
       const next = panes[panes.indexOf(completed.pane) + (x < 0 ? 1 : -1)];
       if (next) navigate(next);
     }

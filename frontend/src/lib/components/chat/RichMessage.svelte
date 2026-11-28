@@ -1,8 +1,15 @@
 <script lang="ts">
-  import { sanitizeChatMarkup } from "#lib/chat/rich-chat";
+  import { chatLinkUrl, sanitizeChatMarkup } from "#lib/chat/rich-chat";
   import { hasTimestamps, refreshRelativeTimestamps, renderTimestamps } from "#lib/chat/chat-timestamps";
+  import { parseMention, type MentionKind } from "#lib/chat/mentions";
 
-  let { text, html, onlink }: { text: string; html?: string; onlink?: (url: string) => void } = $props();
+  let { text, html, onlink, mention }: {
+    text: string;
+    html?: string;
+    onlink?: (url: string) => void;
+    /** Resolves a mention pill's current label and whether it refers to the reader. */
+    mention?: (kind: MentionKind, target: string) => { label?: string; me: boolean };
+  } = $props();
   const formatted = $derived(html ? sanitizeChatMarkup(html) : undefined);
   const timestamps = $derived(hasTimestamps(text));
 
@@ -27,8 +34,13 @@
         for (const [open, close] of [["(", ")"], ["[", "]"], ["{", "}"]]) {
           if (label.endsWith(close) && !label.includes(open)) label = label.slice(0, -1);
         }
+        const destination = chatLinkUrl(/^www\./i.test(label) ? `https://${label}` : label);
+        if (!destination) {
+          replacement.append(part);
+          continue;
+        }
         const link = document.createElement("a");
-        link.href = /^www\./i.test(label) ? `https://${label}` : label;
+        link.href = destination;
         link.textContent = label;
         replacement.append(link, part.slice(label.length));
       }
@@ -40,19 +52,18 @@
     const fragment = formatted ? formatted.cloneNode(true) as DocumentFragment : document.createDocumentFragment();
     if (!formatted) fragment.append(text);
     renderTimestamps(fragment);
+    for (const pill of fragment.querySelectorAll<HTMLElement>("span[data-mention]")) {
+      const parsed = parseMention(pill.dataset.mention);
+      const resolved = parsed && mention?.(parsed.kind, parsed.target);
+      if (resolved?.label) pill.textContent = `@${resolved.label}`;
+      pill.classList.add("chat-mention");
+      if (resolved?.me) pill.classList.add("mine");
+    }
     const confirm = onlink;
     if (confirm) {
       addTextLinks(fragment);
-      for (const link of fragment.querySelectorAll("a[href]")) {
-        let destination: string;
-        try {
-          const url = new URL(link.getAttribute("href") ?? "");
-          if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("Unsupported link");
-          destination = url.href;
-        } catch {
-          link.removeAttribute("href");
-          continue;
-        }
+      for (const link of fragment.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+        const destination = link.href;
         // Keep the destination out of href so alternate click actions also require confirmation.
         const button = document.createElement("button");
         button.type = "button";
@@ -88,5 +99,7 @@
   .rich-message :global(code) { padding: .12em .3em; }
   .rich-message :global(pre) { overflow-x: auto; padding: .5em .65em; }
   .rich-message :global(pre code) { padding: 0; }
+  .rich-message :global(.chat-mention) { padding: 0 .2em; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); font-weight: 600; }
+  .rich-message :global(.chat-mention.mine) { background: color-mix(in srgb, var(--primary) 32%, transparent); color: var(--foreground); }
   .rich-message :global(.chat-timestamp) { padding: .05em .3em; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--foreground); cursor: help; white-space: nowrap; }
 </style>

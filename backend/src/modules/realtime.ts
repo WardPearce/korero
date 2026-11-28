@@ -1,11 +1,11 @@
-import { and, count, desc, eq, gt, gte, isNotNull, like, lt, sql, sum } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, notInArray, or, sql, sum } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Config } from "../config";
 import { audit, channelPermissions, defaultPermissions, DEFAULT_ROLE_KEY, editableBuiltInRoles, INITIAL_ROLE, isBaseRole, LOBBY,
   MAX_ACCOUNT_ROLES, inheritedChannelPermissions, limitAuditInserts, memberPermissions, permissions, pruneAudit, roles, type Permission, type Role, type Store } from "../database";
 import { accountRoleNames } from "./auth";
-import { accounts, accountRoles, attachments, auditEvents, bans, channelOverrides, channels, hearingRestrictions, messages, rolePermissions, rolesTable, settings, speakingRestrictions } from "../database/schema";
+import { accounts, accountRoles, attachments, auditEvents, bans, channelOverrides, channels, hearingRestrictions, messageMentions, messageReactions, messages, rolePermissions, rolesTable, settings, speakingRestrictions } from "../database/schema";
 import { attachmentDataLength, bytesPerMiB, decode, defaultAttachmentMiB, maxSupportedAttachmentMiB, pokeMaxLength, type httpBodies, type Request } from "../protocol";
 import { errorResponse, fail, ProtocolError, RateLimit } from "../security/errors";
 import { sanitizeChatHtml } from "../security/html";
@@ -14,6 +14,7 @@ import { Auth, banExpiry, isBanned, type Account, type Session } from "./auth";
 import { DirectMessages } from "./direct-messages";
 import { LiveMessageIndex, liveMessageLifetime } from "./live-message-index";
 import { Media, type VideoSource, type WhisperRoute } from "./media";
+import { MessageSearch } from "./message-search";
 import { MessageStorage } from "./message-storage";
 
 type Channel = typeof channels.$inferSelect;
@@ -33,9 +34,29 @@ type Peer = { id: string; socket: Socket; source: string; session: Session | nul
   deadline: number; closed: boolean; pending: number;
   queue: Promise<void>; latest: number; replayBytes: number; replies: Map<number, { digest: string; reply: string; size: number }> };
 type AttachmentData = { name: string; size: number; data: Buffer };
-type MessageReference = Pick<typeof messages.$inferSelect, "id" | "channelId" | "senderId" | "recipientId">;
+type MessageReference = Pick<typeof messages.$inferSelect, "id" | "channelId" | "senderId" | "recipientId"> & {
+  /** What a reply to this live message shows when channel history is not stored. */
+  preview?: ReplyPreview;
+};
+type ReplyPreview = { id: string; senderId: string; senderName: string; text: string; attachmentName?: string };
+type ReplyReference = ReplyPreview | { id: string; missing: true };
+type Mentions = { accounts: string[]; roles: Role[] };
+type Reaction = { emoji: string; count: number; me: boolean };
+type StoredMessageRow = { message: typeof messages.$inferSelect; senderName: string; attachment: { name: string; size: number } | null };
+const replyPreviewLength = 120;
+const maxReactionEmoji = 20;
+const emojiCharacters = /^[\p{Extended_Pictographic}\p{Regional_Indicator}\p{Emoji_Component}\u200D\uFE0F\u20E3]+$/u;
+const emojiBase = /[\p{Extended_Pictographic}\p{Regional_Indicator}\u20E3]/u;
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+/** Accepts exactly one emoji grapheme, including ZWJ sequences, flags, keycaps and skin tones. */
+function isEmoji(value: string) {
+  if (!emojiCharacters.test(value) || !emojiBase.test(value)) return false;
+  const iterator = graphemes.segment(value)[Symbol.iterator]();
+  return !iterator.next().done && iterator.next().done === true;
+}
 type LiveAttachment = { message: MessageReference; file: AttachmentData; expiresAt: number };
 type ChannelChange = Extract<Request, { type: "channel.edit" | "channel.create" }>["payload"];
+export type AccountFilter = { after?: string; search?: string; role?: string; status?: "banned" | "active" };
 const compareChannels = (a: Channel, b: Channel) =>
   a.position - b.position || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
 const replyWindow = 16;
@@ -59,6 +80,8 @@ export class Realtime {
   private readonly catalog = new Map<string, Channel>();
   private readonly roleGrants = new Map<Role, Set<Permission>>();
   private readonly customRoles = new Map<Role, number>();
+  /** Roles members may @mention; mentions of other roles are rejected. */
+  private readonly mentionableRoles = new Set<Role>();
   private readonly overrides = new Map<string, Map<string, boolean>>();
   /** Memoised permission results keyed by role set, channel and permission. Cleared whenever grants, overrides or the channel tree change. */
   private readonly permissionCache = new Map<string, boolean>();
@@ -73,6 +96,7 @@ export class Realtime {
   private readonly messageRate: RateLimit;
   private readonly pokeRate = new RateLimit(6);
   private readonly directMessages: DirectMessages;
+  private readonly messageSearch: MessageSearch;
   private readonly messageStorage: MessageStorage;
   private readonly mediaRate: RateLimit;
   private readonly iceRate: RateLimit;
@@ -92,6 +116,7 @@ export class Realtime {
 
   constructor(private readonly db: Store, private readonly auth: Auth, private readonly media: Media, private readonly config: Config) {
     this.messageStorage = new MessageStorage(db, config.messaging);
+    this.messageSearch = new MessageSearch(config);
     this.directMessages = new DirectMessages(db, config, this.messageStorage);
     this.banner = db.select().from(settings).where(eq(settings.key, "bannerImageUrl")).get()?.value ?? null;
     this.motd = db.select().from(settings).where(eq(settings.key, "motd")).get()?.value ?? "";
@@ -105,6 +130,9 @@ export class Realtime {
     for (const channel of db.select().from(channels).all()) this.catalog.set(channel.id, channel);
     for (const { name, rank } of db.select().from(rolesTable).where(lt(rolesTable.rank, 0)).orderBy(desc(rolesTable.rank)).all()) {
       this.customRoles.set(name, rank);
+    }
+    for (const { name } of db.select({ name: rolesTable.name }).from(rolesTable).where(eq(rolesTable.mentionable, true)).all()) {
+      this.mentionableRoles.add(name);
     }
     for (const { role, permission } of db.select().from(rolePermissions).all()) {
       const grants = this.roleGrants.get(role) ?? new Set<Permission>();
@@ -238,6 +266,7 @@ export class Realtime {
   }
   async close() {
     clearInterval(this.timer);
+    this.messageSearch.close();
     for (const peer of this.peers.values()) {
       this.disconnect(peer, 1001, "Server shutdown");
       peer.socket.terminate();
@@ -353,8 +382,8 @@ export class Realtime {
   private canSpeak(peer: Peer, channel: Channel) {
     return this.placed(peer, channel) || this.allowed(peer.account!, "speak", channel);
   }
-  private allowed(account: { roles: readonly Role[] }, permission: Permission, channel?: Channel) {
-    return this.rolesAllowed(account.roles, permission, channel);
+  private allowed(account: { roles: readonly Role[] }, permission: Permission, channel?: Channel, reparented?: Channel) {
+    return this.rolesAllowed(account.roles, permission, channel, reparented);
   }
   private roleAllowed(role: Role, permission: Permission, channel?: Channel) {
     return this.rolesAllowed([role], permission, channel);
@@ -363,22 +392,26 @@ export class Realtime {
    * Combines every held role. Owner always passes. Otherwise the nearest channel level with an override for any
    * held role decides, and an allow there beats a deny. Without one, any held role's server-wide grant allows.
    */
-  private rolesAllowed(held: readonly Role[], permission: Permission, channel?: Channel) {
+  private rolesAllowed(held: readonly Role[], permission: Permission, channel?: Channel, reparented?: Channel) {
     if (held.includes("Owner")) return true;
-    // Hypothetical channels (such as a channel previewed under a new parent) bypass the cache.
-    const cacheable = !channel || this.catalog.get(channel.id) === channel;
+    // A proposed move affects both the moved channel and its descendants.
+    const cacheable = !reparented && (!channel || this.catalog.get(channel.id) === channel);
     const key = `${held.join("\0")}\0${channel?.id ?? ""}\0${permission}`;
     const cached = cacheable ? this.permissionCache.get(key) : undefined;
     if (cached !== undefined) return cached;
-    const result = this.channelOverride(held, permission, channel) ?? held.some((role) => this.roleGrants.get(role)?.has(permission));
+    const result = this.channelOverride(held, permission, channel, reparented) ?? held.some((role) => this.roleGrants.get(role)?.has(permission));
     if (cacheable) {
       if (this.permissionCache.size >= 100_000) this.permissionCache.clear();
       this.permissionCache.set(key, result);
     }
     return result;
   }
-  private channelOverride(held: readonly Role[], permission: Permission, channel?: Channel) {
-    for (let current = channel; current; current = current.parentId ? this.catalog.get(current.parentId) : undefined) {
+  private channelParent(channel: Channel, reparented?: Channel) {
+    const parentId = channel.id === reparented?.id ? reparented.parentId : channel.parentId;
+    return parentId ? this.catalog.get(parentId) : undefined;
+  }
+  private channelOverride(held: readonly Role[], permission: Permission, channel?: Channel, reparented?: Channel) {
+    for (let current = channel; current; current = this.channelParent(current, reparented)) {
       const overrides = this.overrides.get(current.id);
       if (!overrides) continue;
       let denied = false;
@@ -392,8 +425,8 @@ export class Realtime {
     return undefined;
   }
   private clearPermissionCache() { this.permissionCache.clear(); }
-  private require(account: Account, permission: Permission, channel?: Channel) {
-    if (!this.allowed(account, permission, channel)) fail("FORBIDDEN");
+  private require(account: Account, permission: Permission, channel?: Channel, reparented?: Channel) {
+    if (!this.allowed(account, permission, channel, reparented)) fail("FORBIDDEN");
   }
   authorize(accountId: string, permission: Permission) {
     const account = this.auth.account(accountId);
@@ -434,10 +467,22 @@ export class Realtime {
     const rank = this.effectiveRank(actor);
     return [...roles, ...this.customRoles.keys()].filter((role) => this.rank(role) < rank);
   }
-  listAccounts(accountId: string, after?: string) {
+  listAccounts(accountId: string, filter: AccountFilter = {}) {
     const actor = this.authorize(accountId, "manageRoles");
+    const { after, role, status } = filter;
+    const search = filter.search?.trim();
+    const escaped = search?.replace(/[\\%_]/g, (character) => `\\${character}`);
+    const activeBans = this.db.select({ accountId: bans.accountId }).from(bans)
+      .where(or(isNull(bans.expiresAt), gt(bans.expiresAt, Date.now())));
     const rows = this.db.select({ id: accounts.id, displayName: accounts.displayName, badge: accounts.badge })
-      .from(accounts).where(after ? gt(accounts.id, after) : undefined).orderBy(accounts.id).limit(51).all();
+      .from(accounts).where(and(
+        after ? gt(accounts.id, after) : undefined,
+        // Names match anywhere; IDs only by prefix, since every hex character appears in most IDs.
+        escaped ? or(sql`${accounts.displayName} LIKE ${`%${escaped}%`} ESCAPE '\\'`,
+          sql`${accounts.id} LIKE ${`${escaped}%`} ESCAPE '\\'`) : undefined,
+        role ? inArray(accounts.id, this.db.select({ accountId: accountRoles.accountId }).from(accountRoles).where(eq(accountRoles.role, role))) : undefined,
+        status === "banned" ? inArray(accounts.id, activeBans) : status === "active" ? notInArray(accounts.id, activeBans) : undefined,
+      )).orderBy(accounts.id).limit(51).all();
     const page = rows.slice(0, 50);
     const held = accountRoleNames(this.db, page.map(({ id }) => id));
     const manageable = new Set(this.lowerRoles(actor).filter((role) => this.holdsRoleGrants(actor, role)));
@@ -458,10 +503,12 @@ export class Realtime {
     const canDefineRoles = actorRank >= this.rank("Administrator");
     const customRoles = [...this.customRoles.keys()];
     return { accounts: accountsPage, next: rows.length > 50 ? accountsPage.at(-1)!.id : null,
-      roles: [...manageable],
+      roles: [...manageable], allRoles: [...roles, ...customRoles],
       builtInRoles: canDefineRoles ? roles.map((name) => ({ name, permissions: [...this.roleGrants.get(name) ?? []],
+        mentionable: this.mentionableRoles.has(name),
         editable: configurableRoles.has(name) && manageable.has(name), defaultPermissions: [...defaultPermissions[name]] })) : [],
-      customRoles: canDefineRoles ? customRoles.map((name) => ({ name, permissions: [...this.roleGrants.get(name) ?? []] })) : [],
+      customRoles: canDefineRoles ? customRoles.map((name) => ({ name, permissions: [...this.roleGrants.get(name) ?? []],
+        mentionable: this.mentionableRoles.has(name) })) : [],
       assignablePermissions: canDefineRoles ? permissions.filter((permission) => this.allowed(actor, permission)) : [],
       canDefineRoles, defaultRole: this.defaultRole, registrationPermissions: [...registrationGrants] };
   }
@@ -524,7 +571,8 @@ export class Realtime {
     }
     return { badge };
   }
-  defineRole(accountId: string, name: Role, grants: Permission[], create: boolean) {
+  /** `mentionable` is left unchanged when omitted while editing; new roles default to not mentionable. */
+  defineRole(accountId: string, name: Role, grants: Permission[], create: boolean, mentionable?: boolean) {
     const actor = this.authorize(accountId, "manageRoles");
     if (this.effectiveRank(actor) < this.rank("Administrator")) fail("FORBIDDEN");
     if (create) {
@@ -542,24 +590,33 @@ export class Realtime {
       throw new ProtocolError("CONFLICT", "Choose a different default role before granting elevated permissions to this role.");
     }
     const previousPermissions = [...this.roleGrants.get(name) ?? []];
-    if (!create && previousPermissions.length === unique.size && previousPermissions.every((permission) => unique.has(permission))) {
-      return { name, permissions: previousPermissions };
+    const previousMentionable = this.mentionableRoles.has(name);
+    const nextMentionable = mentionable ?? previousMentionable;
+    const sameGrants = previousPermissions.length === unique.size && previousPermissions.every((permission) => unique.has(permission));
+    if (!create && sameGrants && nextMentionable === previousMentionable) {
+      return { name, permissions: previousPermissions, mentionable: previousMentionable };
     }
     // Negative database ranks distinguish custom roles from the fixed built-in ranks.
     const rank = create ? Math.min(0, ...this.customRoles.values()) - 1 : undefined;
     this.db.transaction((tx) => {
-      if (rank !== undefined) tx.insert(rolesTable).values({ name, rank }).run();
-      else tx.delete(rolePermissions).where(eq(rolePermissions.role, name)).run();
+      if (rank !== undefined) tx.insert(rolesTable).values({ name, rank, mentionable: nextMentionable }).run();
+      else {
+        tx.delete(rolePermissions).where(eq(rolePermissions.role, name)).run();
+        tx.update(rolesTable).set({ mentionable: nextMentionable }).where(eq(rolesTable.name, name)).run();
+      }
       if (unique.size) tx.insert(rolePermissions).values([...unique].map((permission) => ({ role: name, permission }))).run();
       audit(tx, actor.id, create ? "role.created" : "role.permissions_changed", name, {
         previousPermissions, permissions: [...unique],
+        ...nextMentionable !== previousMentionable || create ? { previousMentionable, mentionable: nextMentionable } : {},
       });
     }, { behavior: "immediate" });
     if (rank !== undefined) this.customRoles.set(name, rank);
+    if (nextMentionable) this.mentionableRoles.add(name);
+    else this.mentionableRoles.delete(name);
     this.roleGrants.set(name, unique);
     this.clearPermissionCache();
     this.recheckAll();
-    return { name, permissions: [...unique] };
+    return { name, permissions: [...unique], mentionable: nextMentionable };
   }
   deleteRole(accountId: string, name: Role) {
     const actor = this.authorize(accountId, "manageRoles");
@@ -577,6 +634,7 @@ export class Realtime {
       audit(tx, actor.id, "role.deleted", name);
     }, { behavior: "immediate" });
     this.customRoles.delete(name);
+    this.mentionableRoles.delete(name);
     this.roleGrants.delete(name);
     for (const overrides of this.overrides.values()) {
       for (const key of overrides.keys()) if (key.startsWith(`${name}/`)) overrides.delete(key);
@@ -784,6 +842,7 @@ export class Realtime {
       targetAudioBitrate: this.targetAudioBitrate,
       maxAttachmentBytes: this.maxAttachmentBytes,
       canReorderChannels: visible.some((channel) => this.allowed(account, "editChannels", channel)),
+      mentionableRoles: [...this.mentionableRoles],
     };
   }
   private leave(peer: Peer) {
@@ -917,19 +976,67 @@ export class Realtime {
       this.require(actor, "join", scope);
       this.require(actor, "editChannels", scope);
     }
-    this.validateChannelParent(current.id, parent, current);
-
-    // A descendant either inherits the moved channel's effective grant or has a closer override.
+    const subtree = this.validateChannelParent(current.id, parent, current);
+    if (actor.roles.includes("Owner")) return;
     const moved = { ...current, parentId: parent?.id ?? null };
-    for (const role of [...roles, ...this.customRoles.keys()]) {
-      for (const permission of inheritedChannelPermissions) {
-        // A deny that appears or disappears matters even when this role's own result stays the same, because it
-        // decides the outcome for accounts that combine the role with others.
-        const before = this.channelOverride([role], permission, current);
-        const after = this.channelOverride([role], permission, moved);
-        const denyChanged = before !== after && (before === false || after === false);
-        if (!denyChanged && this.roleAllowed(role, permission, current) === this.roleAllowed(role, permission, moved)) continue;
-        this.authorizeRolePermissionChange(actor, current, role, permission, true);
+    const inheritedRoles = new Map<Permission, Set<Role>>();
+    for (const root of [previousParent, parent]) {
+      for (let ancestor = root; ancestor; ancestor = this.channelParent(ancestor)) {
+        for (const key of this.overrides.get(ancestor.id)?.keys() ?? []) {
+          const [role, permission] = key.split("/") as [Role, Permission];
+          if (role === "Owner") continue;
+          const held = inheritedRoles.get(permission) ?? new Set<Role>();
+          held.add(role);
+          inheritedRoles.set(permission, held);
+        }
+      }
+    }
+
+    for (const permission of inheritedChannelPermissions) {
+      const candidates = inheritedRoles.get(permission);
+      if (!candidates) continue;
+      const checked = new Map<Channel, Set<Role>>();
+      const authorizeChange = (held: Role[], changes: (scope: Channel) => boolean) => {
+        for (const scope of subtree) {
+          if (!changes(scope)) continue;
+          const checkedRoles = checked.get(scope) ?? new Set<Role>();
+          for (const role of held) {
+            if (checkedRoles.has(role)) continue;
+            this.requireRolePermissionChange(actor, role, permission);
+            this.requireChannelRoleScope(actor, scope, role, permission);
+            this.requireChannelRoleScope(actor, scope, role, permission, moved);
+            checkedRoles.add(role);
+          }
+          checked.set(scope, checkedRoles);
+        }
+      };
+      const allows: Role[] = [];
+      const denies: Role[] = [];
+      for (const role of candidates) {
+        const held = [role];
+        const before = this.channelOverride(held, permission, current);
+        const after = this.channelOverride(held, permission, current, moved);
+        if (before === true || after === true) allows.push(role);
+        if (before === false || after === false) denies.push(role);
+        if (before === after) continue;
+        // An inherited deny can mask another role's server-wide grant.
+        const global = this.roleGrants.get(role)?.has(permission) ?? false;
+        if (before !== false && after !== false && (before ?? global) === (after ?? global)) continue;
+        authorizeChange(held, (scope) => this.channelOverride(held, permission, scope) !==
+          this.channelOverride(held, permission, scope, moved));
+      }
+
+      // A combined decision that differs after a move has a witness of at most two roles:
+      // the role granting access on one side and the role whose nearer deny blocks it on the other.
+      for (const allow of allows) {
+        for (const deny of denies) {
+          if (allow === deny) continue;
+          const held = [allow, deny];
+          const changes = (scope: Channel) => this.rolesAllowed(held, permission, scope) !==
+            this.rolesAllowed(held, permission, scope, moved);
+          // Closer overrides in the moved subtree can shield the difference seen at its root.
+          if (changes(current)) authorizeChange(held, changes);
+        }
       }
     }
   }
@@ -940,7 +1047,8 @@ export class Realtime {
     for (let ancestor = parent; ancestor; ancestor = ancestor.parentId ? this.channel(ancestor.parentId) : undefined) {
       if (ancestor.id === id || ++depth >= 16) fail("CONFLICT");
     }
-    if (!current || current.parentId === (parent?.id ?? null)) return;
+    if (!current || current.parentId === (parent?.id ?? null)) return [];
+    const subtree: Channel[] = [];
     for (const candidate of this.catalog.values()) {
       let child = candidate;
       let descendantDepth = 0;
@@ -948,8 +1056,12 @@ export class Realtime {
         child = this.channel(child.parentId);
         descendantDepth++;
       }
-      if (child.id === id && depth + descendantDepth >= 16) fail("CONFLICT");
+      if (child.id === id) {
+        if (depth + descendantDepth >= 16) fail("CONFLICT");
+        subtree.push(candidate);
+      }
     }
+    return subtree;
   }
   private canManageChannelPermissions(actor: Account, channel: Channel) {
     return this.allowed(actor, "manageRoles") && this.allowed(actor, "editChannels") &&
@@ -1006,20 +1118,9 @@ export class Realtime {
     this.clearPermissionCache();
   }
   private authorizeRolePermissionChange(actor: Account, channel: Channel, role: Role, permission: Permission, affectsDescendants: boolean) {
-    this.require(actor, "manageRoles");
-    this.require(actor, permission);
-    if (this.rank(role) >= this.effectiveRank(actor) || !this.holdsServerGrants(actor, this.roleGrants.get(role))) fail("FORBIDDEN");
+    this.requireRolePermissionChange(actor, role, permission);
     if (actor.roles.includes("Owner")) return;
-
-    const requireScope = (scope: Channel) => {
-      this.require(actor, "join", scope);
-      this.require(actor, "editChannels", scope);
-      this.require(actor, permission, scope);
-      for (const grant of inheritedChannelPermissions) {
-        if (this.roleAllowed(role, grant, scope)) this.require(actor, grant, scope);
-      }
-    };
-    requireScope(channel);
+    this.requireChannelRoleScope(actor, channel, role, permission);
     if (!affectsDescendants) return;
 
     // A nearer override shields its channel and subtree from this change.
@@ -1029,7 +1130,22 @@ export class Realtime {
       while (current !== channel && current.parentId && !this.overrides.get(current.id)?.has(key)) {
         current = this.channel(current.parentId);
       }
-      if (current === channel && descendant !== channel) requireScope(descendant);
+      if (current === channel && descendant !== channel) this.requireChannelRoleScope(actor, descendant, role, permission);
+    }
+  }
+
+  private requireRolePermissionChange(actor: Account, role: Role, permission: Permission) {
+    this.require(actor, "manageRoles");
+    this.require(actor, permission);
+    if (this.rank(role) >= this.effectiveRank(actor) || !this.holdsServerGrants(actor, this.roleGrants.get(role))) fail("FORBIDDEN");
+  }
+
+  private requireChannelRoleScope(actor: Account, scope: Channel, role: Role, permission: Permission, reparented?: Channel) {
+    this.require(actor, "join", scope, reparented);
+    this.require(actor, "editChannels", scope, reparented);
+    this.require(actor, permission, scope, reparented);
+    for (const grant of inheritedChannelPermissions) {
+      if (this.rolesAllowed([role], grant, scope, reparented)) this.require(actor, grant, scope, reparented);
     }
   }
   private async changeChannel(peer: Peer, payload: ChannelChange) {
@@ -1088,7 +1204,8 @@ export class Realtime {
   private chatPermissions(peer: Peer, channel: Channel) {
     const canChat = this.canChat(peer, channel);
     return { canChat, canAttachFiles: canChat && this.allowed(peer.account!, "attachFiles", channel),
-      messagePins: this.config.messaging.persistence,
+      messagePins: this.config.messaging.persistence, messageSearch: this.config.messaging.persistence,
+      messageReactions: this.config.messaging.persistence,
       canPinMessages: this.config.messaging.persistence && canChat && this.allowed(peer.account!, "pinMessages", channel) };
   }
   private textChannel(peer: Peer, channelId: string) {
@@ -1120,21 +1237,24 @@ export class Realtime {
     if (!viewers?.size) this.viewers.delete(channelId);
     if (notify) this.event(peer, "channel.viewEnded", { channelId });
   }
+  private storedChannelMessages() {
+    return this.db.select({ message: messages, senderName: accounts.displayName, attachment: { name: attachments.name, size: attachments.size } })
+      .from(messages).innerJoin(accounts, eq(accounts.id, messages.senderId)).leftJoin(attachments, eq(attachments.messageId, messages.id));
+  }
   private history(peer: Peer, payload: { channelId: string; before?: number }) {
     const channel = this.textChannel(peer, payload.channelId);
     if (!this.config.messaging.persistence) return [];
-    const rows = this.db.select({ message: messages, attachment: { name: attachments.name, size: attachments.size } })
-      .from(messages).leftJoin(attachments, eq(attachments.messageId, messages.id)).where(and(eq(messages.channelId, channel.id), gte(messages.createdAt, this.messageStorage.channelCutoff()),
+    const rows = this.storedChannelMessages().where(and(eq(messages.channelId, channel.id), gte(messages.createdAt, this.messageStorage.channelCutoff()),
       payload.before === undefined ? undefined : lt(messages.createdAt, payload.before)))
       .orderBy(desc(messages.createdAt), desc(messages.id)).limit(100).all();
-    return rows.map(({ message, attachment }) => this.messagePayload(message, attachment));
+    return this.messagePayloads(rows, peer.account!.id);
   }
   private pinnedMessages(peer: Peer, { channelId, before }: { channelId: string; before?: { id: string; pinnedAt: number } }) {
     const channel = this.textChannel(peer, channelId);
     if (!this.config.messaging.persistence) return { messages: [], next: null };
-    const rows = this.db.select({ id: messages.id, senderId: messages.senderId, createdAt: messages.createdAt, pinnedAt: messages.pinnedAt,
+    const rows = this.db.select({ id: messages.id, senderId: messages.senderId, senderName: accounts.displayName, createdAt: messages.createdAt, pinnedAt: messages.pinnedAt,
       text: sql<string>`substr(${messages.text}, 1, 240)`, attachmentName: attachments.name })
-      .from(messages).leftJoin(attachments, eq(attachments.messageId, messages.id))
+      .from(messages).innerJoin(accounts, eq(accounts.id, messages.senderId)).leftJoin(attachments, eq(attachments.messageId, messages.id))
       .where(and(eq(messages.channelId, channel.id), gte(messages.createdAt, this.messageStorage.channelCutoff()), isNotNull(messages.pinnedAt),
         before && sql`(${messages.pinnedAt}, ${messages.id}) < (${before.pinnedAt}, ${before.id})`))
       .orderBy(desc(messages.pinnedAt), desc(messages.id)).limit(51).all();
@@ -1142,34 +1262,42 @@ export class Realtime {
     const last = page.at(-1);
     return { messages: page, next: rows.length > page.length && last ? { id: last.id, pinnedAt: last.pinnedAt } : null };
   }
+  private async searchMessages(peer: Peer, { channelId, query, before }: Extract<Request, { type: "message.search" }>["payload"]) {
+    const channel = this.textChannel(peer, channelId);
+    const term = query.trim();
+    if (!this.config.messaging.persistence || !term) return { messages: [], next: null };
+    const page = await this.messageSearch.run(peer.account!.id, { channelId: channel.id, term, cutoff: this.messageStorage.channelCutoff(), before });
+    this.verify(peer);
+    this.textChannel(peer, channelId);
+    return page;
+  }
   private messageContext(peer: Peer, { channelId, messageId }: { channelId: string; messageId: string }) {
     const channel = this.textChannel(peer, channelId);
     if (!this.config.messaging.persistence) fail("NOT_FOUND");
     const inHistory = and(eq(messages.channelId, channel.id), gte(messages.createdAt, this.messageStorage.channelCutoff()));
-    const rows = () => this.db.select({ message: messages, attachment: { name: attachments.name, size: attachments.size } })
-      .from(messages).leftJoin(attachments, eq(attachments.messageId, messages.id));
-    const anchor = rows().where(and(inHistory, eq(messages.id, messageId))).get();
+    const anchor = this.storedChannelMessages().where(and(inHistory, eq(messages.id, messageId))).get();
     if (!anchor) fail("NOT_FOUND");
-    const target = this.messagePayload(anchor.message, anchor.attachment);
-    const { createdAt } = target;
-    const older = rows().where(and(inHistory, sql`(${messages.createdAt}, ${messages.id}) < (${createdAt}, ${messageId})`))
+    const { createdAt } = anchor.message;
+    const older = this.storedChannelMessages().where(and(inHistory, sql`(${messages.createdAt}, ${messages.id}) < (${createdAt}, ${messageId})`))
       .orderBy(desc(messages.createdAt), desc(messages.id)).limit(20).all();
-    const newer = rows().where(and(inHistory, sql`(${messages.createdAt}, ${messages.id}) > (${createdAt}, ${messageId})`))
+    const newer = this.storedChannelMessages().where(and(inHistory, sql`(${messages.createdAt}, ${messages.id}) > (${createdAt}, ${messageId})`))
       .orderBy(messages.createdAt, messages.id).limit(20).all();
+    const [target, ...decorated] = this.messagePayloads([anchor, ...older, ...newer], peer.account!.id);
+    const olderPayloads = decorated.slice(0, older.length);
+    const newerPayloads = decorated.slice(older.length);
     // Leave room for the response envelope within the desktop client's 256 KiB frame limit.
     const sideBudget = Math.floor((240 * 1024 - Buffer.byteLength(JSON.stringify(target))) / 2);
-    const neighbors = (side: typeof older) => {
-      const result: (typeof target)[] = [];
+    const neighbors = (side: typeof decorated) => {
+      const result: typeof decorated = [];
       let bytes = 0;
-      for (const { message, attachment } of side) {
-        const entry = this.messagePayload(message, attachment);
+      for (const entry of side) {
         bytes += Buffer.byteLength(JSON.stringify(entry)) + 1;
         if (bytes > sideBudget) break;
         result.push(entry);
       }
       return result;
     };
-    return [...neighbors(older).reverse(), target, ...neighbors(newer)];
+    return [...neighbors(olderPayloads).reverse(), target!, ...neighbors(newerPayloads)];
   }
   private setMessagePin(peer: Peer, { channelId, messageId, pinned }: { channelId: string; messageId: string; pinned: boolean }) {
     const channel = this.textChannel(peer, channelId);
@@ -1188,16 +1316,140 @@ export class Realtime {
     if (pinnedAt !== undefined) this.broadcast(this.chatAudience(channel), "message.pinChanged", { channelId, messageId, pinnedAt });
     return {};
   }
-  private messagePayload({ html, pinnedAt, ...message }: typeof messages.$inferSelect, attachment?: { name: string; size: number } | null) {
-    return { ...message, ...(html ? { html } : {}), ...(attachment ? { attachment } : {}), ...(pinnedAt ? { pinnedAt } : {}) };
+  private messagePayload({ html, pinnedAt, replyToId, ...message }: typeof messages.$inferSelect, senderName: string,
+    attachment?: { name: string; size: number } | null,
+    extra: { replyTo?: ReplyReference; mentions?: Mentions; reactions?: Reaction[] } = {}) {
+    const { replyTo, mentions, reactions } = extra;
+    return { ...message, senderName, ...(html ? { html } : {}), ...(attachment ? { attachment } : {}), ...(pinnedAt ? { pinnedAt } : {}),
+      ...(replyTo ? { replyTo } : replyToId ? { replyTo: { id: replyToId, missing: true as const } } : {}),
+      ...(mentions && (mentions.accounts.length || mentions.roles.length) ? { mentions } : {}),
+      ...(reactions?.length ? { reactions } : {}) };
   }
-  private sendMessage(peer: Peer, payload: { channelId: string; text: string; html?: string }, file?: AttachmentData) {
-    const senderId = peer.account!.id;
+  /** Stored messages with their reply previews, mentions and reactions, as `readerId` sees them. */
+  private messagePayloads(rows: StoredMessageRow[], readerId: string) {
+    const ids = rows.map(({ message }) => message.id);
+    const replyIds = [...new Set(rows.flatMap(({ message }) => message.replyToId ? [message.replyToId] : []))];
+    const previews = new Map<string, { channelId: string | null; preview: ReplyPreview }>();
+    for (const row of replyIds.length ? this.db.select({ id: messages.id, channelId: messages.channelId, senderId: messages.senderId,
+      senderName: accounts.displayName, text: sql<string>`substr(${messages.text}, 1, ${replyPreviewLength})`, attachmentName: attachments.name })
+      .from(messages).innerJoin(accounts, eq(accounts.id, messages.senderId)).leftJoin(attachments, eq(attachments.messageId, messages.id))
+      .where(and(inArray(messages.id, replyIds), gte(messages.createdAt, this.messageStorage.channelCutoff()))).all() : []) {
+      const { channelId, attachmentName, ...preview } = row;
+      previews.set(row.id, { channelId, preview: { ...preview, ...(attachmentName ? { attachmentName } : {}) } });
+    }
+    const mentions = new Map<string, Mentions>();
+    for (const { messageId, kind, target } of ids.length
+      ? this.db.select().from(messageMentions).where(inArray(messageMentions.messageId, ids)).all() : []) {
+      const entry = mentions.get(messageId) ?? { accounts: [], roles: [] };
+      (kind === "account" ? entry.accounts : entry.roles).push(target);
+      mentions.set(messageId, entry);
+    }
+    const reactions = new Map<string, Reaction[]>();
+    for (const { messageId, emoji, count: total, me } of ids.length ? this.db.select({ messageId: messageReactions.messageId,
+      emoji: messageReactions.emoji, count: count(), me: sql<number>`max(${messageReactions.accountId} = ${readerId})` })
+      .from(messageReactions).where(inArray(messageReactions.messageId, ids))
+      // Reactions added in the same millisecond keep insertion order.
+      .groupBy(messageReactions.messageId, messageReactions.emoji).orderBy(sql`min(${messageReactions.createdAt})`, sql`min(rowid)`).all() : []) {
+      const list = reactions.get(messageId) ?? [];
+      list.push({ emoji, count: total, me: Boolean(me) });
+      reactions.set(messageId, list);
+    }
+    return rows.map(({ message, senderName, attachment }) => {
+      const reply = message.replyToId ? previews.get(message.replyToId) : undefined;
+      const replyTo = reply?.channelId === message.channelId ? reply.preview : undefined;
+      return this.messagePayload(message, senderName, attachment,
+        { replyTo, mentions: mentions.get(message.id), reactions: reactions.get(message.id) });
+    });
+  }
+  /** Resolves the message a new reply answers, which must still be readable in the same channel. */
+  private replyTarget(channel: Channel, messageId: string): ReplyPreview {
+    if (this.config.messaging.persistence) {
+      const row = this.db.select({ id: messages.id, senderId: messages.senderId, senderName: accounts.displayName,
+        text: sql<string>`substr(${messages.text}, 1, ${replyPreviewLength})`, attachmentName: attachments.name })
+        .from(messages).innerJoin(accounts, eq(accounts.id, messages.senderId)).leftJoin(attachments, eq(attachments.messageId, messages.id))
+        .where(and(eq(messages.id, messageId), eq(messages.channelId, channel.id), gte(messages.createdAt, this.messageStorage.channelCutoff()))).get();
+      if (!row) fail("INVALID_REQUEST");
+      const { attachmentName, ...preview } = row;
+      return { ...preview, ...(attachmentName ? { attachmentName } : {}) };
+    }
+    const live = this.liveAttachment(messageId)?.message ?? this.liveText.get(messageId);
+    if (!live?.preview || live.channelId !== channel.id) fail("INVALID_REQUEST");
+    return live.preview;
+  }
+  /** Deduplicates and checks mentions: accounts must exist and roles must be mentionable. */
+  private validMentions(mentions: { accounts?: string[]; roles?: string[] } | undefined): Mentions {
+    const accountIds = [...new Set(mentions?.accounts ?? [])];
+    const roleNames = [...new Set(mentions?.roles ?? [])] as Role[];
+    if (roleNames.some((role) => role === "Owner" || !this.mentionableRoles.has(role))) fail("INVALID_REQUEST");
+    if (accountIds.length) {
+      const { total } = this.db.select({ total: count() }).from(accounts).where(inArray(accounts.id, accountIds)).get()!;
+      if (total !== accountIds.length) fail("INVALID_REQUEST");
+    }
+    return { accounts: accountIds, roles: roleNames };
+  }
+  private mentionRows(messageId: string, { accounts: accountIds, roles: roleNames }: Mentions) {
+    return [...accountIds.map((target) => ({ messageId, kind: "account" as const, target })),
+      ...roleNames.map((target) => ({ messageId, kind: "role" as const, target }))];
+  }
+  /** Notifies mentioned readers wherever they are, since chat events only reach a channel's audience. */
+  private notifyMentions(channel: Channel, message: { id: string; senderId: string; text: string }, senderName: string, mentions: Mentions) {
+    if (!mentions.accounts.length && !mentions.roles.length) return;
+    const accountIds = new Set(mentions.accounts);
+    const roleNames = new Set(mentions.roles);
+    const recipients = [...this.online.values()].flatMap((group) => [...group]).filter((peer) => {
+      const account = peer.account!;
+      return account.id !== message.senderId && (accountIds.has(account.id) || account.roles.some((role) => roleNames.has(role))) &&
+        this.canChat(peer, channel);
+    });
+    this.broadcast(recipients, "message.mentioned", { channelId: channel.id, messageId: message.id, senderId: message.senderId,
+      senderName, text: message.text.slice(0, replyPreviewLength) });
+  }
+  private reactToMessage(peer: Peer, { channelId, messageId, emoji, reacted }: { channelId: string; messageId: string; emoji: string; reacted: boolean }) {
+    const channel = this.textChannel(peer, channelId);
+    const accountId = peer.account!.id;
+    this.messageRate.take(accountId);
+    if (!this.config.messaging.persistence) fail("CONFLICT");
+    if (!isEmoji(emoji)) fail("INVALID_REQUEST");
+    const total = this.db.transaction((tx) => {
+      const message = tx.select({ id: messages.id }).from(messages).where(and(eq(messages.id, messageId),
+        eq(messages.channelId, channel.id), gte(messages.createdAt, this.messageStorage.channelCutoff()))).get();
+      if (!message) fail("NOT_FOUND");
+      const forEmoji = and(eq(messageReactions.messageId, messageId), eq(messageReactions.emoji, emoji));
+      const mine = tx.select({ emoji: messageReactions.emoji }).from(messageReactions)
+        .where(and(forEmoji, eq(messageReactions.accountId, accountId))).get();
+      if (Boolean(mine) === reacted) return undefined;
+      if (reacted) {
+        const existing = tx.select({ emoji: messageReactions.emoji }).from(messageReactions).where(forEmoji).limit(1).get();
+        if (!existing) {
+          const { distinct } = tx.select({ distinct: sql<number>`count(distinct ${messageReactions.emoji})` }).from(messageReactions)
+            .where(eq(messageReactions.messageId, messageId)).get()!;
+          if (distinct >= maxReactionEmoji) {
+            throw new ProtocolError("LIMIT", `A message can have at most ${maxReactionEmoji} different reactions.`);
+          }
+        }
+        tx.insert(messageReactions).values({ messageId, emoji, accountId, createdAt: Date.now() }).run();
+      } else {
+        tx.delete(messageReactions).where(and(forEmoji, eq(messageReactions.accountId, accountId))).run();
+      }
+      return tx.select({ total: count() }).from(messageReactions).where(forEmoji).get()!.total;
+    }, { behavior: "immediate" });
+    if (total !== undefined) {
+      this.broadcast(this.chatAudience(channel), "message.reactionsChanged", { channelId, messageId, emoji, count: total, accountId, reacted });
+    }
+    return {};
+  }
+  private sendMessage(peer: Peer, payload: { channelId: string; text: string; html?: string; replyTo?: string;
+    mentions?: { accounts?: string[]; roles?: string[] } }, file?: AttachmentData) {
+    const { id: senderId, displayName: senderName } = peer.account!;
     this.messageRate.take(senderId);
     if (payload.text.length > this.config.messaging.max_length || (!file && !payload.text.trim())) fail("INVALID_REQUEST");
     const channel = this.textChannel(peer, payload.channelId);
+    const replyTo = payload.replyTo ? this.replyTarget(channel, payload.replyTo) : undefined;
+    const mentions = this.validMentions(payload.mentions);
     const message = { id: randomUUID(), channelId: channel.id, recipientId: null, senderId, createdAt: Date.now(), editedAt: null, text: payload.text,
-      html: payload.text.trim() && payload.html ? sanitizeChatHtml(payload.html) : null, pinnedAt: null };
+      html: payload.text.trim() && payload.html ? sanitizeChatHtml(payload.html) : null, pinnedAt: null, replyToId: replyTo?.id ?? null };
+    const preview: ReplyPreview = { id: message.id, senderId, senderName, text: payload.text.slice(0, replyPreviewLength),
+      ...(file ? { attachmentName: file.name } : {}) };
     if (this.config.messaging.persistence) {
       this.messageStorage.write((tx) => {
         if (file) {
@@ -1209,9 +1461,11 @@ export class Realtime {
         }
         tx.insert(messages).values(message).run();
         if (file) tx.insert(attachments).values({ messageId: message.id, ...file }).run();
+        const mentionRows = this.mentionRows(message.id, mentions);
+        if (mentionRows.length) tx.insert(messageMentions).values(mentionRows).run();
       });
     } else {
-      const reference = { id: message.id, channelId: channel.id, senderId, recipientId: null };
+      const reference = { id: message.id, channelId: channel.id, senderId, recipientId: null, preview };
       if (file) {
         const usedByAccount = this.liveAttachmentBytesByAccount.get(senderId) ?? 0;
         if (this.liveAttachmentBytes + file.size > Math.max(liveAttachmentLimit, this.maxAttachmentBytes * 4) ||
@@ -1223,8 +1477,9 @@ export class Realtime {
         this.liveAttachmentBytesByAccount.set(senderId, usedByAccount + file.size);
       } else this.liveText.add(reference);
     }
-    const event = this.messagePayload(message, file && { name: file.name, size: file.size });
+    const event = this.messagePayload(message, senderName, file && { name: file.name, size: file.size }, { replyTo, mentions });
     this.broadcast(this.chatAudience(channel), "message.created", event);
+    this.notifyMentions(channel, message, senderName, mentions);
     return { messageId: message.id };
   }
 
@@ -1533,6 +1788,8 @@ export class Realtime {
       case "message.history": return this.history(peer, request.payload);
       case "message.context": return this.messageContext(peer, request.payload);
       case "message.pins": return this.pinnedMessages(peer, request.payload);
+      case "message.react": return this.reactToMessage(peer, request.payload);
+      case "message.search": return this.searchMessages(peer, request.payload);
       case "message.pin": return this.setMessagePin(peer, request.payload);
       case "direct.peer": return this.directMessages.identities(actor.id, request.payload.accountId);
       case "direct.inbox": return this.directMessages.inbox(actor.id);
@@ -1589,6 +1846,7 @@ export class Realtime {
       case "message.edit": {
         const { messageId, text, html } = request.payload;
         this.messageRate.take(actor.id);
+        const mentions = request.payload.mentions && this.validMentions(request.payload.mentions);
         const attachment = this.liveAttachment(messageId);
         const live = attachment?.message ?? this.liveText.get(messageId);
         const stored = this.config.messaging.persistence
@@ -1602,10 +1860,18 @@ export class Realtime {
         if (text.length > this.config.messaging.max_length || (!hasFile && !text.trim())) fail("INVALID_REQUEST");
         const edited = { text, html: text.trim() && html ? sanitizeChatHtml(html) : null, editedAt: Date.now() };
         if (stored) {
-          this.messageStorage.write((tx) => tx.update(messages).set(edited).where(eq(messages.id, messageId)).run());
+          this.messageStorage.write((tx) => {
+            tx.update(messages).set(edited).where(eq(messages.id, messageId)).run();
+            if (!mentions) return;
+            tx.delete(messageMentions).where(eq(messageMentions.messageId, messageId)).run();
+            const mentionRows = this.mentionRows(messageId, mentions);
+            if (mentionRows.length) tx.insert(messageMentions).values(mentionRows).run();
+          });
         }
+        if (live?.preview) live.preview = { ...live.preview, text: text.slice(0, replyPreviewLength) };
         this.broadcast(this.chatAudience(channel),
-          "message.edited", { messageId, ...(stored ? { channelId: channel.id } : {}), text: edited.text, html: edited.html ?? undefined, editedAt: edited.editedAt });
+          "message.edited", { messageId, ...(stored ? { channelId: channel.id } : {}), text: edited.text, html: edited.html ?? undefined, editedAt: edited.editedAt,
+            ...(mentions ? { mentions } : {}) });
         break;
       }
       case "message.delete": {

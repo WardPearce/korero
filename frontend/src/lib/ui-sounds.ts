@@ -1,6 +1,6 @@
 import * as Tone from "tone";
 
-type Sound = "channel" | "connect" | "disconnect" | "mute" | "unmute" | "deafen" | "undeafen" | "message" | "directMessage"
+type Sound = "channel" | "connect" | "disconnect" | "mute" | "unmute" | "deafen" | "undeafen" | "message" | "directMessage" | "mention"
   | "poke" | "afk" | "back" | "screenShareStart" | "screenShareStop" | "cameraStart" | "cameraStop" | "memberLeft";
 
 /**
@@ -28,6 +28,7 @@ const cues: Record<Sound, Cue> = {
   undeafen: { notes: [["pad", "A2", 0, 0.2, 0.3], ["pluck", "A3", 0, 0.08, 0.6], ["pluck", "D4", 0.08, 0.14, 0.6]] },
   message: { notes: [["bell", "A5", 0, 0.12, 0.3], ["bell", "E6", 0.06, 0.22, 0.25]] },
   directMessage: { notes: [["bell", "E5", 0, 0.18, 0.5], ["bell", "G5", 0.09, 0.18, 0.5], ["bell", "C6", 0.18, 0.5, 0.55]] },
+  mention: { notes: [["bell", "C6", 0, 0.14, 0.45], ["bell", "G6", 0.08, 0.14, 0.4], ["bell", "C6", 0.2, 0.3, 0.35]] },
   poke: { notes: [["knock", "G2", 0, 0.12, 0.8], ["knock", "G2", 0.13, 0.12, 0.65], ["bell", "G6", 0.26, 0.35, 0.4], ["bell", "D6", 0.26, 0.35, 0.3]] },
   afk: { notes: [["bell", "E5", 0, 0.3, 0.4], ["pad", "E4", 0, 0.35, 0.45], ["bell", "C5", 0.2, 0.3, 0.35], ["pad", "C4", 0.2, 0.35, 0.4],
     ["bell", "G4", 0.4, 0.5, 0.3], ["pad", "G3", 0.4, 0.6, 0.35]] },

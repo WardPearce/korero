@@ -1768,6 +1768,36 @@
                   "minLength": 1,
                   "maxLength": 32768,
                   "type": "string"
+                },
+                "replyTo": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "mentions": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "accounts": {
+                      "minItems": 0,
+                      "maxItems": 20,
+                      "type": "array",
+                      "items": {
+                        "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                        "type": "string"
+                      }
+                    },
+                    "roles": {
+                      "minItems": 0,
+                      "maxItems": 5,
+                      "type": "array",
+                      "items": {
+                        "minLength": 1,
+                        "maxLength": 80,
+                        "pattern": "^(?=.*\\S)[^/\\u0000-\\u001f\\u007f]+$",
+                        "type": "string"
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -2016,6 +2046,152 @@
                 },
                 "pinned": {
                   "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
+              "const": "message.react"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "channelId",
+                "messageId",
+                "emoji",
+                "reacted"
+              ],
+              "properties": {
+                "channelId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "messageId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "emoji": {
+                  "minLength": 1,
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                "reacted": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
+              "const": "message.search"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "channelId",
+                "query"
+              ],
+              "properties": {
+                "channelId": {
+                  "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                  "type": "string"
+                },
+                "query": {
+                  "minLength": 1,
+                  "maxLength": 100,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
+                "before": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "createdAt"
+                  ],
+                  "properties": {
+                    "id": {
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "minimum": 1,
+                      "maximum": 9007199254740991,
+                      "anyOf": [
+                        {
+                          "format": "integer",
+                          "default": 0,
+                          "type": "string"
+                        },
+                        {
+                          "minimum": 1,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2357,6 +2533,32 @@
                   "minLength": 1,
                   "maxLength": 32768,
                   "type": "string"
+                },
+                "mentions": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "accounts": {
+                      "minItems": 0,
+                      "maxItems": 20,
+                      "type": "array",
+                      "items": {
+                        "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                        "type": "string"
+                      }
+                    },
+                    "roles": {
+                      "minItems": 0,
+                      "maxItems": 5,
+                      "type": "array",
+                      "items": {
+                        "minLength": 1,
+                        "maxLength": 80,
+                        "pattern": "^(?=.*\\S)[^/\\u0000-\\u001f\\u007f]+$",
+                        "type": "string"
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -4338,6 +4540,9 @@
               "pinMessages"
             ]
           }
+        },
+        "mentionable": {
+          "type": "boolean"
         }
       }
     },
@@ -4584,6 +4789,36 @@
           "minLength": 1,
           "maxLength": 32768,
           "type": "string"
+        },
+        "replyTo": {
+          "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+          "type": "string"
+        },
+        "mentions": {
+          "additionalProperties": false,
+          "type": "object",
+          "properties": {
+            "accounts": {
+              "minItems": 0,
+              "maxItems": 20,
+              "type": "array",
+              "items": {
+                "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                "type": "string"
+              }
+            },
+            "roles": {
+              "minItems": 0,
+              "maxItems": 5,
+              "type": "array",
+              "items": {
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^(?=.*\\S)[^/\\u0000-\\u001f\\u007f]+$",
+                "type": "string"
+              }
+            }
+          }
         },
         "name": {
           "minLength": 1,

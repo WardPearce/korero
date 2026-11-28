@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { join } from "node:path";
 import { fixture, openSocket, type Snapshot, until } from "../server";
 import { LOBBY } from "../../src/database";
+import type { SearchPage } from "../../src/modules/message-search-worker";
 
 test("channel pins follow chat access, pin permissions and message deletion", async () => {
   const server = await fixture();
@@ -13,7 +16,7 @@ test("channel pins follow chat access, pin permissions and message deletion", as
     const first = await reader.rpc<{ messageId: string }>("message.send", { channelId, text: "First pin" });
     const second = await owner.rpc<{ messageId: string }>("message.send", { channelId, text: "Second pin" });
     const pin = (socket: typeof owner, messageId: string, pinned = true) => socket.rpc("message.pin", { channelId, messageId, pinned });
-    const pins = (socket: typeof owner) => socket.rpc<{ messages: { id: string }[] }>("message.pins", { channelId });
+    const pins = (socket: typeof owner) => socket.rpc<{ messages: { id: string; senderName: string }[] }>("message.pins", { channelId });
 
     await expect(pin(reader, first.messageId)).rejects.toThrow("FORBIDDEN");
     await expect(owner.rpc("message.pin", { channelId: LOBBY, messageId: first.messageId, pinned: true })).rejects.toThrow("NOT_FOUND");
@@ -23,8 +26,9 @@ test("channel pins follow chat access, pin permissions and message deletion", as
     await until(() => reader.received.find(({ type, payload }) =>
       type === "message.pinChanged" && payload.messageId === first.messageId), Boolean);
     expect((await pins(reader)).messages.map(({ id }) => id).sort()).toEqual([first.messageId, second.messageId].sort());
+    expect((await pins(owner)).messages).toContainEqual(expect.objectContaining({ id: first.messageId, senderName: "Reader" }));
     const context = await reader.rpc<{ id: string; pinnedAt: number }[]>("message.context", { channelId, ...first });
-    expect(context).toContainEqual(expect.objectContaining({ id: first.messageId, pinnedAt: expect.any(Number) }));
+    expect(context).toContainEqual(expect.objectContaining({ id: first.messageId, senderName: "Reader", pinnedAt: expect.any(Number) }));
     expect(context).toHaveLength(2);
     await expect(pin(reader, first.messageId, false)).rejects.toThrow("FORBIDDEN");
 
@@ -42,6 +46,85 @@ test("channel pins follow chat access, pin permissions and message deletion", as
     await reader.rpc("message.delete", first);
     expect((await pins(owner)).messages).toEqual([]);
     await expect(owner.rpc("message.context", { channelId, ...first })).rejects.toThrow("NOT_FOUND");
+  } finally { await server.cleanup(); }
+});
+
+test("channel search matches stored text newest first and follows chat access", async () => {
+  const server = await fixture();
+  try {
+    const owner = await server.ws(await server.owner());
+    const member = await server.register("Searcher");
+    const reader = await server.ws(member);
+    const { channelId } = await owner.rpc<{ channelId: string }>("channel.create", { name: "Searchable" });
+    expect(owner.state.channels.find(({ id }) => id === LOBBY)).toMatchObject({ messageSearch: true });
+    await reader.rpc("channel.view", { channelId });
+    const search = (query: string, before?: SearchPage["next"]) =>
+      reader.rpc<SearchPage>("message.search", { channelId, query, before: before ?? undefined });
+    const sent: string[] = [];
+    for (let index = 0; index < 27; index++) {
+      sent.push((await owner.rpc<{ messageId: string }>("message.send", { channelId, text: `Deploy note ${index}` })).messageId);
+    }
+    await owner.rpc("message.send", { channelId, text: "100% literal under_score" });
+    const long = await owner.rpc<{ messageId: string }>("message.send", { channelId, text: "a".repeat(400) + " needle " + "b".repeat(400) });
+
+    const first = await search("DEPLOY");
+    expect(first.messages).toHaveLength(25);
+    const second = await search("deploy", first.next);
+    expect(first.next).not.toBeNull();
+    expect(second.next).toBeNull();
+    const found = [...first.messages, ...second.messages];
+    expect(found.map(({ id }) => id).sort()).toEqual(sent.toSorted());
+    expect(found).toEqual(found.toSorted((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id)));
+    expect((await search("0% l")).messages).toMatchObject([{ text: "100% literal under_score" }]);
+    expect((await search("lit_ral")).messages).toEqual([]);
+    expect((await search("r_s")).messages).toHaveLength(1);
+    expect((await search("%")).messages).toHaveLength(1);
+    const preview = (await search("needle")).messages[0]!;
+    expect(preview.id).toBe(long.messageId);
+    expect(preview.text).toStartWith("…");
+    expect(preview.text).toEndWith("…");
+    expect(preview.text).toContain(" needle ");
+    await expect(search(" ")).rejects.toThrow("INVALID_REQUEST");
+
+    await owner.rpc("message.delete", { messageId: sent[0] });
+    expect((await search("Deploy note 0")).messages).toEqual([]);
+    await owner.rpc("channel.override", { channelId, role: "Member", permission: "text", allow: false });
+    await expect(search("deploy")).rejects.toThrow("FORBIDDEN");
+  } finally { await server.cleanup(); }
+});
+
+test("channel search continues past empty windows and enforces both quotas", async () => {
+  const server = await fixture({ environment: {
+    VOICE_LIMITS_MESSAGE_SEARCHES_PER_MINUTE: "3",
+    VOICE_LIMITS_MESSAGE_SEARCHES_GLOBAL_PER_MINUTE: "4",
+  } });
+  try {
+    const owner = await server.owner();
+    const reader = await server.ws(await server.register("First reader"));
+    const other = await server.ws(await server.register("Second reader"));
+    const search = (socket: typeof reader, before?: SearchPage["next"]) =>
+      socket.rpc<SearchPage>("message.search", { channelId: LOBBY, query: "needle", before: before ?? undefined });
+    const db = new Database(join(server.directory, "server.db"));
+    try {
+      db.run("PRAGMA busy_timeout = 3000");
+      const insert = db.query("INSERT INTO messages (id, channel_id, sender_id, text, created_at) VALUES (?, ?, ?, ?, ?)");
+      const createdAt = Date.now();
+      db.transaction(() => {
+        insert.run(crypto.randomUUID(), LOBBY, owner.account.id, "An older needle", createdAt - 1);
+        for (let count = 0; count < 2048; count++) {
+          insert.run(crypto.randomUUID(), LOBBY, owner.account.id, "Ordinary message", createdAt);
+        }
+      })();
+    } finally { db.close(); }
+
+    const page = await search(reader);
+    expect(page.messages).toEqual([]);
+    expect(page.next).not.toBeNull();
+    expect(await search(reader, page.next)).toMatchObject({ messages: [{ text: "An older needle" }], next: null });
+    expect(await search(reader)).toEqual(page);
+    await expect(search(reader)).rejects.toThrow("RATE_LIMITED");
+    expect(await search(other)).toEqual(page);
+    await expect(search(other)).rejects.toThrow("RATE_LIMITED");
   } finally { await server.cleanup(); }
 });
 
@@ -147,7 +230,8 @@ test("members can read and send in channels they have not joined", async () => {
     const before = await ownerWs.rpc<{ messageId: string }>("message.send", { channelId, text: "Inside" });
     expect(await memberWs.rpc("message.history", { channelId })).toMatchObject([{ id: before.messageId, text: "Inside" }]);
     const outside = await memberWs.rpc<{ messageId: string }>("message.send", { channelId, text: "From outside" });
-    await until(() => ownerWs.received.find(({ type, payload }) => type === "message.created" && payload.id === outside.messageId), Boolean);
+    const event = await until(() => ownerWs.received.find(({ type, payload }) => type === "message.created" && payload.id === outside.messageId), Boolean);
+    expect(event?.payload).toMatchObject({ senderId: member.account.id, senderName: "Outsider" });
     expect(memberWs.received.some(({ payload }) => payload.id === outside.messageId)).toBe(false);
 
     await memberWs.rpc("channel.view", { channelId });

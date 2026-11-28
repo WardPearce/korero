@@ -152,16 +152,22 @@ try {
     }
   } finally {
     historySender.close();
+    await historySender.closed;
   }
   await send(alice, "Second pinned message");
   await setPin("Second pinned message", true);
   await bob.reload();
   await channelLog(bob).getByText("Second pinned message", { exact: true }).waitFor();
+  const offlineMessage = channelLog(bob).getByRole("article").filter({
+    has: bob.getByText("History message 100", { exact: true }),
+  });
+  await offlineMessage.waitFor();
+  assert.equal(await offlineMessage.locator("strong").textContent(), "History sender");
   assert.equal(await channelLog(bob).getByText("First pinned message", { exact: true }).count(), 0);
   const pins = bob.getByRole("dialog", { name: "Pinned messages" });
   const pinRow = (text: string) => pins.getByRole("listitem").filter({ hasText: text });
   await exactButton(bob, "Pinned messages").click();
-  await pinRow("First pinned message").getByRole("button", { name: "Go to message" }).click();
+  await pinRow("First pinned message").getByRole("button", { name: "Jump", exact: true }).click();
   const jumped = channelLog(bob).getByRole("article").filter({ hasText: "First pinned message" });
   await jumped.waitFor();
   assert.ok(await jumped.evaluate((message) => document.activeElement === message));
@@ -171,9 +177,52 @@ try {
   await setPin("Second pinned message", false);
   await pinRow("Second pinned message").waitFor({ state: "hidden" });
   await remove(alice, "First pinned message");
-  await pins.getByText("No pinned messages.", { exact: true }).waitFor();
-  await exactButton(bob, "Close dialog").click();
+  await pins.getByText("This channel doesn't have any pinned messages… yet.", { exact: true }).waitFor();
+  await bob.keyboard.press("Escape");
   console.log("PASS multiple channel pins, a channel reader's jump to old history, and live unpin and deletion");
+
+  const search = bob.getByRole("dialog", { name: "Search messages" });
+  await exactButton(bob, "Search messages").click();
+  await search.getByRole("searchbox", { name: "Search messages" }).fill("history MESSAGE 1");
+  // Highlights split the preview, so match the whole preview text rather than one run.
+  const searchRow = search.getByRole("listitem").filter({ has: bob.locator(".search-body", { hasText: /^\s*History message 1\s*$/ }) });
+  await searchRow.getByRole("button", { name: "Jump", exact: true }).click();
+  const found = channelLog(bob).getByRole("article").filter({ has: bob.getByText("History message 1", { exact: true }) });
+  await found.waitFor();
+  assert.ok(await found.evaluate((message) => document.activeElement === message));
+  // The oldest history message can still be in the loaded window, so earlier messages may not be shown.
+  const latest = exactButton(bob, "Back to latest");
+  if (await latest.isVisible()) await latest.click();
+  console.log("PASS case-insensitive channel search and jump to an old result");
+
+  await send(alice, "Reply target");
+  // The reply quotes the original, so match the message body rather than any text.
+  const original = (page: Page) => channelLog(page).getByRole("article").filter({ has: page.locator(".chat-body", { hasText: /^\s*Reply target\s*$/ }) });
+  const target = original(bob);
+  await target.getByText("Reply target", { exact: true }).click({ button: "right" });
+  await menuItem(bob, "Reply").click();
+  await bob.getByText("Replying to", { exact: false }).waitFor();
+  await bob.getByRole("textbox", { name: "Channel message" }).pressSequentially("Answer for @Alic");
+  await bob.getByRole("option", { name: /Alice SDK/ }).click();
+  await exactButton(bob, "Send message").click();
+  const answer = channelLog(alice).getByRole("article").filter({ hasText: "Answer for" });
+  await answer.getByRole("button", { name: /^Replying to Alice SDK: Reply target/ }).waitFor();
+  await answer.locator(".chat-mention.mine", { hasText: "@Alice SDK" }).waitFor();
+  assert.ok(await answer.evaluate((article) => article.classList.contains("mentioned")));
+
+  const targetId = (await target.getAttribute("id"))!.replace("chat-message-", "");
+  const reactor = await server.ws(await server.register("Reactor"));
+  try {
+    await reactor.rpc("message.react", { channelId: LOBBY, messageId: targetId, emoji: "👍", reacted: true });
+  } finally {
+    reactor.close();
+    await reactor.closed;
+  }
+  await target.getByRole("button", { name: "👍 1 reaction", exact: true }).click();
+  await target.getByRole("button", { name: "👍 2 reactions, including yours", exact: true }).waitFor();
+  const aliceTarget = original(alice);
+  await aliceTarget.getByRole("button", { name: "👍 2 reactions", exact: true }).waitFor();
+  console.log("PASS reply with a picked mention, mention highlight, and live reaction toggles");
 
   await until(() => exactButton(alice, "Attach file").isEnabled(), Boolean);
   await alice.locator(".composer input[type=file]").setInputFiles({
@@ -214,7 +263,13 @@ try {
   console.log("PASS offline direct-message queue, reconnect, acknowledgement, and saved safety code");
 
   await returnedBob.reload();
-  await returnedBob.getByRole("button", { name: /^Direct messages/ }).waitFor();
+  await returnedBob.getByRole("button", { name: /^Direct messages/ }).click();
+  await returnedBob.getByRole("searchbox", { name: "Search your direct messages" }).fill("QUEUED off");
+  await returnedBob.getByRole("button", { name: /Alice SDK.*SDK queued offline/ }).click();
+  const archived = directLog(returnedBob).getByRole("article").filter({ has: returnedBob.getByText("SDK queued offline", { exact: true }) });
+  await archived.waitFor();
+  assert.ok(await archived.evaluate((message) => document.activeElement === message));
+  console.log("PASS local direct-message archive survives a reload and its search opens the conversation");
   await returnedBob.getByRole("link", { name: "Account settings" }).click();
   await returnedBob.getByRole("textbox", { name: "Display name" }).fill("Bobby Renamed");
   await exactButton(returnedBob, "Save name").click();
@@ -253,7 +308,7 @@ try {
   await alice.getByText("Updated message of the day", { exact: true }).waitFor();
   await exactButton(alice, "Users").click();
   await exactButton(alice, "Ban Bobby Renamed").click();
-  await alice.getByRole("combobox", { name: "Ban for Bobby Renamed expires after" }).click();
+  await alice.getByRole("combobox", { name: "Ban Bobby Renamed for" }).click();
   await alice.getByRole("option", { name: "1 hour", exact: true }).click();
   await exactButton(alice, "Confirm ban").click();
   await alice.getByText("Banned Bobby Renamed.").waitFor();
@@ -286,8 +341,8 @@ try {
     await send(page, "SDK desktop mail");
     await channelLog(page).getByText("SDK desktop mail", { exact: true }).waitFor();
     await exactButton(page, "Pinned messages").click();
-    await page.getByRole("dialog", { name: "Pinned messages" }).getByText("No pinned messages.").waitFor();
-    await exactButton(page, "Close dialog").click();
+    await page.getByRole("dialog", { name: "Pinned messages" }).getByText("This channel doesn't have any pinned messages… yet.").waitFor();
+    await page.keyboard.press("Escape");
     await page.getByRole("link", { name: "Account settings" }).click();
     await page.getByRole("textbox", { name: "Display name" }).fill("Electron Renamed");
     await exactButton(page, "Save name").click();

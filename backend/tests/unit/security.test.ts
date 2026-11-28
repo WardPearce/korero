@@ -166,6 +166,9 @@ test("server-side chat markup keeps only the client allowlist", async () => {
   expect(sanitizeChatHtml("<<x>script>alert(1)<</x>/script>")).toBe("&lt;script&gt;alert(1)&lt;/script&gt;");
   expect(sanitizeChatHtml("<!-- hidden --><b>&amp;</b>")).toBe("<b>&amp;</b>");
   expect(sanitizeChatHtml('<ol start="3" type="a"><li>x</li></ol>')).toBe('<ol start="3"><li>x</li></ol>');
+  expect(sanitizeChatHtml('<span data-mention="account:abc" onclick="x()">@A</span> <span data-mention="role:Game night">@Game night</span>'))
+    .toBe('<span data-mention="account:abc">@A</span> <span data-mention="role:Game night">@Game night</span>');
+  expect(sanitizeChatHtml('<span data-mention="channel:x" style="x">@B</span>')).toBe("<span>@B</span>");
 });
 
 test("password work queues fairly and limits each client", async () => {

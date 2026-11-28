@@ -222,12 +222,12 @@
         {#if member.adminDeafened || member.deafened || member.adminMuted || member.muted}
           <span class="member-states">
             {#if member.adminDeafened || member.deafened}
-              <HeadphoneOff size={16} strokeWidth={2.25} class="member-state"
+              <HeadphoneOff size={16} strokeWidth={2.25} class={member.adminDeafened ? "member-state member-state-server" : "member-state"}
                 role="img" aria-label={member.adminDeafened ? "Server deafened" : "Deafened"}
                 title={member.adminDeafened ? "Server deafened" : "Deafened"} />
             {/if}
             {#if member.adminMuted || member.muted}
-              <MicOff size={16} strokeWidth={2.25} class="member-state"
+              <MicOff size={16} strokeWidth={2.25} class={member.adminMuted ? "member-state member-state-server" : "member-state"}
                 role="img" aria-label={member.adminMuted ? "Server muted" : "Muted"}
                 title={member.adminMuted ? "Server muted" : "Muted"} />
             {/if}

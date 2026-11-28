@@ -330,7 +330,7 @@ test("custom role grants, server presentation, and channel order are enforced an
     await server.call(accountRoles, { accountId: admin.account.id, role: "Administrator" }, owner.accessToken, "POST");
     const role = { name: "Listener", permissions: ["join", "manageRoles"] };
     expect((await server.fail(roles, role, member.accessToken)).status).toBe(403);
-    expect((await server.call(roles, role, admin.accessToken)).payload).toEqual(role);
+    expect((await server.call(roles, role, admin.accessToken)).payload).toEqual({ ...role, mentionable: false });
     expect((await server.fail(roles, { ...role, name: "administrator" }, admin.accessToken)).status).toBe(409);
     expect((await server.call(accountRoles, { accountId: member.account.id, role: role.name }, admin.accessToken, "POST")).response.status).toBe(200);
     expect((await server.call(accountRoles, { accountId: member.account.id, role: "Guest" }, admin.accessToken, "POST")).response.status).toBe(200);

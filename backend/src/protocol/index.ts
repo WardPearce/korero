@@ -26,6 +26,7 @@ export const attachmentDataLength = (bytes: number) => Math.ceil(bytes / 3) * 4;
 export const maxProfilePictureBytes = 192 * 1024;
 export const maxScreenVideoBitrate = 12000000;
 const richMessageHtml = optional(text(32768));
+const messageMentions = optional(object({ accounts: optional(list(id, 20)), roles: optional(list(roleName, 5)) }));
 export const httpBodies = {
   identityChallenge: object({ operation: t.UnionEnum(["login", "register", "bootstrap"]),
     publicKey: t.String({ pattern: "^[A-Za-z0-9_-]{43}$" }), deviceName, origin: text(512) }),
@@ -39,7 +40,8 @@ export const httpBodies = {
   }),
   serverPassword: object({ password: nullable(password) }),
   invitationUpdate: object({ expiresAt: optional(nullable(invitationExpiry)), usesLeft: optional(nullable(int(0, 10000))) }),
-  roleDefinition: object({ name: roleName, permissions: list(t.UnionEnum([...permissions]), permissions.length) }),
+  roleDefinition: object({ name: roleName, permissions: list(t.UnionEnum([...permissions]), permissions.length),
+    mentionable: optional(t.Boolean()) }),
   accountBadge: object({ accountId: id, badge: nullable(t.String({
     minLength: 1, maxLength: 32, pattern: "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$",
   })) }),
@@ -56,7 +58,7 @@ export const httpBodies = {
   channelPermissions: object({ changes: list(object({ role: roleName, permission: t.UnionEnum([...channelPermissions]),
     allow: nullable(t.Boolean()) }), 512, 1) }),
   attachmentUpload: object({
-    connectionId: id, channelId: id, text: text(8192, 0), html: richMessageHtml,
+    connectionId: id, channelId: id, text: text(8192, 0), html: richMessageHtml, replyTo: optional(id), mentions: messageMentions,
     name: t.String({ minLength: 1, maxLength: 255, pattern: "^[^\\u0000-\\u001f\\u007f/:\\\\]+$" }),
     data: t.String({ minLength: 4, maxLength: attachmentDataLength(maxSupportedAttachmentMiB * bytesPerMiB), pattern: "^[A-Za-z0-9+/]+={0,2}$" }),
   }),
@@ -156,17 +158,20 @@ export const payloads = {
   "admin.diagnostics": empty,
   "admin.audit": object({ before: optional(int(1, Number.MAX_SAFE_INTEGER)) }),
   "server.settings": object({ name: optional(displayName) }),
-  "message.send": object({ channelId: id, text: text(8192), html: richMessageHtml }),
+  "message.send": object({ channelId: id, text: text(8192), html: richMessageHtml, replyTo: optional(id), mentions: messageMentions }),
   "message.history": object({ channelId: id, before: optional(int(1, Number.MAX_SAFE_INTEGER)) }),
   "message.context": object({ channelId: id, messageId: id }),
   "message.pins": object({ channelId: id, before: optional(object({ id, pinnedAt: int(1, Number.MAX_SAFE_INTEGER) })) }),
   "message.pin": object({ channelId: id, messageId: id, pinned: t.Boolean() }),
+  "message.react": object({ channelId: id, messageId: id, emoji: text(32), reacted: t.Boolean() }),
+  "message.search": object({ channelId: id, query: t.String({ minLength: 1, maxLength: 100, pattern: "\\S" }),
+    before: optional(object({ id, createdAt: int(1, Number.MAX_SAFE_INTEGER) })) }),
   "message.delete": object({ messageId: id }),
   "direct.peer": object(directAccount),
   "direct.inbox": empty,
   "direct.history": object({ ...directAccount, before: optional(directCursor) }),
   "direct.send": object({ ...directAccount, id, nonce: base64url(16), ciphertext: base64url(23, 10944), signature: base64url(86) }),
-  "message.edit": object({ messageId: id, text: text(8192, 0), html: richMessageHtml }),
+  "message.edit": object({ messageId: id, text: text(8192, 0), html: richMessageHtml, mentions: messageMentions }),
   "direct.edit": object({ ...directAccount, id, nonce: base64url(16), ciphertext: base64url(23, 10944), signature: base64url(86) }),
   "direct.delete": object({ ...directAccount, id }),
   "direct.pending": empty,

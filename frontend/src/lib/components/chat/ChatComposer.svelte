@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bold, Code, Italic, List, ListOrdered, Paperclip, Quote, Send, Smile, SquareCode, Strikethrough, Underline, X } from "@lucide/svelte";
+  import { AtSign, Bold, Code, CornerUpLeft, Italic, List, ListOrdered, Paperclip, Quote, Send, Smile, SquareCode, Strikethrough, Underline, Users, X } from "@lucide/svelte";
   import { Tipex, type TipexEditor } from "@friendofsvelte/tipex";
   import { Placeholder } from "@tiptap/extensions";
   import StarterKit from "@tiptap/starter-kit";
@@ -11,13 +11,18 @@
   import IconButton from "#lib/components/IconButton.svelte";
   import { uploadAttachment } from "#lib/chat/chat-attachments";
   import { maxChatHtmlLength, maxChatTextLength, sanitizeChatHtml } from "#lib/chat/rich-chat";
+  import { collectMentions, MentionNode, mentionCandidates, mentionQuery, parseMention, type MentionCandidate } from "#lib/chat/mentions";
   import { getWorkspace } from "#lib/workspace";
 
   type DirectComposer = { busy: boolean; maxBytes: number; send: (text: string, html?: string) => Promise<boolean> };
-  let { channelId, channelName, direct, enabled, disabledHint = "Join a channel to send a message" }: {
+  type ReplyDraft = { id: string; name: string; text: string };
+  let { channelId, channelName, direct, enabled, disabledHint = "Join a channel to send a message", replyTo, oncancelreply }: {
     enabled: boolean;
     /** Placeholder shown while sending is unavailable. */
     disabledHint?: string;
+    /** The channel message this draft answers. */
+    replyTo?: ReplyDraft;
+    oncancelreply?: () => void;
   } & (
     { channelId: string; channelName: string; direct?: never } |
     { channelId?: never; channelName?: never; direct: DirectComposer }
@@ -41,10 +46,19 @@
     : enabled ? `Message #${channelName}` : disabledHint);
   const textLimit = $derived(direct?.maxBytes ?? maxChatTextLength);
   const draftTooLong = $derived(message.length > textLimit);
+  // An `@` query at the caret: `from`/`to` span the `@` and the typed text, in editor positions or input offsets.
+  let mention = $state<{ query: string; from: number; to: number } | null>(null);
+  let activeCandidate = $state(0);
+  /** Mentions inserted into the plain-text input, kept while their `@label` is still in the text. */
+  let plainMentions: MentionCandidate[] = [];
+  const candidates = $derived(!direct && mention && enabled && !busy
+    ? mentionCandidates(workspace.view.snapshot, workspace.view.messages.filter((entry) => entry.channelId === channelId), mention.query) : []);
+  const selectedCandidate = $derived(activeCandidate < candidates.length ? activeCandidate : 0);
   const extensions = [
     StarterKit.configure({ heading: false, horizontalRule: false, trailingNode: false,
       link: { openOnClick: false, defaultProtocol: "https" } }),
     Placeholder.configure({ placeholder: () => placeholder, showOnlyWhenEditable: false }),
+    MentionNode,
   ];
 
   type Editor = NonNullable<TipexEditor>;
@@ -71,11 +85,85 @@
     queueMicrotask(() => draft?.destroy());
   });
 
+  function trackEditorMention(draft: Editor) {
+    const { selection } = draft.state;
+    if (direct || !selection.empty) { mention = null; return; }
+    const caret = selection.$from;
+    const query = mentionQuery(caret.parent.textBetween(0, caret.parentOffset, undefined, "\ufffc"));
+    if (query !== mention?.query) activeCandidate = 0;
+    mention = query === undefined ? null : { query, from: selection.from - query.length - 1, to: selection.from };
+  }
+
+  function trackInputMention() {
+    const caret = field?.selectionStart ?? message.length;
+    const query = direct ? undefined : mentionQuery(message.slice(0, caret));
+    if (query !== mention?.query) activeCandidate = 0;
+    mention = query === undefined ? null : { query, from: caret - query.length - 1, to: caret };
+  }
+
+  async function pickMention(candidate: MentionCandidate) {
+    const range = mention;
+    mention = null;
+    if (!range) return;
+    if (editor) {
+      editor.chain().focus().insertContentAt({ from: range.from, to: range.to }, [
+        { type: "mention", attrs: { mention: `${candidate.kind}:${candidate.target}`, label: candidate.label } },
+        { type: "text", text: " " },
+      ]).run();
+      return;
+    }
+    const inserted = `@${candidate.label} `;
+    const next = message.slice(0, range.from) + inserted + message.slice(range.to);
+    if (next.length > maxChatTextLength) return;
+    message = next;
+    plainMentions = [...plainMentions, candidate];
+    await tick();
+    field?.focus();
+    field?.setSelectionRange(range.from + inserted.length, range.from + inserted.length);
+  }
+
+  /** Handles suggestion navigation; returns true when the key was used. */
+  function mentionKeys(event: KeyboardEvent) {
+    if (event.key === "Escape" && !candidates.length && replyTo) {
+      oncancelreply?.();
+      return true;
+    }
+    if (!candidates.length) return false;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      activeCandidate = (selectedCandidate + step + candidates.length) % candidates.length;
+      return true;
+    }
+    if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && !event.isComposing) {
+      void pickMention(candidates[selectedCandidate]!);
+      return true;
+    }
+    if (event.key === "Escape") {
+      mention = null;
+      return true;
+    }
+    return false;
+  }
+
+  function draftMentions() {
+    if (editor) {
+      const picked: { kind: "account" | "role"; target: string }[] = [];
+      editor.state.doc.descendants((node) => {
+        const parsed = node.type.name === "mention" ? parseMention(node.attrs.mention as string) : undefined;
+        if (parsed) picked.push(parsed);
+      });
+      return collectMentions(picked);
+    }
+    return collectMentions(plainMentions.filter(({ label }) => message.includes(`@${label}`)));
+  }
+
   function configureEditor({ editor: draft }: { editor: Editor }) {
+    draft.on("selectionUpdate", () => trackEditorMention(draft));
     draft.setOptions({ editorProps: {
       attributes: { "aria-label": label, "aria-multiline": "true", role: "textbox" },
       transformPastedHTML: sanitizeChatHtml,
       handleKeyDown(view, event) {
+        if (draft.isEditable && mentionKeys(event)) { event.preventDefault(); return true; }
         if (!draft.isEditable || event.key !== "Enter" || event.isComposing || view.composing || event.keyCode === 229 || event.shiftKey || event.altKey) return false;
         if (!direct && !event.ctrlKey && !event.metaKey && (draft.isActive("listItem") || draft.isActive("codeBlock"))) return false;
         view.dom.closest("form")?.requestSubmit();
@@ -182,7 +270,9 @@
       return;
     }
     if (attachment && !validAttachment(attachment)) return;
-    const payload = { channelId, text, html };
+    const mentions = draftMentions();
+    const reply = replyTo?.id;
+    const payload = { channelId, text, html, ...(reply ? { replyTo: reply } : {}), ...(mentions ? { mentions } : {}) };
     const limit = workspace.maxWebSocketBytes;
     if (!attachment && limit !== undefined) {
       const request = JSON.stringify({ version: 1, id: Number.MAX_SAFE_INTEGER, type: "message.send", payload });
@@ -193,12 +283,16 @@
     }
     const origin = workspace.serverOrigin;
     const sent = attachment
-      ? await workspace.runAction("message", () => uploadAttachment(origin, snapshot.connectionId, channelId, text, attachment, html))
+      ? await workspace.runAction("message", () => uploadAttachment(origin, snapshot.connectionId, channelId, text, attachment, html,
+        { replyTo: reply, mentions }))
       : await workspace.run("message", "send_message", payload);
     if (sent) {
       editor?.commands.clearContent();
       message = "";
       file = undefined;
+      plainMentions = [];
+      mention = null;
+      if (reply) oncancelreply?.();
     }
   }
 </script>
@@ -223,7 +317,32 @@
   </Button>
 {/snippet}
 
-<form class="composer" class:formatted={rich} onsubmit={send} ondragover={dragOver} ondrop={dropFile}>
+<form class="composer" class:formatted={rich} class:replying={Boolean(replyTo)} onsubmit={send} ondragover={dragOver} ondrop={dropFile}>
+  {#if replyTo}
+    <div class="reply-draft" role="status">
+      <CornerUpLeft size={14} aria-hidden="true" />
+      <span class="reply-draft-label">
+        <span class="reply-draft-heading">Replying to <strong>{replyTo.name}</strong></span>
+        {#if replyTo.text}<span class="reply-draft-text">{replyTo.text}</span>{/if}
+      </span>
+      <button type="button" class="reply-draft-cancel" aria-label="Cancel reply" title="Cancel reply (Esc)" disabled={busy}
+        onclick={() => oncancelreply?.()}><X size={14} aria-hidden="true" /></button>
+    </div>
+  {/if}
+  {#if candidates.length}
+    <ul class="mention-suggestions" role="listbox" aria-label="Mention suggestions">
+      {#each candidates as candidate, index (candidate.kind + candidate.target)}
+        <li role="option" aria-selected={index === selectedCandidate}>
+          <button type="button" tabindex="-1" onmousedown={(event) => event.preventDefault()} onclick={() => void pickMention(candidate)}
+            onmouseenter={() => { activeCandidate = index; }}>
+            {#if candidate.kind === "role"}<Users size={14} aria-hidden="true" />{:else}<AtSign size={14} aria-hidden="true" />{/if}
+            <span class="truncate">{candidate.label}</span>
+            {#if candidate.kind === "role"}<span class="mention-kind">Role</span>{/if}
+          </button>
+        </li>
+      {/each}
+    </ul>
+  {/if}
   {#if file}
     <div class="attachment-draft">
       <Paperclip size={15} />
@@ -237,6 +356,7 @@
         oncreate={configureEditor} onupdate={({ editor: draft }) => {
           message = draft.getText({ blockSeparator: "\n" });
           formattingError = "";
+          trackEditorMention(draft);
         }} />
       <div class="editor-footer">
         <div class="formatting" role="group" aria-label="Message formatting">
@@ -252,7 +372,9 @@
     {#if draftTooLong}<p class="draft-limit" role="status">Messages can contain up to {textLimit} characters.</p>{/if}
   {:else}
     <Input aria-label={label} {placeholder} disabled={!enabled || busy} maxlength={maxChatTextLength}
-      bind:ref={field} bind:value={message} />
+      bind:ref={field} bind:value={message} oninput={trackInputMention} onclick={trackInputMention}
+      onkeyup={(event) => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") trackInputMention(); }}
+      onkeydown={(event) => { if (mentionKeys(event)) event.preventDefault(); }} onblur={() => { mention = null; }} />
     <div class="message-actions">{@render actions()}</div>
   {/if}
 </form>
@@ -278,6 +400,56 @@
   .formatting :global(.icon-button:hover) { background: var(--control-hover); }
   .formatting :global(.icon-button[aria-pressed="true"]) { background: var(--control-selected); color: var(--primary); }
   .draft-limit { color: var(--destructive); font-size: var(--type-caption); }
-  .attachment-draft { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
+  .attachment-draft, .reply-draft { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
+  .reply-draft {
+    min-width: 0;
+    padding: .35rem .35rem .35rem .65rem;
+    border: 1px solid var(--border);
+    border-inline-start: 3px solid var(--primary);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--primary) 7%, var(--background));
+    color: var(--muted-foreground);
+    font-size: var(--type-caption);
+  }
+  /* In the rich editor the strip sits on top of the editor as one control. */
+  .composer.formatted.replying .reply-draft { margin-bottom: -8px; border-bottom: 0; border-end-start-radius: 0; border-end-end-radius: 0; }
+  .composer.formatted.replying .rich-editor { border-start-start-radius: 0; border-start-end-radius: 0; }
+  .reply-draft :global(svg) { flex: none; }
+  .reply-draft > :global(svg) { color: var(--primary); }
+  .reply-draft-label { display: flex; flex: 1; align-items: baseline; gap: 8px; min-width: 0; }
+  .reply-draft-heading { flex: none; }
+  .reply-draft-heading strong { color: var(--foreground); font-weight: 600; }
+  .reply-draft-text { min-width: 0; overflow: hidden; color: color-mix(in srgb, var(--foreground) 65%, transparent); text-overflow: ellipsis; white-space: nowrap; }
+  .reply-draft-cancel {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 999px;
+    color: var(--muted-foreground);
+  }
+  .reply-draft-cancel:not(:disabled):hover { background: var(--control-hover); color: var(--foreground); }
+  .reply-draft-cancel:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+  .composer { position: relative; }
+  .mention-suggestions {
+    position: absolute;
+    inset-inline: 0;
+    bottom: calc(100% + 4px);
+    z-index: 20;
+    display: grid;
+    max-height: 16rem;
+    overflow-y: auto;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--popover);
+    color: var(--popover-foreground);
+    box-shadow: 0 8px 24px rgb(0 0 0 / .18);
+  }
+  .mention-suggestions button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border-radius: var(--radius-sm); text-align: start; }
+  .mention-suggestions [aria-selected="true"] button { background: var(--control-selected); }
+  .mention-kind { margin-inline-start: auto; color: var(--muted-foreground); font-size: var(--type-small); }
+  .rich-editor :global(.tiptap [data-mention]) { padding: 0 .2em; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); font-weight: 600; }
   .attachment-draft :global(svg) { flex: none; }
 </style>

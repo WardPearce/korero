@@ -6,8 +6,9 @@
   import VoiceBitrateField from "#lib/components/fields/VoiceBitrateField.svelte";
   import { Textarea } from "#lib/components/ui/textarea/index.js";
   import { onMount, untrack } from "svelte";
-  import { Settings2, X } from "@lucide/svelte";
+  import { Search, Settings2, X } from "@lucide/svelte";
   import IconButton from "#lib/components/IconButton.svelte";
+  import Avatar from "#lib/components/Avatar.svelte";
   import ServerAuditLog from "./ServerAuditLog.svelte";
   import { apiFor, messageFrom, requestError } from "#lib/connection/client";
   import { getWorkspace } from "#lib/workspace";
@@ -90,12 +91,51 @@
   let roleName = $state("");
   let selectedTemplate = $state("");
   let rolePermissions = $state<Permission[]>([]);
+  let roleMentionable = $state(false);
   const roleDefaults = $derived(members?.builtInRoles?.find(({ name }) => name === editedRole)?.defaultPermissions);
   const editingDefaultRole = $derived(Boolean(editedRole && editedRole === members?.defaultRole));
   const templateOptions = $derived(roleTemplates.filter(({ permissions }) =>
     permissions.every((permission) => members?.assignablePermissions.includes(permission)))
     .map(({ name }) => ({ label: name, value: name })));
   const roleOptions = $derived((members?.roles ?? []).map((role) => ({ label: role, value: role })));
+
+  type RoleRow = RoleDefinition & { builtIn: boolean; editable: boolean; deletable: boolean };
+  let roleSearch = $state("");
+  let roleFilter = $state<Permission | "any">("any");
+  /** Built-in roles first, in rank order, then custom roles in the order the server lists them. */
+  const roleRows = $derived<RoleRow[]>(members ? [
+    ...(members.builtInRoles ?? []).map((role) => ({ ...role, builtIn: true, deletable: false })),
+    ...members.customRoles.map((role) => ({ ...role, builtIn: false, editable: true, deletable: extended })),
+  ] : []);
+  const visibleRoles = $derived.by(() => {
+    const term = roleSearch.trim().toLocaleLowerCase();
+    return roleRows.filter((role) => (!term || role.name.toLocaleLowerCase().includes(term)) &&
+      (roleFilter === "any" || role.permissions.includes(roleFilter)));
+  });
+  const permissionFilterOptions = $derived([
+    { value: "any" as const, label: "Any permission" },
+    ...permissionGroups.flatMap(({ permissions }) => permissions)
+      .filter((permission) => roleRows.some((role) => role.permissions.includes(permission)))
+      .map((permission) => ({ value: permission, label: permissionLabels[permission] })),
+  ]);
+  const totalPermissions = $derived(Math.max(members?.assignablePermissions.length ?? 0,
+    ...roleRows.map(({ permissions }) => permissions.length)));
+
+  type UserStatus = "all" | "active" | "banned";
+  let userSearch = $state("");
+  let userRole = $state("any");
+  let userStatus = $state<UserStatus>("all");
+  let filterTimer: ReturnType<typeof setTimeout> | undefined;
+  const usersFiltered = $derived(Boolean(userSearch.trim()) || userRole !== "any" || userStatus !== "all");
+  const userRoleOptions = $derived([
+    { value: "any", label: "All roles" },
+    ...(members?.allRoles ?? members?.roles ?? []).map((role) => ({ value: role, label: role })),
+  ]);
+  const userStatusOptions: { value: UserStatus; label: string }[] = [
+    { value: "all", label: "Any status" },
+    { value: "active", label: "Not banned" },
+    { value: "banned", label: "Banned" },
+  ];
   let serverPreferences = $state.raw<ServerPreferences | null>(null);
   let motd = $state("");
   let defaultRole = $state("");
@@ -111,7 +151,33 @@
   onMount(() => {
     heading.focus();
     if (availableTabs[0]) void selectTab(availableTabs[0].id);
+    return () => clearTimeout(filterTimer);
   });
+
+  function memberQuery(after: string | undefined) {
+    return {
+      after,
+      search: userSearch.trim() || undefined,
+      role: userRole === "any" ? undefined : userRole,
+      status: userStatus === "all" ? undefined : userStatus,
+    };
+  }
+
+  /** Reloads the first page with the current filters, waiting out any request already running. */
+  function filterUsers(delay = 0) {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(() => {
+      if (busy) filterUsers(100);
+      else void loadMembers([undefined]);
+    }, delay);
+  }
+
+  function clearUserFilters() {
+    userSearch = "";
+    userRole = "any";
+    userStatus = "all";
+    filterUsers();
+  }
 
   function expiryTimestamp(choice: ExpiryOption): number | null {
     if (choice === "Never") return null;
@@ -139,7 +205,7 @@
 
   async function loadMembers(nextPages: (string | undefined)[]) {
     await run(async () => {
-      const response = await apiFor(origin).admin.accounts.get({ query: { after: nextPages.at(-1) } });
+      const response = await apiFor(origin).admin.accounts.get({ query: memberQuery(nextPages.at(-1)) });
       if (response.error) throw requestError(response.error);
       if (!response.data || !("accounts" in response.data)) throw requestError({ value: response.data });
       members = response.data;
@@ -150,7 +216,7 @@
 
   /** Reloads the open page in the background, leaving notices and any badge being edited alone. */
   async function refreshMembers() {
-    const response = await apiFor(origin).admin.accounts.get({ query: { after: pages.at(-1) } });
+    const response = await apiFor(origin).admin.accounts.get({ query: memberQuery(pages.at(-1)) });
     if (!response.error && response.data && "accounts" in response.data) members = response.data;
   }
 
@@ -249,6 +315,7 @@
     editedRole = role?.name ?? "";
     roleName = editedRole;
     rolePermissions = [...role?.permissions ?? []];
+    roleMentionable = role?.mentionable ?? false;
     roleEditing = true;
   }
 
@@ -326,7 +393,7 @@
   function saveRole(event: SubmitEvent) {
     event.preventDefault();
     void run(async () => {
-      const body = { name: roleName.trim(), permissions: rolePermissions };
+      const body = { name: roleName.trim(), permissions: rolePermissions, mentionable: roleMentionable };
       const api = apiFor(origin).admin.roles;
       const response = editedRole ? await api.definition.patch(body) : await api.post(body);
       if (response.error) throw requestError(response.error);
@@ -338,7 +405,7 @@
         members = {
           ...members,
           roles: editedRole ? members.roles : [...members.roles, role.name],
-          builtInRoles: builtInRoles.map((item) => item.name === role.name ? { ...item, permissions: role.permissions } : item),
+          builtInRoles: builtInRoles.map((item) => item.name === role.name ? { ...item, permissions: role.permissions, mentionable: role.mentionable } : item),
           customRoles: isBuiltIn ? members.customRoles :
             editedRole ? members.customRoles.map((item) => item.name === role.name ? role : item) : [...members.customRoles, role],
         };
@@ -431,6 +498,10 @@
   }
 </script>
 
+{#snippet panelHeading(title: string, hint: string)}
+  <div class="panel-heading"><div><h3>{title}</h3><p class="field-hint">{hint}</p></div></div>
+{/snippet}
+
 <header class="workspace-header">
   <div class="heading-icon"><Settings2 size={19} aria-hidden="true" /></div>
   <div class="flex-content">
@@ -458,36 +529,45 @@
         <Button variant="outline" onclick={loadPreferences}>Load server settings</Button>
       {/if}
       {#if (extended && serverPreferences) || bannerSupported}
-        <form class="dialog-form" onsubmit={saveSettings}>
+        <form class="dialog-form admin-form" onsubmit={saveSettings}>
           {#if extended && serverPreferences}
-            <label>Message of the day
-              <Textarea rows={4} maxlength={1000} disabled={busy} bind:value={motd} placeholder="Leave blank to hide the message" />
-            </label>
-            <p class="field-hint">Appears above the chat for connected members.</p>
-            {#if serverPreferences.audioBitrateLocked}
-              <VoiceBitrateField label="Default voice bitrate" defaultLabel="Server configuration"
-                defaultBitrate={serverPreferences.configuredAudioBitrate} value={null} disabled />
-            {:else}
-              <VoiceBitrateField label="Default voice bitrate" defaultLabel="Server configuration"
-                defaultBitrate={serverPreferences.configuredAudioBitrate} savedBitrate={serverPreferences.defaultAudioBitrate}
-                bind:value={voiceBitrate} disabled={busy} />
-            {/if}
-            <p class="field-hint">{serverPreferences.audioBitrateLocked ? "The server environment sets this value." :
-              "Used by voice channels that inherit the default."}</p>
-            {#if serverPreferences.maxSupportedAttachmentMiB !== undefined}
-              <label>Maximum chat attachment size (MiB)
-                <Input type="number" min="1" max={serverPreferences.maxSupportedAttachmentMiB} step="1" required
-                  disabled={busy} bind:value={attachmentMiB} />
+            <section class="admin-panel">
+              {@render panelHeading("General", "What members see when they connect, and the role new accounts start with.")}
+              <label>Message of the day
+                <Textarea rows={4} maxlength={1000} disabled={busy} bind:value={motd} placeholder="Leave blank to hide the message" />
               </label>
-            {/if}
-            <SelectField label="Default role for new members" options={defaultRoleOptions} bind:value={defaultRole}
-              disabled={busy || !serverPreferences.canSetDefaultRole || defaultRoleOptions.length < 2} />
-            <p class="field-hint">New accounts get this role when they register.</p>
+              <p class="field-hint">Appears above the chat for connected members.</p>
+              <SelectField label="Default role for new members" options={defaultRoleOptions} bind:value={defaultRole}
+                disabled={busy || !serverPreferences.canSetDefaultRole || defaultRoleOptions.length < 2} />
+              <p class="field-hint">New accounts get this role when they register.</p>
+            </section>
+            <section class="admin-panel">
+              {@render panelHeading("Voice and chat", "Defaults for voice quality and file uploads.")}
+              {#if serverPreferences.audioBitrateLocked}
+                <VoiceBitrateField label="Default voice bitrate" defaultLabel="Server configuration"
+                  defaultBitrate={serverPreferences.configuredAudioBitrate} value={null} disabled />
+              {:else}
+                <VoiceBitrateField label="Default voice bitrate" defaultLabel="Server configuration"
+                  defaultBitrate={serverPreferences.configuredAudioBitrate} savedBitrate={serverPreferences.defaultAudioBitrate}
+                  bind:value={voiceBitrate} disabled={busy} />
+              {/if}
+              <p class="field-hint">{serverPreferences.audioBitrateLocked ? "The server environment sets this value." :
+                "Used by voice channels that inherit the default."}</p>
+              {#if serverPreferences.maxSupportedAttachmentMiB !== undefined}
+                <label>Maximum chat attachment size (MiB)
+                  <Input type="number" min="1" max={serverPreferences.maxSupportedAttachmentMiB} step="1" required
+                    disabled={busy} bind:value={attachmentMiB} />
+                </label>
+              {/if}
+            </section>
           {/if}
           {#if bannerSupported}
-            <label>Banner image URL<Input type="url" pattern="https://.+" maxlength={512} placeholder="https://example.com/banner.jpg"
-              disabled={busy} bind:value={bannerUrl} /></label>
-            <p class="field-hint">Clear the URL to remove the banner.</p>
+            <section class="admin-panel">
+              {@render panelHeading("Appearance", "The image shown at the top of the channel list.")}
+              <label>Banner image URL<Input type="url" pattern="https://.+" maxlength={512} placeholder="https://example.com/banner.jpg"
+                disabled={busy} bind:value={bannerUrl} /></label>
+              <p class="field-hint">Clear the URL to remove the banner.</p>
+            </section>
           {/if}
           <div class="dialog-actions">
             <Button variant="default" type="submit" disabled={busy || (!preferencesChanged && !bannerChanged)}>Save settings</Button>
@@ -499,12 +579,21 @@
     {:else if tab === "roles" && permissions.includes("manageRoles")}
       {#if members}
         {#if members.canDefineRoles}
-          <section class="role-settings" aria-label="Role definitions">
-            <div class="role-heading">
-              <h3>{roleEditing ? editedRole ? `Edit ${editedRole}` : "Create role" : "Role permissions"}</h3>
-              {#if !roleEditing}<Button variant="outline" disabled={busy} onclick={() => editRole()}>Create role</Button>{/if}
+          {#if !roleEditing}
+            <div class="admin-toolbar">
+              <label class="search-field">
+                <span class="sr-only">Search roles</span>
+                <Search size={16} aria-hidden="true" />
+                <Input type="search" placeholder="Search roles" bind:value={roleSearch} />
+              </label>
+              <SelectField label="Filter roles by permission" hideLabel options={permissionFilterOptions}
+                bind:value={roleFilter} />
             </div>
+          {/if}
+          <section class="admin-panel" aria-label="Role definitions">
             {#if roleEditing}
+              {@render panelHeading(editedRole ? `Edit ${editedRole}` : "Create a role",
+                editedRole ? "Choose what members with this role can do." : "Start from a template or pick permissions yourself.")}
               <form class="dialog-form" onsubmit={saveRole}>
                 {#if !editedRole}
                   <SelectField label="Start from a template" placeholder="Choose a template (optional)" options={templateOptions}
@@ -517,6 +606,8 @@
                 {#if members.assignablePermissions.includes("shareScreen")}
                   <p class="field-hint">Screen sharing, camera, and whispering also require voice access. Attachments require channel chat access.</p>
                 {/if}
+                <Checkbox label="Allow anyone to @mention this role" disabled={busy} bind:checked={roleMentionable} />
+                <p class="field-hint">Members holding the role hear a sound when someone mentions it.</p>
                 <div class="permission-groups">
                   {#each permissionGroups as group (group.label)}
                     {@const options = group.permissions.filter((permission) => members?.assignablePermissions.includes(permission))}
@@ -542,40 +633,43 @@
                 </div>
               </form>
             {:else}
-              {#if members.builtInRoles?.length}
-                <h4>Built-in roles</h4>
-                <ul class="role-list">
-                  {#each members.builtInRoles as role (role.name)}
-                    <li>
-                      <div>
-                        <strong>{role.name}</strong>
-                        {#if members.defaultRole === role.name}<p class="field-hint">Default for new accounts</p>{/if}
-                      </div>
-                      {#if role.editable}
-                        <Button variant="outline" aria-label={`Edit permissions for ${role.name}`} disabled={busy} onclick={() => editRole(role)}>Edit</Button>
-                      {:else}
-                        <span class="field-hint">Full server access</span>
-                      {/if}
-                    </li>
-                  {/each}
-                </ul>
+              <div class="panel-heading">
+                <h3>Roles</h3>
+                <div class="panel-heading-actions">
+                  <span class="panel-count" title="Roles">{roleRows.length}</span>
+                  <Button variant="outline" disabled={busy} onclick={() => editRole()}>Create role</Button>
+                </div>
+              </div>
+              {#if visibleRoles.length < roleRows.length}
+                <p class="field-hint" role="status">Showing {visibleRoles.length} of {roleRows.length} roles.</p>
               {/if}
-              <h4>Custom roles</h4>
-              {#if members.customRoles.length}
-                <ul class="role-list">
-                  {#each members.customRoles as role (role.name)}
+              {#if visibleRoles.length}
+                <ul class="admin-members">
+                  {#each visibleRoles as role (role.name)}
                     <li>
-                      <div class="shrinkable">
-                        <strong class="truncate" title={role.name}>{role.name}</strong>
-                        {#if members.defaultRole === role.name}<p class="field-hint">Default for new accounts</p>{/if}
+                      <div class="shrinkable role-summary">
+                        <div class="role-title">
+                          <strong class="truncate" title={role.name}>{role.name}</strong>
+                          <span class="member-badge">{role.builtIn ? "Built-in" : "Custom"}</span>
+                          {#if members.defaultRole === role.name}<span class="member-badge member-role">Default</span>{/if}
+                        </div>
+                        <p class="field-hint">
+                          {role.permissions.length === totalPermissions ? "All permissions" :
+                            `${role.permissions.length} of ${totalPermissions} permissions`}
+                          {#if roleFilter !== "any"} · includes {permissionLabels[roleFilter].toLocaleLowerCase()}{/if}
+                        </p>
                       </div>
                       <div class="dialog-actions">
                         {#if deletingRole === role.name}
                           <Button variant="outline" disabled={busy} onclick={() => { deletingRole = ""; }}>Cancel</Button>
-                          <Button variant="default" disabled={busy} onclick={() => deleteRole(role.name)}>Confirm deletion</Button>
+                          <Button variant="destructive" disabled={busy} onclick={() => deleteRole(role.name)}>Confirm deletion</Button>
                         {:else}
-                          <Button variant="outline" aria-label={`Edit permissions for ${role.name}`} disabled={busy} onclick={() => editRole(role)}>Edit</Button>
-                          {#if extended}
+                          {#if role.editable}
+                            <Button variant="outline" aria-label={`Edit permissions for ${role.name}`} disabled={busy} onclick={() => editRole(role)}>Edit</Button>
+                          {:else}
+                            <span class="field-hint">Not editable</span>
+                          {/if}
+                          {#if role.deletable}
                             <Button variant="outline" aria-label={`Delete ${role.name}`} disabled={busy} onclick={() => { deletingRole = role.name; }}>Delete</Button>
                           {/if}
                         {/if}
@@ -584,80 +678,115 @@
                   {/each}
                 </ul>
               {:else}
-                <p class="field-hint">No custom roles yet.</p>
+                <p class="field-hint">No roles match.</p>
               {/if}
             {/if}
           </section>
         {:else}
-          <p class="field-hint">You can view and assign member roles from the Users tab.</p>
+          <section class="admin-panel">
+            {@render panelHeading("Roles", "You can view and assign member roles from the Users tab.")}
+          </section>
         {/if}
       {:else if !busy}
         <Button variant="outline" onclick={() => loadMembers(pages)}>Load roles</Button>
       {/if}
     {:else if tab === "users" && permissions.includes("manageRoles")}
+      <div class="admin-toolbar">
+        <label class="search-field">
+          <span class="sr-only">Search users</span>
+          <Search size={16} aria-hidden="true" />
+          <Input type="search" placeholder="Search by name or account ID" maxlength={100}
+            bind:value={userSearch} oninput={() => filterUsers(250)} />
+        </label>
+        <SelectField label="Filter users by role" hideLabel options={userRoleOptions} disabled={!members}
+          bind:value={() => userRole, (role) => { if (role === userRole) return; userRole = role; filterUsers(); }} />
+        <SelectField label="Filter users by ban status" hideLabel options={userStatusOptions} disabled={!members}
+          bind:value={() => userStatus, (status) => { if (status === userStatus) return; userStatus = status; filterUsers(); }} />
+        {#if usersFiltered}
+          <Button variant="ghost" onclick={clearUserFilters}>Clear filters</Button>
+        {/if}
+      </div>
+      <section class="admin-panel" aria-label="Users">
+      <div class="panel-heading">
+        <h3>Users</h3>
+        {#if members}<span class="panel-count" title="Users on this page">{members.accounts.length}{members.next ? "+" : ""}</span>{/if}
+      </div>
       {#if members}
-        <ul class="admin-members">
+        {#if !members.accounts.length}
+          <p class="field-hint">{usersFiltered ? "No users match these filters." : "No users yet."}</p>
+        {/if}
+        <ul class="admin-members user-list">
           {#each members.accounts as account (account.id)}
+            {@const addable = account.editable ? roleOptions.filter(({ value }) => !heldRoles(account).includes(value)) : []}
             <li>
-              <span class="shrinkable">
-                <strong class="truncate" title={account.displayName}>{account.displayName}</strong>
-                {#if account.badge}<span class="member-badge" title={account.badge}>{account.badge}</span>{/if}
-                {#if account.banned}
-                  <span class="member-badge banned-tag" title={account.bannedUntil ? `Banned until ${new Date(account.bannedUntil).toLocaleString()}` : "Banned permanently"}>
-                    {account.bannedUntil ? `Banned until ${new Date(account.bannedUntil).toLocaleDateString()}` : "Banned"}
-                  </span>
-                {/if}
+              <Avatar name={account.displayName} accountId={account.id} small />
+              <div class="shrinkable user-details">
+                <div class="role-title">
+                  <strong class="truncate" title={account.displayName}>{account.displayName}</strong>
+                  {#if account.badge}<span class="member-badge" title={account.badge}>{account.badge}</span>{/if}
+                  {#if account.banned}
+                    <span class="member-badge banned-tag" title={account.bannedUntil ? `Banned until ${new Date(account.bannedUntil).toLocaleString()}` : "Banned permanently"}>
+                      {account.bannedUntil ? `Banned until ${new Date(account.bannedUntil).toLocaleDateString()}` : "Banned"}
+                    </span>
+                  {/if}
+                </div>
                 <small class="field-hint">{account.id}</small>
-              </span>
-              <span class="role-chips" aria-label={`Roles for ${account.displayName}`}>
-                {#each heldRoles(account) as role (role)}
-                  <span class="member-badge member-role role-chip">
-                    {role}
-                    {#if removable(account, role)}
-                      <button type="button" class="role-chip-remove" disabled={busy}
-                        aria-label={`Remove ${role} from ${account.displayName}`} title={`Remove ${role}`}
-                        onclick={() => void changeRole(account, role, false)}><X /></button>
-                    {/if}
-                  </span>
-                {/each}
-              </span>
-              {#if account.editable}
-                {@const addable = roleOptions.filter(({ value }) => !heldRoles(account).includes(value))}
-                {#if addable.length}
-                  <SelectField label={`Add a role for ${account.displayName} (${account.id})`} hideLabel placeholder="Add role"
-                    options={addable} disabled={busy}
-                    bind:value={() => undefined, (role) => void changeRole(account, role, true)} />
-                {/if}
-              {/if}
-              {#if account.editable && account.badge !== undefined}
-                {#if editingBadge === account.id}
-                  <form class="badge-form" onsubmit={(event) => saveBadge(event, account)}>
-                    <label>Badge for {account.displayName}<Input bind:value={badgeDraft} maxlength={32} disabled={busy} /></label>
-                    <p class="field-hint">Clear the label to remove the badge.</p>
-                    <div class="dialog-actions">
-                      <Button variant="outline" type="button" disabled={busy} onclick={() => { editingBadge = ""; }}>Cancel</Button>
-                      <Button type="submit" disabled={busy || (badgeDraft.trim() || null) === account.badge}>Save badge</Button>
+                <div class="role-chips" aria-label={`Roles for ${account.displayName}`}>
+                  {#each heldRoles(account) as role (role)}
+                    <span class="member-badge member-role role-chip">
+                      {role}
+                      {#if removable(account, role)}
+                        <button type="button" class="role-chip-remove" disabled={busy}
+                          aria-label={`Remove ${role} from ${account.displayName}`} title={`Remove ${role}`}
+                          onclick={() => void changeRole(account, role, false)}><X /></button>
+                      {/if}
+                    </span>
+                  {/each}
+                  {#if addable.length}
+                    <div class="add-role">
+                      <SelectField label={`Add a role for ${account.displayName} (${account.id})`} hideLabel placeholder="Add role"
+                        options={addable} disabled={busy}
+                        bind:value={() => undefined, (role) => void changeRole(account, role, true)} />
                     </div>
-                  </form>
-                {:else}
+                  {/if}
+                </div>
+              </div>
+              <div class="dialog-actions user-actions">
+                {#if account.editable && account.badge !== undefined && editingBadge !== account.id}
                   <Button variant="outline" disabled={busy} aria-label={`${account.badge ? "Edit" : "Set"} badge for ${account.displayName}`}
                     onclick={() => editBadge(account)}>{account.badge ? "Edit badge" : "Set badge"}</Button>
                 {/if}
-              {/if}
-              {#if account.bannable}
-                {#if banningAccount === account.id}
-                  {#if !account.banned}
-                    <SelectField label={`Ban for ${account.displayName} expires after`} hideLabel
-                      options={banDurationOptions} disabled={busy} bind:value={banDuration} />
-                  {/if}
-                  <Button variant="outline" disabled={busy} onclick={() => { banningAccount = ""; }}>Cancel</Button>
-                  <Button variant="default" disabled={busy} onclick={() => toggleBan(account)}>
-                    {account.banned ? "Confirm unban" : "Confirm ban"}
-                  </Button>
-                {:else}
-                  <Button variant="outline" disabled={busy} aria-label={`${account.banned ? "Unban" : "Ban"} ${account.displayName}`}
+                {#if account.bannable && banningAccount !== account.id}
+                  <Button variant={account.banned ? "outline" : "destructive"} disabled={busy}
+                    aria-label={`${account.banned ? "Unban" : "Ban"} ${account.displayName}`}
                     onclick={() => { banningAccount = account.id; banDuration = "never"; }}>{account.banned ? "Unban" : "Ban"}</Button>
                 {/if}
+              </div>
+              {#if account.editable && account.badge !== undefined && editingBadge === account.id}
+                <form class="user-panel" onsubmit={(event) => saveBadge(event, account)}>
+                  <label>Badge for {account.displayName}<Input bind:value={badgeDraft} maxlength={32} disabled={busy} /></label>
+                  <p class="field-hint">Clear the label to remove the badge.</p>
+                  <div class="dialog-actions">
+                    <Button variant="outline" type="button" disabled={busy} onclick={() => { editingBadge = ""; }}>Cancel</Button>
+                    <Button type="submit" disabled={busy || (badgeDraft.trim() || null) === account.badge}>Save badge</Button>
+                  </div>
+                </form>
+              {/if}
+              {#if account.bannable && banningAccount === account.id}
+                <div class="user-panel" role="group" aria-label={`${account.banned ? "Unban" : "Ban"} ${account.displayName}`}>
+                  {#if account.banned}
+                    <p>Allow {account.displayName} to connect again?</p>
+                  {:else}
+                    <SelectField label={`Ban ${account.displayName} for`} options={banDurationOptions} disabled={busy} bind:value={banDuration} />
+                    <p class="field-hint">They are disconnected and cannot sign in until the ban ends.</p>
+                  {/if}
+                  <div class="dialog-actions">
+                    <Button variant="outline" disabled={busy} onclick={() => { banningAccount = ""; }}>Cancel</Button>
+                    <Button variant={account.banned ? "default" : "destructive"} disabled={busy} onclick={() => toggleBan(account)}>
+                      {account.banned ? "Confirm unban" : "Confirm ban"}
+                    </Button>
+                  </div>
+                </div>
               {/if}
             </li>
           {/each}
@@ -669,12 +798,14 @@
           </div>
         {/if}
       {:else if !busy}
-        <Button variant="outline" onclick={() => loadMembers(pages)}>Load users</Button>
+        <Button variant="outline" class="fit-action" onclick={() => loadMembers(pages)}>Load users</Button>
       {/if}
+      </section>
     {:else if tab === "invitation" && permissions.includes("manageInvitations")}
       <form class="dialog-form" onsubmit={saveInvitation}>
-        <section class="invite-panel">
-        <div class="invite-heading"><div><h3>{editedInvitation ? `Edit invitation ${editedInvitation.id.slice(0, 8)}` : "Create an invitation"}</h3><p class="field-hint">Choose how many people can join and when this link expires.</p></div></div>
+        <section class="admin-panel">
+        {@render panelHeading(editedInvitation ? `Edit invitation ${editedInvitation.id.slice(0, 8)}` : "Create an invitation",
+          "Choose how many people can join and when this link expires.")}
         <label>{editedInvitation ? "Remaining uses" : "Use limit"}
           <Input type="number" min={editedInvitation ? 0 : 1} max="10000" placeholder="Unlimited" disabled={busy} bind:value={invitationLimit} />
         </label>
@@ -699,7 +830,7 @@
           <Button variant="outline" class="fit-action" disabled={busy} onclick={() => copyInvitation(url)}>Copy link</Button>
         </div>
       {/if}
-      <section class="existing-invites"><div class="section-heading"><div><h3>Existing invitations</h3></div><span class="invite-count">{invitations?.length ?? 0}</span></div>
+      <section class="admin-panel"><div class="panel-heading"><div><h3>Existing invitations</h3></div><span class="panel-count">{invitations?.length ?? 0}</span></div>
       {#if invitations?.length}
         <ul class="admin-members">
           {#each invitations as invitation (invitation.id)}
@@ -735,21 +866,34 @@
 </div>
 
 <style>
-  .badge-form { width: 100%; display: grid; gap: .4rem; }
-  .badge-form label { display: grid; gap: .25rem; }
+  .admin-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .admin-toolbar > :global(*) { flex: 1 1 11rem; }
+  .admin-toolbar > :global(button) { flex: none; }
+  .search-field { position: relative; display: flex; align-items: center; flex: 2 1 16rem; }
+  .search-field > :global(svg) { position: absolute; inset-inline-start: .6rem; color: var(--muted-foreground); pointer-events: none; }
+  .search-field > :global(input) { padding-inline-start: 2rem; }
+  .role-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+  .role-summary { display: grid; gap: 2px; }
+  .user-list li { flex-wrap: wrap; align-items: flex-start; justify-content: flex-start; gap: 10px; padding: 10px 4px; }
+  .user-details { display: grid; flex: 1 1 14rem; gap: 4px; }
+  .user-actions { margin-inline-start: auto; }
+  .add-role { min-width: 8.5rem; }
+  .user-panel { display: grid; flex-basis: 100%; gap: .5rem; padding: .65rem .75rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); }
+  .user-panel label { display: grid; gap: .25rem; }
   .banned-tag { border-color: color-mix(in srgb, var(--destructive) 40%, var(--border)); background: color-mix(in srgb, var(--destructive) 12%, transparent); color: var(--destructive); }
-  .role-settings { margin-block-end: 1rem; }
-  .role-settings h4 { margin-block-start: .4rem; font-weight: 600; }
-  .role-list { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card); }
-  .role-list li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .6rem; padding: .55rem .75rem; }
-  .role-list li + li { border-block-start: 1px solid var(--border); }
   .permission-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: .75rem; }
   .permission-group { display: flex; flex-direction: column; gap: .55rem; padding: .65rem .75rem; border: 1px solid var(--border); border-radius: var(--radius-md); }
   .permission-group legend { padding-inline: .25rem; font-weight: 600; }
-  .invite-panel, .existing-invites { display: grid; gap: 1rem; padding: var(--ui-gap); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
-  .invite-heading, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-  .invite-heading h3, .section-heading h3 { margin: .2rem 0; }
-  .invite-count { min-width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: var(--radius-md); background: var(--muted); color: var(--muted-foreground); }
+  .admin-form { display: grid; gap: var(--ui-gap); }
+  .admin-panel { display: grid; gap: 1rem; padding: var(--ui-gap); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
+  .admin-panel > label { display: grid; gap: .25rem; }
+  .admin-panel > .field-hint { margin-block-start: -.6rem; }
+  .panel-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .75rem 1rem; }
+  .panel-heading h3 { margin: .2rem 0; }
+  .panel-heading-actions { display: flex; align-items: center; gap: 8px; }
+  .panel-count { min-width: 2rem; height: 2rem; padding-inline: .4rem; display: grid; place-items: center; border-radius: var(--radius-md); background: var(--muted); color: var(--muted-foreground); }
+  .admin-panel .admin-members { max-height: none; }
+  .admin-panel .admin-members li:last-child { border-bottom: 0; }
   .invite-link { padding: var(--ui-gap); border: 1px solid var(--border); border-radius: var(--radius-md); }
 
 </style>

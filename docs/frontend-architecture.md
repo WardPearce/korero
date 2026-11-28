@@ -25,6 +25,19 @@ a member with `deleteChannels` in the channel can delete another member's messag
 Direct messages follow the same rules for their sender. The client shows the
 `editedAt` marker after an edit is accepted.
 
+Search a channel from the search button in its header. The server searches the
+channel's stored messages, and **Jump** opens the surrounding messages.
+
+The client keeps every direct message it decrypts in a separate IndexedDB database,
+`korero-direct-messages`, on the device. This covers live delivery, the offline queue
+and server history, including messages from background servers. Conversations show
+archived messages after the server's retention ends or on servers without persistence.
+The search field on the direct messages page searches this archive. The archive holds
+plaintext and is protected only by the device's own storage protection. Removing a
+server deletes its archive, and signing out of a hosted account deletes the archive of
+that identity. A packet that fails signature verification is shown as an error and is
+never archived. A message deleted while this device was offline stays in its archive.
+
 ## Electron desktop
 
 Electron serves the local app from a secure custom origin with a sandboxed

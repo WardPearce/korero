@@ -181,19 +181,24 @@ export class Desktop {
       }
       case "send_message": {
         if (typeof channelId !== "string") throw new Error("Choose a channel first.");
-        return this.#session(origin).run((wire) => wire.rpc("message.send", { channelId, text, html: html ?? undefined }));
+        return this.#session(origin).run((wire) => wire.rpc("message.send", { channelId, text, html: html ?? undefined,
+          replyTo: typeof args.replyTo === "string" ? args.replyTo : undefined, mentions: args.mentions ?? undefined }));
       }
       case "view_channel": return this.#session(origin).viewChannel(connectionId, typeof channelId === "string" ? channelId : null);
       case "edit_message": return this.#session(origin).run((wire) => wire.rpc("message.edit", { messageId, text }));
       case "delete_message": return this.#session(origin).run((wire) => wire.rpc("message.delete", { messageId }));
+      case "react_message": return this.#session(origin).run((wire) => wire.rpc("message.react",
+        { channelId, messageId, emoji: args.emoji, reacted: args.reacted === true }));
       case "pin_message": return this.#session(origin).run((wire) => wire.rpc("message.pin", { channelId, messageId, pinned: args.pinned }));
       case "message_pins":
+      case "message_search":
       case "message_context": {
         const session = this.#session(origin);
         return session.run((wire) => {
           if (session.connectionId !== connectionId) throw new Error("The server connection changed.");
-          return command === "message_pins" ? wire.rpc("message.pins", { channelId, before: args.before })
-            : wire.rpc("message.context", { channelId, messageId });
+          if (command === "message_pins") return wire.rpc("message.pins", { channelId, before: args.before });
+          if (command === "message_search") return wire.rpc("message.search", { channelId, query: args.query, before: args.before });
+          return wire.rpc("message.context", { channelId, messageId });
         });
       }
       case "save_channel": return this.#session(origin).saveChannel(payload);

@@ -1,7 +1,16 @@
 import type { KoreroClient } from "./session.js";
-import type { ChannelData, Message, PinCursor } from "./types.js";
+import type { ChannelData, Message, MessageMentions, PinCursor, SearchCursor } from "./types.js";
 
-export type MessageContent = string | { text: string; html?: string };
+export interface MessageBody {
+  text: string;
+  html?: string;
+  /** Accounts and mentionable roles the message mentions. */
+  mentions?: Partial<MessageMentions>;
+}
+export type MessageContent = string | MessageBody;
+/** `replyTo` is the ID of a message in the same channel. */
+export type SendContent = string | (MessageBody & { replyTo?: string });
+const body = <T extends MessageBody>(value: string | T): T | MessageBody => typeof value === "string" ? { text: value } : value;
 
 export interface ChannelOptions {
   name?: string;
@@ -23,9 +32,9 @@ export class Channel {
     return this.client.state.snapshot?.channels.find(({ id }) => id === this.id);
   }
 
-  send(content: MessageContent) {
-    const { text, html } = typeof content === "string" ? { text: content } : content;
-    return this.client.sendMessage(this.id, text, html);
+  send(value: SendContent) {
+    const { text, html, mentions, replyTo } = body(value) as MessageBody & { replyTo?: string };
+    return this.client.sendMessage(this.id, text, html, { mentions, replyTo });
   }
 
   history(before?: number) {
@@ -35,6 +44,10 @@ export class Channel {
 
   pins(before?: PinCursor) {
     return this.client.pinnedMessages(this.id, before);
+  }
+
+  search(query: string, before?: SearchCursor) {
+    return this.client.searchMessages(this.id, query, before);
   }
 
   async follow() {
@@ -63,10 +76,20 @@ export class ChannelMessage {
   get id() { return this.data.id; }
   get text() { return this.data.text; }
   get senderId() { return this.data.senderId; }
+  get senderName() { return this.data.senderName; }
 
-  edit(content: MessageContent) {
-    const { text, html } = typeof content === "string" ? { text: content } : content;
-    return this.client.editMessage(this.id, text, html);
+  /** Passing `mentions` replaces the message's mentions; omitting it keeps them. */
+  edit(value: MessageContent) {
+    const { text, html, mentions } = body(value);
+    return this.client.editMessage(this.id, text, html, mentions);
+  }
+
+  reply(value: MessageContent) {
+    return this.channel.send({ ...body(value), replyTo: this.id });
+  }
+
+  react(emoji: string, reacted = true) {
+    return this.client.reactToMessage(this.channel.id, this.id, emoji, reacted);
   }
 
   delete() {

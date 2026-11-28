@@ -6,7 +6,8 @@ export const settings = sqliteTable("settings", { key: text().primaryKey(), valu
 export const storedMessageUsage = sqliteTable("stored_message_usage", {
   id: integer().primaryKey(), bytes: integer().notNull(),
 }, (table) => [check("stored_message_usage_singleton", sql`${table.id} = 1`)]);
-export const rolesTable = sqliteTable("roles", { name: text().primaryKey(), rank: integer().notNull().unique() });
+export const rolesTable = sqliteTable("roles", { name: text().primaryKey(), rank: integer().notNull().unique(),
+  mentionable: integer({ mode: "boolean" }).notNull().default(false) });
 export const permissionsTable = sqliteTable("permissions", { name: text().primaryKey() });
 export const rolePermissions = sqliteTable("role_permissions", {
   role: text().notNull().references(() => rolesTable.name),
@@ -78,6 +79,8 @@ export const messages = sqliteTable("messages", {
   id: text().primaryKey(), channelId: text("channel_id").references(() => channels.id, { onDelete: "cascade" }),
   senderId: text("sender_id").notNull().references(() => accounts.id), recipientId: text("recipient_id").references(() => accounts.id),
   text: text().notNull(), html: text(), createdAt: integer("created_at").notNull(), editedAt: integer("edited_at"), pinnedAt: integer("pinned_at"),
+  // Not a foreign key: replies outlive the message they answer.
+  replyToId: text("reply_to_id"),
 }, (table) => [
   check("message_destination", sql`(${table.channelId} IS NULL) != (${table.recipientId} IS NULL)`),
   index("messages_channel").on(table.channelId, table.createdAt, table.id),
@@ -91,6 +94,17 @@ export const attachments = sqliteTable("attachments", {
   size: integer().notNull(),
   data: blob({ mode: "buffer" }).notNull(),
 });
+export const messageReactions = sqliteTable("message_reactions", {
+  messageId: text("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  emoji: text().notNull(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [primaryKey({ columns: [table.messageId, table.emoji, table.accountId] })]);
+export const messageMentions = sqliteTable("message_mentions", {
+  messageId: text("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  kind: text({ enum: ["account", "role"] }).notNull(),
+  target: text().notNull(),
+}, (table) => [primaryKey({ columns: [table.messageId, table.kind, table.target] })]);
 export const directMessages = sqliteTable("direct_messages", {
   id: text().primaryKey(),
   senderId: text("sender_id").notNull().references(() => accounts.id),

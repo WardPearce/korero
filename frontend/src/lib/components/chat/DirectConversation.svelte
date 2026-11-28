@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ArrowLeft, ExternalLink, LockKeyhole } from "@lucide/svelte";
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import ChatMessage from "./ChatMessage.svelte";
   import ChatComposer from "./ChatComposer.svelte";
   import RichMessage from "./RichMessage.svelte";
@@ -10,12 +10,19 @@
   import { Input } from "#lib/components/ui/input/index.js";
   import { directRequest, isSameDirectMessage, messageFrom, type DirectMessage, type DirectMessageChange,
     type DirectMessageReference } from "#lib/connection/client";
-  import { decodeDirectContent, directConversation, encodeDirectContent, type DirectCursor, type DirectPacket, type DirectPage, type DirectPeer } from "#lib/chat/direct-crypto";
-  import { getIdentity } from "#lib/identity/identity";
+  import { archiveMessages, countSince, openConversation, watchConversation, withoutDeleted,
+    type ArchivedDirectMessage, type OpenedConversation } from "#lib/chat/direct-archive";
+  import { encodeDirectContent, type DirectCursor, type DirectPacket, type DirectPage, type DirectPeer } from "#lib/chat/direct-crypto";
   import { preferences } from "#lib/preferences";
   import { getWorkspace } from "#lib/workspace";
 
-  let { accountId, onback }: { accountId: string; onback: () => void } = $props();
+  const pageSize = 50;
+  let { accountId, focus, onback }: {
+    accountId: string;
+    /** A message to scroll to and highlight once the conversation opens. */
+    focus?: { id: string; createdAt: number };
+    onback: () => void;
+  } = $props();
   const workspace = getWorkspace();
   const snapshot = $derived(workspace.view.snapshot!);
   const policy = $derived(snapshot.directMessages!);
@@ -23,14 +30,13 @@
   const canSendDirectMessages = $derived(policy.canSend ?? snapshot.serverPermissions.includes("text"));
   const canSend = $derived(canSendDirectMessages && (online || policy.persistent || policy.offlineDelivery === true));
   let peer = $state.raw<DirectPeer>();
-  let conversation = $state.raw<Awaited<ReturnType<typeof directConversation>>>();
+  let conversation = $state.raw<OpenedConversation["conversation"]>();
   let mode = $state<"loading" | "unverified" | "verified" | "error">("loading");
   let pinKey = "";
   let verificationOpen = $state(false);
   let confirmation = $state("");
   let verificationError = $state("");
   let verificationPending = $state(false);
-  let connectionId = "";
   let retry: { content: string; packet: DirectPacket } | undefined;
   let externalUrl = $state("");
   let pending = $state(false);
@@ -38,35 +44,58 @@
   let historyError = $state("");
   let loadingHistory = $state(false);
   let historyLoaded = $state(false);
-  let history = $state.raw<DirectMessage[]>([]);
   let changesDuringHistory: DirectMessageChange[] | undefined;
   let next = $state.raw<DirectCursor | null>(null);
   let list: HTMLDivElement | undefined;
   let lastMessageId: string | undefined;
+  let limit = $state(pageSize);
+  let archived = $state.raw<{ messages: ArchivedDirectMessage[]; total: number }>({ messages: [], total: 0 });
+  let archiveReady = $state(false);
+  /** Packets that failed verification or decryption. They are shown but never archived. */
+  let failed = $state.raw<DirectMessage[]>([]);
+  let highlighted = $state<string | null>(null);
+  const ownId = $derived(snapshot.account.id);
+  // The conversation belongs to the session it opened in. A reconnect remounts it.
+  const scope = untrack(() => ({ serverId: workspace.serverId, ownerId: snapshot.account.id, connectionId: snapshot.connectionId }));
   const safetyCode = $derived(conversation?.safetyCode.match(/.{4}/g)?.join(" ") ?? "");
+  type Entry = { message: DirectMessageReference & { createdAt: number; editedAt?: number | null }; content?: ArchivedDirectMessage };
   const messages = $derived.by(() => {
-    const packets = new Map(history.map((message) => [messageKey(message), message]));
-    for (const message of workspace.view.directMessages ?? []) {
-      if (isInConversation(message, snapshot.account.id)) {
-        const key = messageKey(message);
-        const known = packets.get(key);
-        if (!known || (message.editedAt ?? 0) > (known.editedAt ?? 0)) packets.set(key, message);
-      }
-    }
-    return [...packets.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+    const entries = new Map<string, Entry>();
+    for (const message of failed) entries.set(messageKey(message), { message });
+    for (const content of archived.messages) entries.set(messageKey(content), { message: content, content });
+    return [...entries.values()].sort((a, b) => a.message.createdAt - b.message.createdAt || a.message.id.localeCompare(b.message.id));
   });
+  const hasOlder = $derived(Boolean(next) || archived.total > archived.messages.length);
 
   onMount(() => {
-    connectionId = snapshot.connectionId;
-    const ownId = snapshot.account.id;
-    const unwatch = workspace.watchDirectChanges(connectionId, (change) => {
-      if (!isInConversation(change.message, ownId)) return;
+    const unwatch = workspace.watchDirectChanges(scope.connectionId, (change) => {
+      if (!isInConversation(change.message, scope.ownerId)) return;
       changesDuringHistory?.push(change);
-      history = applyHistoryChange(history, change);
+      if (change.type === "delete") failed = failed.filter((message) => !isSameDirectMessage(message, change.message));
     });
     void open();
     return unwatch;
   });
+
+  $effect(() => {
+    const subscription = watchConversation(scope.serverId, scope.ownerId, accountId, limit).subscribe({
+      next: (value) => { archived = value; archiveReady = true; },
+      error: (cause) => { historyError = messageFrom(cause); },
+    });
+    return () => subscription.unsubscribe();
+  });
+
+  $effect(() => {
+    // The workspace archives live packets too. This pass only finds the ones that fail to verify.
+    const live = (workspace.view.directMessages ?? []).filter((message) => isInConversation(message, ownId));
+    if (!conversation || !live.length) return;
+    void archiveMessages(scope, live).then(addFailed);
+  });
+
+  function addFailed(messages: DirectMessage[]) {
+    const fresh = messages.filter((message) => !failed.some((known) => isSameDirectMessage(known, message)));
+    if (fresh.length) failed = [...failed, ...fresh];
+  }
 
   function isInConversation({ senderId, recipientId }: DirectMessageReference, ownId: string) {
     return (senderId === ownId && recipientId === accountId) || (senderId === accountId && recipientId === ownId);
@@ -76,20 +105,9 @@
     return `${senderId}/${recipientId}/${id}`;
   }
 
-  function applyHistoryChange(messages: DirectMessage[], change: DirectMessageChange) {
-    const index = messages.findIndex((message) => isSameDirectMessage(message, change.message));
-    if (index < 0) return messages;
-    if (change.type === "delete") return messages.filter((_, position) => position !== index);
-    const original = messages[index];
-    if ((change.message.editedAt ?? 0) < (original.editedAt ?? 0)) return messages;
-    const updated = messages.slice();
-    updated[index] = { ...original, ...change.message, createdAt: original.createdAt };
-    return updated;
-  }
-
   $effect.pre(() => {
-    const latest = messages.at(-1)?.id;
-    if (latest && latest !== lastMessageId && list && list.scrollHeight - list.scrollTop - list.clientHeight < 90) {
+    const latest = messages.at(-1)?.message.id;
+    if (latest && latest !== lastMessageId && !highlighted && list && list.scrollHeight - list.scrollTop - list.clientHeight < 90) {
       void scrollToBottom();
     }
     lastMessageId = latest;
@@ -109,28 +127,34 @@
   async function open() {
     mode = "loading";
     error = "";
-    const serverId = workspace.serverId;
-    const { account } = snapshot;
     try {
-      const [identity, contact] = await Promise.all([
-        getIdentity(),
-        directRequest<DirectPeer & { ownPublicKey: string }>(connectionId, "direct.peer", { accountId }),
-      ]);
-      if (!identity || contact.accountId !== accountId) throw new Error("The conversation identity is unavailable.");
-      if (identity.publicKey !== contact.ownPublicKey) throw new Error("Reconnect with this account’s identity to open direct messages.");
-      peer = contact;
-      const candidate = await directConversation(serverId, account.id, identity, contact);
-      pinKey = `direct-safety-code:${JSON.stringify([serverId, identity.publicKey, account.id, accountId])}`;
+      const opened = await openConversation(scope, accountId);
+      peer = opened.peer;
+      pinKey = opened.pinKey;
+      conversation = opened.conversation;
       const pinned = await preferences.local.get(pinKey);
-      if (pinned && pinned.value !== candidate.safetyCode) {
-        throw new Error("This contact’s identity differs from the verified identity on this device.");
-      }
-      conversation = candidate;
       mode = pinned ? "verified" : "unverified";
+      if (focus) await showFocus(focus);
       await loadHistory();
     } catch (cause) {
       error = messageFrom(cause);
       mode = "error";
+    }
+  }
+
+  async function showFocus(target: { id: string; createdAt: number }) {
+    limit = Math.max(limit, await countSince(scope.serverId, scope.ownerId, accountId, target.createdAt) + 10);
+    highlighted = target.id;
+    // Wait for the archive query to include the message before scrolling to it.
+    for (let attempt = 0; attempt < 20 && !archived.messages.some(({ id }) => id === target.id); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    await tick();
+    const element = document.getElementById(`chat-message-${target.id}`);
+    if (element && list?.contains(element)) {
+      element.tabIndex = -1;
+      element.scrollIntoView({ block: "center" });
+      element.focus({ preventScroll: true });
     }
   }
 
@@ -166,29 +190,39 @@
     }
   }
 
+  /** Fetches a server history page into the archive. Without `before` it fetches the newest page. */
   async function loadHistory(before?: DirectCursor) {
     if (loadingHistory || !policy.persistent) return;
     loadingHistory = true;
     changesDuringHistory = [];
     historyError = "";
-    const oldHeight = list?.scrollHeight;
-    const oldTop = list?.scrollTop ?? 0;
     try {
-      const page = await directRequest<DirectPage>(connectionId, "direct.history", { accountId, before });
-      // A change can arrive while the server's history response is in flight.
-      history = [...history, ...changesDuringHistory.reduce(applyHistoryChange, page.messages)];
+      const page = await directRequest<DirectPage>(scope.connectionId, "direct.history", { accountId, before });
+      // A delete can arrive while the server's history response is in flight.
+      addFailed(await archiveMessages(scope, withoutDeleted(page.messages, changesDuringHistory)));
       next = page.next;
       historyLoaded = true;
-      if (before && oldHeight !== undefined) {
-        await tick();
-        if (list) list.scrollTop = oldTop + list.scrollHeight - oldHeight;
-      } else await scrollToBottom();
+      if (!before && !highlighted) await scrollToBottom();
     } catch (cause) {
       historyError = messageFrom(cause);
     } finally {
       changesDuringHistory = undefined;
       loadingHistory = false;
     }
+  }
+
+  async function loadOlder() {
+    const oldHeight = list?.scrollHeight;
+    const oldTop = list?.scrollTop ?? 0;
+    const shown = archived.messages.length;
+    // Fetch from the server only once the archive has nothing older to show.
+    if (next && archived.total <= shown) await loadHistory(next);
+    limit = shown + pageSize;
+    for (let attempt = 0; attempt < 20 && archived.messages.length === shown && archived.total > shown; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    await tick();
+    if (list && oldHeight !== undefined) list.scrollTop = oldTop + list.scrollHeight - oldHeight;
   }
 
   function confirmLink(url: string) {
@@ -204,16 +238,16 @@
     return new TextEncoder().encode(content).length <= policy.maxBytes;
   }
 
-  async function edit(message: DirectMessage, text: string) {
+  async function edit(message: DirectMessageReference, text: string) {
     if (!conversation) throw new Error("The conversation is unavailable.");
     const content = encodeDirectContent(text);
     if (!fits(content)) throw new Error(`Messages can use up to ${policy.maxBytes} bytes on this server.`);
     const packet = await conversation.encrypt(content, message.id);
-    await directRequest(connectionId, "direct.edit", packet);
+    await directRequest(scope.connectionId, "direct.edit", packet);
   }
 
-  async function remove(message: DirectMessage) {
-    await directRequest(connectionId, "direct.delete", { accountId, id: message.id });
+  async function remove(message: DirectMessageReference) {
+    await directRequest(scope.connectionId, "direct.delete", { accountId, id: message.id });
   }
 
   async function send(text: string, html?: string) {
@@ -228,8 +262,9 @@
     try {
       const packet = retry?.content === content ? retry.packet : await conversation.encrypt(content);
       retry = { content, packet };
-      await directRequest(connectionId, "direct.send", packet);
+      await directRequest(scope.connectionId, "direct.send", packet);
       retry = undefined;
+      highlighted = null;
       await scrollToBottom();
       return true;
     } catch (cause) {
@@ -260,38 +295,34 @@
 {#if (mode === "verified" || mode === "unverified") && conversation}
   <section class="workspace chat-workspace" aria-label="Direct conversation">
     <div class="chat-log" {@attach attachLog} role="log" aria-label="Direct messages">
-      {#if next || historyError}
+      {#if hasOlder || historyError}
         <div class="px-3 pt-3">
           {#if historyError}<p class="form-error" role="alert">{historyError}</p>{/if}
-          <Button variant="outline" disabled={loadingHistory} onclick={() => loadHistory(next ?? undefined)}>
+          <Button variant="outline" disabled={loadingHistory} onclick={() => historyError && !historyLoaded ? loadHistory() : loadOlder()}>
             {loadingHistory ? "Loading…" : historyError ? "Retry history" : "Load older messages"}
           </Button>
         </div>
       {/if}
-      {#each messages as message, index (messageKey(message))}
-        {@const name = message.senderId === snapshot.account.id ? snapshot.account.displayName : peer?.displayName ?? "Contact"}
+      {#each messages as { message, content }, index (messageKey(message))}
+        {@const name = message.senderId === snapshot.account.id ? snapshot.account.displayName : peer?.displayName ?? content?.peerName ?? "Contact"}
         {@const own = message.senderId === snapshot.account.id}
-        {#await conversation.decrypt(message)}
-          <ChatMessage {message} previous={messages[index - 1]} {name}>
-            <p class="text-muted-foreground">Decrypting…</p>
-          </ChatMessage>
-        {:then content}
-          {@const decoded = decodeDirectContent(content)}
-          <ChatMessage {message} previous={messages[index - 1]} {name}
-            editText={own && canSendDirectMessages ? decoded.text : undefined} editLimit={policy.maxBytes}
+        {@const previous = messages[index - 1]?.message}
+        {#if content}
+          <ChatMessage {message} {previous} {name} messageId={message.id} highlighted={highlighted === message.id}
+            editText={own && canSendDirectMessages ? content.text : undefined} editLimit={policy.maxBytes}
             onedit={own ? (text) => edit(message, text) : undefined}
             ondelete={own ? () => remove(message) : undefined}>
-            <RichMessage {...decoded} onlink={confirmLink} />
+            <RichMessage text={content.text} html={content.html} onlink={confirmLink} />
           </ChatMessage>
-        {:catch}
-          <ChatMessage {message} previous={messages[index - 1]} {name} ondelete={own ? () => remove(message) : undefined}>
+        {:else}
+          <ChatMessage {message} {previous} {name} messageId={message.id} ondelete={own ? () => remove(message) : undefined}>
             <p class="form-error">Message could not be verified or decrypted.</p>
           </ChatMessage>
-        {/await}
+        {/if}
       {:else}
         <div class="chat-empty">
           <LockKeyhole size={23} />
-          <p>{policy.persistent && !historyLoaded && !historyError ? "Loading messages…" : "No messages yet."}</p>
+          <p>{!archiveReady || (policy.persistent && !historyLoaded && !historyError) ? "Loading messages…" : "No messages yet."}</p>
         </div>
       {/each}
     </div>

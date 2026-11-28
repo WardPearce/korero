@@ -1,7 +1,9 @@
 // Server-side mirror of the client's DOMPurify allowlist (frontend/src/lib/chat/rich-chat.ts).
 // Clients still sanitize on render; this keeps stored and relayed markup safe for any client.
 const allowedTags = new Set(["p", "br", "strong", "b", "em", "i", "u", "s", "del", "code", "pre",
-  "blockquote", "ul", "ol", "li", "a"]);
+  "blockquote", "ul", "ol", "li", "a", "span"]);
+/** A mention pill names an account (UUID) or a role; clients resolve the label from the ID. */
+export const mentionAttribute = /^(account|role):(?=.*\S)[^\u0000-\u001f\u007f/]{1,80}$/;
 // Elements whose content is never shown as chat text.
 const droppedTags = new Set(["script", "style", "template", "iframe", "frame", "frameset", "object", "embed", "noscript",
   "noembed", "noframes", "textarea", "title", "xmp", "plaintext", "svg", "math", "select", "head", "link", "meta", "base"]);
@@ -15,7 +17,8 @@ const rewriter = new HTMLRewriter()
       if (!allowedTags.has(tag)) { element.removeAndKeepContent(); return; }
       for (const [name, value] of [...element.attributes]) {
         const keep = (tag === "a" && name === "href" && /^https?:\/\//i.test(value.trim())) ||
-          (tag === "ol" && name === "start" && /^\d{1,6}$/.test(value.trim()));
+          (tag === "ol" && name === "start" && /^\d{1,6}$/.test(value.trim())) ||
+          (tag === "span" && name === "data-mention" && mentionAttribute.test(value));
         if (!keep) element.removeAttribute(name);
       }
     },

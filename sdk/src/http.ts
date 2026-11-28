@@ -24,6 +24,8 @@ export interface AccountPage {
   accounts: (Account & { editable: boolean; bannable: boolean; banned: boolean; bannedUntil?: number | null })[];
   next: string | null;
   roles: string[];
+  /** Every role on the server, including those the caller cannot assign. */
+  allRoles: string[];
   builtInRoles: (RoleDefinition & { editable: boolean; defaultPermissions: Permission[] })[];
   customRoles: RoleDefinition[];
   assignablePermissions: Permission[];
@@ -32,7 +34,20 @@ export interface AccountPage {
   registrationPermissions: Permission[];
 }
 
-export interface RoleDefinition { name: string; permissions: Permission[] }
+export type AccountQuery = {
+  after?: string;
+  /** Matches part of the display name or the start of the account ID. */
+  search?: string;
+  role?: string;
+  status?: "banned" | "active";
+};
+
+export interface RoleDefinition {
+  name: string;
+  permissions: Permission[];
+  /** Messages may @mention the role. Omit when saving to keep the current setting. */
+  mentionable?: boolean;
+}
 
 export interface AuditPage {
   events: {
@@ -92,6 +107,8 @@ export interface AttachmentUpload {
   channelId: string;
   text: string;
   html?: string;
+  replyTo?: string;
+  mentions?: { accounts?: string[]; roles?: string[] };
   name: string;
   data: string;
 }
@@ -184,7 +201,7 @@ export function createApi(origin: string, send: Requester = (request) => webTran
     chat: { attachments },
     admin: {
       accounts: {
-        get: (options?: QueryOptions<{ after?: string }>) => request<AccountPage>("GET", "admin/accounts", undefined, options?.query),
+        get: (options?: QueryOptions<AccountQuery>) => request<AccountPage>("GET", "admin/accounts", undefined, options?.query),
         roles: {
           post: (body: { accountId: string; role: string }) => request<{ roles: string[] }>("POST", "admin/accounts/roles", body),
           delete: (body: { accountId: string; role: string }) => request<{ roles: string[] }>("DELETE", "admin/accounts/roles", body),

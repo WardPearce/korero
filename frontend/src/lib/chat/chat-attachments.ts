@@ -1,7 +1,8 @@
 import { downloadFile } from "../download-file";
 import { apiFor, requestError, type Message } from "../connection/client";
 
-export async function uploadAttachment(origin: string, connectionId: string, channelId: string, text: string, file: File, html?: string) {
+export async function uploadAttachment(origin: string, connectionId: string, channelId: string, text: string, file: File, html?: string,
+  extra: { replyTo?: string; mentions?: { accounts?: string[]; roles?: string[] } } = {}) {
   const data = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(",", 2)[1]!);
@@ -9,7 +10,7 @@ export async function uploadAttachment(origin: string, connectionId: string, cha
     reader.readAsDataURL(file);
   });
   const result = await apiFor(origin).chat.attachments.post({
-    connectionId, channelId, text, html, name: file.name, data,
+    connectionId, channelId, text, html, name: file.name, data, ...extra,
   });
   if (result.error) throw requestError(result.error);
 }

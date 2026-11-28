@@ -1,5 +1,5 @@
 export { Channel, ChannelMessage } from "./channel.js";
-export type { ChannelOptions, MessageContent } from "./channel.js";
+export type { ChannelOptions, MessageBody, MessageContent, SendContent } from "./channel.js";
 export { KoreroClient } from "./session.js";
 export type { ClientEvents, ConnectOptions, SessionOptions, SessionMedia, SessionMediaAdapter } from "./session.js";
 export { createApi, serverApi } from "./http.js";

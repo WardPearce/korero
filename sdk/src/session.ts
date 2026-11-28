@@ -1,4 +1,4 @@
-import { offline, isSameDirectMessage, type DirectMessage, type DirectMessageChange, type DirectMessageReference, type DirectOperation, type Member, type MemberRequest, type Message, type PinCursor, type PinnedMessagePage, type Poke, type RelayResponse, type ScreenShare, type Snapshot, type VoiceState } from "./types.js";
+import { offline, isSameDirectMessage, type DirectMessage, type DirectMessageChange, type DirectMessageReference, type DirectOperation, type Member, type MemberRequest, type Message, type MessageMention, type MessageMentions, type MessageReaction, type PinCursor, type ReactionChange, type PinnedMessagePage, type MessageSearchPage, type SearchCursor, type Poke, type RelayResponse, type ScreenShare, type Snapshot, type VoiceState } from "./types.js";
 import { messageFrom, requestError } from "./errors.js";
 import { authenticateIdentity, type IdentityAuthentication } from "./auth.js";
 import { createApi } from "./http.js";
@@ -42,6 +42,9 @@ export interface ClientEvents {
   messageCreate: ChannelMessage;
   messageUpdate: { id: string; text: string; html?: string; editedAt: number };
   messageDelete: { id: string };
+  /** Another member mentioned this account or one of its roles. */
+  mention: MessageMention;
+  reaction: ReactionChange;
   directMessage: DirectMessage;
   directMessageChange: DirectMessageChange;
   poke: Poke;
@@ -50,6 +53,15 @@ export interface ClientEvents {
 
 export type ConnectOptions = Omit<IdentityAuthentication, "serverId" | "action"> &
   Partial<Pick<IdentityAuthentication, "serverId" | "action">>;
+
+/** Applies a live reaction change; `me` only changes when the reacting account is this one. */
+function applyReaction(reactions: MessageReaction[] = [], change: ReactionChange, mine: boolean) {
+  const current = reactions.find(({ emoji }) => emoji === change.emoji);
+  const me = mine ? change.reacted : current?.me ?? false;
+  const next = current ? reactions.map((entry) => entry === current ? { ...entry, count: change.count, me } : entry)
+    : [...reactions, { emoji: change.emoji, count: change.count, me }];
+  return next.filter(({ count }) => count > 0);
+}
 
 /** Direct messages kept in the view while connected. Older ones remain in server history. */
 const directMessageLimit = 200;
@@ -77,6 +89,7 @@ export class KoreroClient {
   private messageRevisions: Record<string, number> = {};
   private directMessages: DirectMessage[] = [];
   private lastPoke?: Poke;
+  private lastMention?: MessageMention;
   /** A channel whose chat is followed without joining it. */
   private viewedChannelId: string | null = null;
   private viewRequest?: { channelId: string | null };
@@ -430,7 +443,7 @@ export class KoreroClient {
 
   private show(directChange?: DirectMessageChange) {
     this.update({ ...offline, phase: "online", snapshot: this.snapshot, messages: this.messages, messageRevisions: this.messageRevisions, directMessages: this.directMessages,
-      directChange, lastPoke: this.lastPoke, voice: this.voice?.voice ?? "idle", voiceError: this.voice?.error ?? null });
+      directChange, lastPoke: this.lastPoke, lastMention: this.lastMention, voice: this.voice?.voice ?? "idle", voiceError: this.voice?.error ?? null });
   }
 
   private reviseMessages(channelId?: string) {
@@ -479,12 +492,25 @@ export class KoreroClient {
         this.emit("directMessage", message);
       }
     } else if (type === "message.edited") {
-      const edit = payload as { channelId?: string; messageId: string; text: string; html?: string; editedAt: number };
+      const edit = payload as { channelId?: string; messageId: string; text: string; html?: string; editedAt: number; mentions?: MessageMentions };
       this.messages = this.messages.map((message) => message.id === edit.messageId
-        ? { ...message, text: edit.text, html: edit.html, editedAt: edit.editedAt } : message);
+        ? { ...message, text: edit.text, html: edit.html, editedAt: edit.editedAt,
+          ...(edit.mentions ? { mentions: edit.mentions.accounts.length || edit.mentions.roles.length ? edit.mentions : undefined } : {}) } : message);
       this.reviseMessages(edit.channelId);
       this.show();
       this.emit("messageUpdate", { id: edit.messageId, text: edit.text, html: edit.html, editedAt: edit.editedAt });
+    } else if (type === "message.reactionsChanged") {
+      const change = payload as ReactionChange;
+      const mine = change.accountId === snapshot.account.id;
+      this.messages = this.messages.map((message) => message.id === change.messageId
+        ? { ...message, reactions: applyReaction(message.reactions, change, mine) } : message);
+      this.reviseMessages(change.channelId);
+      this.show();
+      this.emit("reaction", change);
+    } else if (type === "message.mentioned") {
+      this.lastMention = payload as MessageMention;
+      this.show();
+      this.emit("mention", this.lastMention);
     } else if (type === "message.pinChanged") {
       const { channelId, messageId, pinnedAt } = payload as { channelId: string; messageId: string; pinnedAt: number | null };
       this.messages = this.messages.map((message) => message.id === messageId ? { ...message, pinnedAt } : message);
@@ -565,12 +591,17 @@ export class KoreroClient {
     this.voice?.setVolume(accountId, level);
   }
 
-  async sendMessage(channelId: string, text: string, html?: string) {
-    return this.rpc<{ messageId: string }>("message.send", { channelId, text, html });
+  async sendMessage(channelId: string, text: string, html?: string,
+    options: { replyTo?: string; mentions?: Partial<MessageMentions> } = {}) {
+    return this.rpc<{ messageId: string }>("message.send", { channelId, text, html, ...options });
   }
 
-  async editMessage(messageId: string, text: string, html?: string) {
-    await this.rpc("message.edit", { messageId, text, html });
+  async editMessage(messageId: string, text: string, html?: string, mentions?: Partial<MessageMentions>) {
+    await this.rpc("message.edit", { messageId, text, html, mentions });
+  }
+
+  async reactToMessage(channelId: string, messageId: string, emoji: string, reacted: boolean) {
+    await this.rpc("message.react", { channelId, messageId, emoji, reacted });
   }
 
   async deleteMessage(messageId: string) {
@@ -579,6 +610,11 @@ export class KoreroClient {
 
   pinnedMessages(channelId: string, before?: PinCursor) {
     return this.rpc<PinnedMessagePage>("message.pins", { channelId, before });
+  }
+
+  /** Searches a channel's stored messages, newest first. Pass the page's `next` as `before` to continue. */
+  searchMessages(channelId: string, query: string, before?: SearchCursor) {
+    return this.rpc<MessageSearchPage>("message.search", { channelId, query, before });
   }
 
   messageContext(channelId: string, messageId: string) {
@@ -654,6 +690,7 @@ export class KoreroClient {
     this.messageRevisions = {};
     this.directMessages = [];
     this.lastPoke = undefined;
+    this.lastMention = undefined;
     this.viewedChannelId = null;
     this.viewRequest = undefined;
     this.loadedHistory.clear();

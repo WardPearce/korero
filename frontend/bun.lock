@@ -15,6 +15,7 @@
         "@lucide/svelte": "^1.80.0",
         "@noble/hashes": "2.4.0",
         "@svelte-put/qr": "2.1.4",
+        "@tiptap/core": "3.35.0",
         "@tiptap/extensions": "3.35.0",
         "@tiptap/starter-kit": "3.35.0",
         "bits-ui": "2.22.0",
@@ -36,6 +37,7 @@
       },
       "devDependencies": {
         "@capacitor/cli": "8.6.3",
+        "@svelte-put/swipeable": "^1.2.1",
         "@sveltejs/adapter-static": "3.0.10",
         "@sveltejs/kit": "2.70.3",
         "@sveltejs/vite-plugin-svelte": "6.2.4",
@@ -263,6 +265,8 @@
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 
     "@svelte-put/qr": ["@svelte-put/qr@2.1.4", "", { "dependencies": { "headless-qr": "^1.0.3" }, "peerDependencies": { "svelte": ">=5.0.0" } }, "sha512-rCLcDqIhMiYtKurRu5vgt7MSS9aKBZOrDJfbZvqQQ19hb1sEQ3GNc62hxmuhZovxFffmYdTrlN2O0hDbGAIH4Q=="],
+
+    "@svelte-put/swipeable": ["@svelte-put/swipeable@1.2.1", "", { "peerDependencies": { "svelte": ">=5.0.0" } }, "sha512-DXJRzlGWtdiIV1Td4j0Ka4LI4iwOVr6yzgZ9JW6xJxzqQYStBPi7N0/1KcRfh8KlXTOwA+sjXvMLRqSGMmAL2g=="],
 
     "@sveltejs/acorn-typescript": ["@sveltejs/acorn-typescript@1.0.13", "", { "peerDependencies": { "acorn": "^8.9.0" } }, "sha512-wgKggnhZVL9Bfx1OaKKTrYY9BFRk6C8UAkQNUcIv1+llzYrIqy+RZm5HPKzn0NpEBvTVhTqB4kQyllZywsRBRQ=="],
 

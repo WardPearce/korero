@@ -314,8 +314,13 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
       set.status = 201;
       return result;
     }, { body: httpBodies.bootstrap })
-    .get("/api/v1/admin/accounts", ({ request, query }) => realtime.listAccounts(bearer(request).accountId, query.after),
-      { query: t.Object({ after: t.Optional(id) }) })
+    .get("/api/v1/admin/accounts", ({ request, query }) => realtime.listAccounts(bearer(request).accountId, query),
+      { query: t.Object({
+        after: t.Optional(id),
+        search: t.Optional(t.String({ maxLength: 100 })),
+        role: t.Optional(t.String({ minLength: 1, maxLength: 80 })),
+        status: t.Optional(t.Union([t.Literal("banned"), t.Literal("active")])),
+      }) })
     .patch("/api/v1/admin/badges", ({ request, body }) =>
       realtime.setBadge(bearer(request).accountId, body.accountId, body.badge), { body: httpBodies.accountBadge })
     .post("/api/v1/admin/accounts/roles", ({ request, body }) =>
@@ -323,9 +328,9 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
     .delete("/api/v1/admin/accounts/roles", ({ request, body }) =>
       realtime.removeRole(auth.account(bearer(request).accountId), body.accountId, body.role), { body: payloads["role.remove"] })
     .post("/api/v1/admin/roles", ({ request, body }) =>
-      realtime.defineRole(bearer(request).accountId, body.name.trim(), body.permissions, true), { body: httpBodies.roleDefinition })
+      realtime.defineRole(bearer(request).accountId, body.name.trim(), body.permissions, true, body.mentionable), { body: httpBodies.roleDefinition })
     .patch("/api/v1/admin/roles/definition", ({ request, body }) =>
-      realtime.defineRole(bearer(request).accountId, body.name.trim(), body.permissions, false), { body: httpBodies.roleDefinition })
+      realtime.defineRole(bearer(request).accountId, body.name.trim(), body.permissions, false, body.mentionable), { body: httpBodies.roleDefinition })
     .delete("/api/v1/admin/roles/definition", ({ request, body }) =>
       realtime.deleteRole(bearer(request).accountId, body.name.trim()), { body: httpBodies.deleteRole })
     .get("/api/v1/admin/audit", ({ request, query }) =>

@@ -43,12 +43,12 @@ A credential-bearing response carries `Cache-Control: no-store`.
 | POST `/api/v1/chat/attachments` | Access token and matching connection | `connectionId, channelId, text, html?, name, data` | `{messageId}` |
 | GET `/api/v1/chat/attachments/:messageId` | Access token and matching connection | Query `connectionId` | `{data}` |
 | DELETE `/api/v1/account/sessions/:id` | Access token | — | `{}` |
-| GET `/api/v1/admin/accounts` | `manageRoles` | Query `after?` account ID; each account carries `role`, `roles`, `editable`, `banned` and `bannedUntil` (`null` when permanent or not banned) | `accounts, next, roles, canDefineRoles, builtInRoles, customRoles, assignablePermissions, defaultRole, registrationPermissions` |
+| GET `/api/v1/admin/accounts` | `manageRoles` | Query `after?` account ID, `search?` (part of a display name, or the start of an account ID), `role?`, `status?` (`banned` or `active`); each account carries `role`, `roles`, `editable`, `banned` and `bannedUntil` (`null` when permanent or not banned) | `accounts, next, roles, allRoles, canDefineRoles, builtInRoles, customRoles, assignablePermissions, defaultRole, registrationPermissions` |
 | POST `/api/v1/admin/accounts/roles` | `manageRoles` | `accountId, role` | `{roles}` after adding the role |
 | DELETE `/api/v1/admin/accounts/roles` | `manageRoles` | `accountId, role` | `{roles}` after removing the role |
 | PATCH `/api/v1/admin/badges` | `manageRoles` | `accountId, badge` | `{badge}` |
-| POST `/api/v1/admin/roles` | Administrator or Owner | `name, permissions` | `{name, permissions}` |
-| PATCH `/api/v1/admin/roles/definition` | Administrator or Owner | `name, permissions` | `{name, permissions}` |
+| POST `/api/v1/admin/roles` | Administrator or Owner | `name, permissions, mentionable?` | `{name, permissions, mentionable}` |
+| PATCH `/api/v1/admin/roles/definition` | Administrator or Owner | `name, permissions, mentionable?` | `{name, permissions, mentionable}` |
 | DELETE `/api/v1/admin/roles/definition` | Administrator or Owner | `name` | `{}` |
 | GET `/api/v1/admin/audit` | `viewAdmin` | Query `before?` audit ID, `actorId?`, `prefix?` event namespace | `{events, next}` |
 | GET `/api/v1/admin/preferences` | `manageSettings` | — | Server preferences and allowed default roles |
@@ -91,8 +91,12 @@ unassigned from all accounts and replaced as the default, if selected.
 
 Administrators and the Owner can update the grants for Guest, Member, Moderator,
 and custom roles through `PATCH /api/v1/admin/roles/definition`. Each `builtInRoles`
-entry has `name, permissions, editable, defaultPermissions`. Role grants apply to
+entry has `name, permissions, mentionable, editable, defaultPermissions`, and each
+`customRoles` entry has `name, permissions, mentionable`. Role grants apply to
 connected accounts immediately and trigger `state.invalidated`.
+`mentionable` controls whether channel messages may mention the role. Every role starts
+unmentionable, Administrator and Owner cannot be made mentionable, and omitting the field
+keeps the current setting. Snapshots list the current set as `mentionableRoles`.
 
 An account holds 1–25 roles and always keeps Guest or Member. New accounts receive the
 registration default role. When that is a custom role they also receive Guest, and the
@@ -260,12 +264,14 @@ password or permission-override fields.
 | `server.settings` | `name?` | `{}` |
 | `admin.diagnostics` | — | Counts, process CPU and memory, worker PID and native resource usage where available |
 | `admin.audit` | `before?` audit ID | Latest 100 matching audit records |
-| `message.send` | `channelId, text, html?` | `{messageId}` |
+| `message.send` | `channelId, text, html?, replyTo?, mentions?: {accounts?, roles?}` | `{messageId}` |
 | `message.history` | `channelId` and optional `before` timestamp | Up to 100 channel messages in descending time order |
 | `message.context` | `channelId, messageId` | Target message and up to 20 stored messages on either side, oldest first |
 | `message.pins` | `channelId, before?: {pinnedAt, id}` | `{messages, next}` with up to 50 pinned-message previews, newest pin first |
 | `message.pin` | `channelId, messageId, pinned` | `{}` |
-| `message.edit` | `messageId, text, html?` | `{}` |
+| `message.react` | `channelId, messageId, emoji, reacted` | `{}` |
+| `message.search` | `channelId, query, before?: {createdAt, id}` | `{messages, next}` with up to 25 matching message previews, newest first |
+| `message.edit` | `messageId, text, html?, mentions?` | `{}` |
 | `message.delete` | `messageId` | `{}` |
 | `direct.peer` | `accountId` | `accountId, displayName, publicKey, ownPublicKey` |
 | `direct.inbox` | — | Up to 50 recent contacts with `accountId, displayName, lastMessageAt` |
@@ -280,8 +286,9 @@ changed at server scope. The actor must also rank above the target role and hold
 its server-wide grants. In the target channel and every descendant that inherits the
 override, the actor needs `join`, the permission being changed, and the target role’s
 effective channel permissions.
-Moving a channel applies the same role and scope checks to every role whose inherited
-result changes, or whose inherited deny appears or disappears.
+Moving a channel applies the same role and scope checks before and after the move, in
+every affected channel. This includes changes that affect combined roles and inherited
+denies that appear or disappear.
 
 Adding or removing an account role also requires the actor to hold, in each channel and at
 server scope, every permission the change would newly allow for that account. Removing a
@@ -339,13 +346,46 @@ Subscribe before requesting history so no message is missed.
 History is empty when text persistence is disabled. Current live text still works.
 When `messagePins` is true on a channel in the snapshot, anyone who can read its chat
 can list its pins and open the surrounding messages. Pass the returned `next`
-cursor as `before` to continue listing pins. Each preview has `id, senderId,
+cursor as `before` to continue listing pins. Each preview has `id, senderId, senderName,
 createdAt, pinnedAt, text, attachmentName`. Preview text is capped at 240 characters.
+When `messageSearch` is true on a channel in the snapshot, anyone who can read its chat
+can search its stored messages with `message.search`. The query is 1 to 100 characters
+and matches any part of the message text. `%` and `_` match themselves, and ASCII letters
+match regardless of case. Each result has `id, senderId, createdAt, text, attachmentName`,
+where `text` is up to 240 characters around the first match, with `…` where it was cut.
+Each search examines a bounded window of history. Pass the returned `next` cursor as
+`before` to continue even when a page contains no matches. `next: null` means the search
+has reached the end. Search has per-account and server-wide rate limits. Use
+`message.context` to open a result.
+Direct messages are end-to-end encrypted, so clients search them locally.
 Pinning and unpinning require `canPinMessages`, which reflects both chat access and
 the channel-scoped `pinMessages` permission. Stored message objects include
 `pinnedAt` when pinned. Deletion and ordinary message retention also remove the pin.
-Message objects contain `id, channelId, recipientId, senderId, createdAt, editedAt, text`
+`replyTo` on `message.send` (and on attachment uploads) names a message in the same channel
+that is still in history, or a live message when persistence is disabled. Otherwise the
+request fails with `INVALID_REQUEST`. Messages that reply carry `replyTo: {id, senderId,
+senderName, text, attachmentName?}` with up to 120 characters of the original, or
+`replyTo: {id, missing: true}` once the original is deleted or expires. Edits cannot
+change `replyTo`.
+`mentions` lists up to 20 account IDs and 5 role names. Each account must exist and each
+role must be in `mentionableRoles`, or the request fails with `INVALID_REQUEST`.
+Duplicates are removed. Messages with mentions carry `mentions: {accounts, roles}`.
+Passing `mentions` to `message.edit` replaces them, and `message.edited` then includes
+the new `mentions`. On send, the server delivers `message.mentioned` to every connection
+of a mentioned account, or of an account holding a mentioned role, that can read the
+channel, whether or not it follows the channel. The sender never receives it, and edits
+do not send it. In `html`, render a mention as `<span data-mention="account:ID">@Name</span>`
+or `<span data-mention="role:Name">@Name</span>`, and keep `@Name` in `text`.
+When `messageReactions` is true on a channel in the snapshot, anyone who can read its chat
+can toggle a reaction with `message.react`. `emoji` must be a single Unicode emoji
+(including ZWJ sequences, flags and skin tones). A message holds at most 20 distinct
+emoji; adding another fails with `LIMIT`. Repeating a change has no effect. Without
+persistence the request fails with `CONFLICT`. Stored message objects include
+`reactions: [{emoji, count, me}]` in first-reacted order, where `me` reports whether the
+reading account reacted. Each change broadcasts `message.reactionsChanged`.
+Message objects contain `id, channelId, recipientId, senderId, senderName, createdAt, editedAt, text`
 and may include `html` and attachment metadata as `attachment: {name, size}`.
+`senderName` is the account's display name and is available for offline senders in stored chat and pin previews. Older servers may omit it.
 `editedAt` is null until the sender replaces the message text. Editing keeps the
 original ID, `createdAt` and attachment, and broadcasts `message.edited` to members
 who can read the channel. Only the sender can edit a channel message. The sender or
@@ -356,8 +396,8 @@ and deletes. The server relays edits without retaining the original or updated t
 When server info advertises `richChat`, clients may send an optional `html`
 representation of the same content, up to 32,768 characters. The server strips
 markup outside the formatting allowlist (`p, br, strong, b, em, i, u, s, del, code,
-pre, blockquote, ul, ol, li, a`, with `href` on links to `http(s)` URLs and `start` on
-ordered lists) before storing or relaying it. Keep `text` as the
+pre, blockquote, ul, ol, li, a, span`, with `href` on links to `http(s)` URLs, `start` on
+ordered lists, and `data-mention` on `span`) before storing or relaying it. Keep `text` as the
 plain-text representation. `maxWebSocketBytes` caps the UTF-8 request envelope.
 Treat received markup as untrusted and render it only
 after sanitizing it against a strict formatting allowlist, or display `text`.
@@ -541,9 +581,11 @@ in `cameras` or through `media.cameraAvailable`.
 | `state.invalidated` | `{}`, re-fetch snapshot |
 | `server.changed` | `name, registration` |
 | `message.created` | Message |
-| `message.edited` | `messageId, text, html?, editedAt, channelId?` (channel ID for stored messages) |
+| `message.edited` | `messageId, text, html?, editedAt, channelId?, mentions?` (channel ID for stored messages) |
 | `message.deleted` | `messageId, channelId?` (channel ID for stored channel messages) |
 | `message.pinChanged` | `channelId, messageId, pinnedAt` (`pinnedAt` is null after unpinning) |
+| `message.reactionsChanged` | `channelId, messageId, emoji, count, accountId, reacted` |
+| `message.mentioned` | `channelId, messageId, senderId, senderName, text` (up to 120 characters) |
 | `direct.created` | Encrypted direct message packet |
 | `direct.edited` | Encrypted direct message packet with `editedAt` |
 | `direct.deleted` | `id, senderId, recipientId` |

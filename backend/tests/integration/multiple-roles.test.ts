@@ -317,6 +317,47 @@ test("moving a channel out from under a deny-only role requires managing that ro
   expect(await moderatorWs.rpc("channel.edit", { channelId: child, parentId: null })).toMatchObject({ channelId: child });
 }));
 
+test("reparenting checks combined grants in affected descendants", () => withServer(async (server, owner, ownerWs) => {
+  const { grant, define, override, channel } = helpers(server, owner);
+  await define("Writer", ["join", "text"]);
+  const admin = await server.register("Administrator");
+  const writer = await server.register("Writer member");
+  expect((await grant(owner, admin, "Administrator")).status).toBe(200);
+  expect((await grant(owner, writer, "Writer")).status).toBe(200);
+  const previousRoot = await channel(ownerWs, "Current root");
+  const previous = await channel(ownerWs, "Current parent", previousRoot);
+  const proposed = await channel(ownerWs, "Proposed parent");
+  const moved = await channel(ownerWs, "Moved channel", previous);
+  const affected = await channel(ownerWs, "Affected child", moved);
+  const shielded = await channel(ownerWs, "Shielded child", moved);
+  for (const parent of [previous, proposed]) {
+    await override(ownerWs, parent, "Member", "text", false);
+    await override(ownerWs, parent, "Administrator", "text", true);
+  }
+  // Both roles keep the same override values. The Writer allow only wins once it is as close as Member's deny.
+  await override(ownerWs, previousRoot, "Writer", "text", true);
+  await override(ownerWs, proposed, "Writer", "text", true);
+  await override(ownerWs, shielded, "Writer", "text", false);
+  await override(ownerWs, affected, "Administrator", "text", false);
+  await override(ownerWs, shielded, "Administrator", "text", false);
+
+  const adminWs = await server.ws(admin);
+  const writerWs = await server.ws(writer);
+  const canChat = async (id: string) => (await writerWs.rpc<{ channels: { id: string; canChat: boolean }[] }>("state.get"))
+    .channels.find((channel) => channel.id === id)?.canChat;
+  const order = () => server.fail("/api/v1/channels/order", { channelId: moved, targetId: proposed, placement: "inside" },
+    admin.accessToken, "PATCH");
+  expect(await canChat(affected)).toBe(false);
+  expect((await order()).status).toBe(403);
+  await expect(adminWs.rpc("channel.edit", { channelId: moved, parentId: proposed })).rejects.toThrow("FORBIDDEN");
+  expect(await canChat(affected)).toBe(false);
+
+  await override(ownerWs, affected, "Administrator", "text", null);
+  expect((await order()).status).toBe(200);
+  expect(await canChat(affected)).toBe(true);
+  expect(await canChat(shielded)).toBe(false);
+}));
+
 test("clearing a deny-only override is checked in every descendant it reaches", () => withServer(async (server, owner, ownerWs) => {
   const { grant, define, override, channel } = helpers(server, owner);
   await define("Muted", ["join"]);
@@ -350,4 +391,25 @@ test("role managers are told when any account's roles change", () => withServer(
   await until(invalidations, (count) => count > seen);
   expect((await adminWs.rpc<State>("state.get")).accountsRevision).toBeGreaterThan(before!);
   void ownerWs;
+}));
+
+test("the account listing filters by search, role and ban status", () => withServer(async (server, owner, ownerWs) => {
+  const { grant, define } = helpers(server, owner);
+  await define("Helper", ["join"]);
+  const alice = await server.register("Alice_1");
+  const bob = await server.register("Bobby");
+  const carol = await server.register("Carol");
+  expect((await grant(owner, bob, "Helper")).status).toBe(200);
+  await ownerWs.rpc("moderation.ban", { accountId: carol.account.id });
+  type Page = { accounts: { id: string; displayName: string }[]; allRoles: string[] };
+  const list = async (query: string) =>
+    (await server.call<Page>(`/api/v1/admin/accounts?${query}`, undefined, owner.accessToken)).payload;
+  const names = async (query: string) => (await list(query)).accounts.map(({ displayName }) => displayName).toSorted();
+  expect(await names("search=ali")).toEqual(["Alice_1"]);
+  expect(await names("search=_")).toEqual(["Alice_1"]);
+  expect(await names(`search=${alice.account.id.slice(0, 8)}`)).toEqual(["Alice_1"]);
+  expect(await names("role=Helper")).toEqual(["Bobby"]);
+  expect(await names("status=banned")).toEqual(["Carol"]);
+  expect(await names("status=active&search=b")).toEqual(["Bobby"]);
+  expect((await list("")).allRoles).toEqual(expect.arrayContaining(["Owner", "Member", "Guest", "Helper"]));
 }));

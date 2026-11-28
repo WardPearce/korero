@@ -173,6 +173,9 @@ websocket_bytes = 65536
 websocket_pending = 16
 # Realtime WebSocket requests per account per minute. Valid: 10-60000.
 websocket_requests_per_minute = 3600
+# Channel history searches per account and across the server, per minute.
+message_searches_per_minute = 60
+message_searches_global_per_minute = 600
 # Media operations per account per minute. Valid: 1-20000.
 media_per_minute = 1800
 # ICE restarts per account per minute. Valid: 1-1000.

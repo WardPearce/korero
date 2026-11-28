@@ -6,8 +6,10 @@
   import DirectConversation from "./DirectConversation.svelte";
   import { Button } from "#lib/components/ui/button/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
-  import { directRequest, messageFrom } from "#lib/connection/client";
+  import { directRequest, messageFrom, messageTime } from "#lib/connection/client";
   import { getIdentity } from "#lib/identity/identity";
+  import { searchArchive, type ArchivedDirectMessage } from "#lib/chat/direct-archive";
+  import { matchParts } from "#lib/chat/search-highlight";
   import { preferences } from "#lib/preferences";
   import { getWorkspace } from "#lib/workspace";
 
@@ -25,6 +27,12 @@
   let copied = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
   let verified = $state.raw<ReadonlySet<string>>(new Set());
+  let messageQuery = $state("");
+  let searchedQuery = $state("");
+  let results = $state.raw<ArchivedDirectMessage[] | null>(null);
+  let searchError = $state("");
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  let searchRequest = 0;
   const normalizedQuery = $derived(query.trim().toLowerCase());
   const contacts = $derived.by(() => {
     const entries = new Map(recent.map((entry) => [entry.accountId, entry]));
@@ -60,7 +68,41 @@
 
   onDestroy(() => {
     if (copyTimer) clearTimeout(copyTimer);
+    clearTimeout(searchTimer);
   });
+
+  function queueSearch() {
+    clearTimeout(searchTimer);
+    const request = ++searchRequest;
+    const query = messageQuery.trim();
+    searchError = "";
+    if (!query) {
+      results = null;
+      searchedQuery = "";
+      return;
+    }
+    searchTimer = setTimeout(async () => {
+      try {
+        const found = await searchArchive(workspace.serverId, snapshot.account.id, query);
+        if (request !== searchRequest) return;
+        results = found;
+        searchedQuery = query;
+      } catch (cause) {
+        if (request === searchRequest) searchError = messageFrom(cause);
+      }
+    }, 150);
+  }
+
+  /** Cuts a long message to the text around the first match. */
+  function snippet(text: string, query: string) {
+    const found = Math.max(0, text.toLocaleLowerCase().indexOf(query.toLocaleLowerCase()));
+    const start = Math.max(0, found - 60);
+    return (start ? "…" : "") + text.slice(start, start + 240) + (start + 240 < text.length ? "…" : "");
+  }
+
+  function contactName(result: ArchivedDirectMessage) {
+    return contacts.find(({ accountId }) => accountId === result.peerId)?.displayName ?? result.peerName;
+  }
 
   async function loadInbox() {
     if (loading || !snapshot.directMessages?.persistent) return;
@@ -182,7 +224,7 @@
 
 {#if workspace.directAccountId}
   {#key workspace.directAccountId}
-    <DirectConversation accountId={workspace.directAccountId} onback={back} />
+    <DirectConversation accountId={workspace.directAccountId} focus={workspace.directFocus ?? undefined} onback={back} />
   {/key}
 {:else}
   <header class="workspace-header">
@@ -194,6 +236,46 @@
   </header>
   <div class="workspace">
     {#if inboxError}<p class="form-error dm-error" role="alert">{inboxError}</p>{/if}
+    <section class="dm-message-search" aria-label="Search direct messages">
+      <div class="dm-search-field">
+        <Search size={15} aria-hidden="true" />
+        <Input class="dm-search-input" type="search" placeholder="Search your direct messages" aria-label="Search your direct messages"
+          maxlength={100} spellcheck={false} autocomplete="off" bind:value={messageQuery} oninput={queueSearch} />
+      </div>
+      {#if searchError}<p class="form-error" role="alert">{searchError}</p>{/if}
+      {#if results}
+        {#if results.length}
+          <ul class="dm-results" aria-label="Matching messages">
+            {#each results as result (result.key)}
+              {@const sender = result.senderId === snapshot.account.id ? snapshot.account.displayName : contactName(result)}
+              <li>
+                <button type="button" class="dm-result" onclick={() => workspace.showDirectMessages(result.peerId, result)}>
+                  <Avatar name={contactName(result)} accountId={result.peerId} small />
+                  <span class="dm-result-details">
+                    <span class="dm-result-meta">
+                      <strong class="truncate">{contactName(result)}</strong>
+                      <time datetime={new Date(result.createdAt).toISOString()}>
+                        {new Date(result.createdAt).toLocaleDateString()}, {messageTime.format(result.createdAt)}
+                      </time>
+                    </span>
+                    <span class="dm-result-text">
+                      {sender}:
+                      {#each matchParts(result.text.length > 240 ? snippet(result.text, searchedQuery) : result.text, searchedQuery) as part, index (index)}
+                        {#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}
+                      {/each}
+                    </span>
+                  </span>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {:else}
+          <p class="dm-hint" role="status">No messages on this device match “{searchedQuery}”.</p>
+        {/if}
+      {:else}
+        <p class="dm-hint">Searches direct messages stored on this device.</p>
+      {/if}
+    </section>
     <section class="dm-people" aria-labelledby="dm-people-title">
       <div class="dm-people-heading">
         <div>
@@ -275,6 +357,42 @@
 
 <style>
   .dm-error { flex: 0 0 auto; }
+  .dm-message-search { display: grid; flex: 0 0 auto; gap: 8px; min-width: 0; }
+  .dm-results {
+    display: grid;
+    gap: 3px;
+    max-height: min(40vh, 22rem);
+    padding: 4px;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+  }
+  .dm-result {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    text-align: left;
+    cursor: pointer;
+  }
+  .dm-result:hover, .dm-result:focus-visible { background: var(--control-hover); }
+  .dm-result:focus-visible { outline-offset: -2px; }
+  .dm-result-details { display: grid; flex: 1; gap: 2px; min-width: 0; }
+  .dm-result-meta { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .dm-result-meta time { flex: 0 0 auto; color: var(--muted-foreground); font-size: var(--type-caption); }
+  .dm-result-text {
+    display: -webkit-box;
+    overflow: hidden;
+    color: var(--muted-foreground);
+    font-size: var(--type-small);
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+  .dm-result-text mark { border-radius: 2px; background: color-mix(in srgb, var(--primary) 30%, transparent); color: var(--foreground); }
 
   .dm-share {
     display: grid;

@@ -1,16 +1,21 @@
 <script lang="ts">
-  import { CircleAlert, Download, Headphones, MessageCircle, Pencil, PhoneOff, Pin } from "@lucide/svelte";
+  import { CircleAlert, Download, Headphones, MessageCircle, Paperclip, Pencil, PhoneOff, Pin, Search, X } from "@lucide/svelte";
   import { tick } from "svelte";
   import ChatComposer from "#lib/components/chat/ChatComposer.svelte";
   import ChatMessage from "#lib/components/chat/ChatMessage.svelte";
   import RichMessage from "#lib/components/chat/RichMessage.svelte";
+  import Avatar from "#lib/components/Avatar.svelte";
   import IconButton from "#lib/components/IconButton.svelte";
-  import Modal from "#lib/components/Modal.svelte";
   import ScreenSharing from "#lib/components/media/ScreenSharing.svelte";
-  import { Button } from "#lib/components/ui/button/index.js";
+  import { Button, buttonVariants } from "#lib/components/ui/button/index.js";
+  import * as Popover from "#lib/components/ui/popover/index.js";
   import { downloadAttachment } from "#lib/chat/chat-attachments";
   import { maxChatTextLength } from "#lib/chat/rich-chat";
-  import { channelMessageContext, channelPins, messageFrom, type Channel, type Message, type PinCursor, type PinnedMessagePage } from "#lib/connection/client";
+  import { channelMessageContext, channelPins, channelSearch, messageFrom, messageTime, type Channel, type Message, type MessageSearchPage,
+    type PinCursor, type PinnedMessagePage, type SearchCursor } from "#lib/connection/client";
+  import { Input } from "#lib/components/ui/input/index.js";
+  import { matchParts } from "#lib/chat/search-highlight";
+  import { mentionsMe, type MentionKind } from "#lib/chat/mentions";
   import { voiceApp } from "#lib/connection/platform";
   import { playUiSound } from "#lib/ui-sounds";
   import { getWorkspace } from "#lib/workspace";
@@ -48,7 +53,8 @@
   const connectionId = $derived(snapshot?.connectionId);
   const channelId = $derived(currentChannel?.id);
   const supportsPins = $derived(currentChannel?.messagePins === true);
-  const chatScope = $derived(canRead && supportsPins && connectionId && channelId
+  const supportsSearch = $derived(currentChannel?.messageSearch === true);
+  const chatScope = $derived(canRead && (supportsPins || supportsSearch) && connectionId && channelId
     ? { origin, connectionId, channelId } : null);
   type ChatScope = NonNullable<typeof chatScope>;
   const revision = $derived(channelId ? view.messageRevisions?.[channelId] ?? 0 : 0);
@@ -59,10 +65,23 @@
   let loadingPins = $state(false);
   let jumpingTo = $state<string | null>(null);
   let pinRequest = 0;
+  let searchFor = $state.raw<ChatScope | null>(null);
+  const searchOpen = $derived(chatScope !== null && searchFor === chatScope);
+  let searchQuery = $state("");
+  let searchedQuery = $state("");
+  let searchPage = $state.raw<MessageSearchPage | null>(null);
+  let searchError = $state("");
+  let searching = $state(false);
+  let searchRequest = 0;
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let history = $state.raw<{ scope: ChatScope; messageId: string; messages: Message[]; revision: number } | null>(null);
   const showingHistory = $derived(history !== null && history.scope === chatScope);
   const displayedMessages = $derived(showingHistory && history ? history.messages : messages);
   let highlight = $state.raw<{ scope: ChatScope; messageId: string } | null>(null);
+  let replying = $state.raw<{ channelId: string; id: string; name: string; text: string } | null>(null);
+  const replyDraft = $derived(replying && replying.channelId === currentChannel?.id ? replying : undefined);
+  const myRoles = $derived(me?.roles ?? (me ? [me.role] : []));
+  const canReact = $derived(canChat && currentChannel?.messageReactions === true);
   let unavailableHint = $derived(!outsideChat ? "Join a channel to read and send messages."
     : currentChannel?.passwordRequired && !isInRoom ? "Join this password-protected channel to read and send messages."
     : "Your role cannot read or send messages in this channel.");
@@ -85,7 +104,9 @@
       // History arrives in bulk after switching channels. Only a single fresh arrival is a new message.
       const arrivals = messages.filter(({ id }) => !knownMessageIds.has(id));
       const latest = arrivals[0];
-      if (arrivals.length === 1 && latest.id === latestId && latest.senderId !== me?.id && Date.now() - latest.createdAt < 15000) {
+      // Mentions have their own sound, played for every channel.
+      if (arrivals.length === 1 && latest.id === latestId && latest.senderId !== me?.id && Date.now() - latest.createdAt < 15000 &&
+        !mentionsMe(latest, me?.id, myRoles)) {
         playUiSound("message");
       }
     }
@@ -100,6 +121,8 @@
   $effect(() => {
     if (pinsOpen && chatScope) void loadPins(chatScope, revision);
   });
+
+  $effect(() => () => clearTimeout(searchTimer));
 
   $effect(() => {
     if (!showingHistory || !history || history.revision === revision) return;
@@ -142,21 +165,72 @@
     }
   }
 
-  async function jumpToMessage(messageId: string) {
+  function setSearchOpen(open: boolean) {
+    searchFor = open ? chatScope : null;
+    searchRequest++;
+    clearTimeout(searchTimer);
+    searchQuery = "";
+    searchedQuery = "";
+    searchPage = null;
+    searchError = "";
+    searching = false;
+    jumpingTo = null;
+  }
+
+  function queueSearch() {
+    clearTimeout(searchTimer);
+    searchRequest++;
+    searchError = "";
+    if (!searchQuery.trim()) {
+      searchPage = null;
+      searchedQuery = "";
+      searching = false;
+      return;
+    }
+    searching = true;
+    searchTimer = setTimeout(() => { if (chatScope) void runSearch(chatScope, searchQuery.trim()); }, 250);
+  }
+
+  async function runSearch(scope: ChatScope, query: string, before?: SearchCursor) {
+    clearTimeout(searchTimer);
+    const request = ++searchRequest;
+    const current = () => searchFor === scope && chatScope === scope && request === searchRequest;
+    searching = true;
+    searchError = "";
+    try {
+      const page = await channelSearch(scope.origin, scope.connectionId, scope.channelId, query, before);
+      if (!current()) return;
+      searchPage = before && searchPage ? { ...page, messages: [...searchPage.messages, ...page.messages] } : page;
+      searchedQuery = query;
+    } catch (cause) {
+      if (current()) searchError = messageFrom(cause);
+    } finally {
+      if (current()) searching = false;
+    }
+  }
+
+  async function jumpToMessage(messageId: string, source: "pins" | "search" | "reply" = "pins") {
     const scope = chatScope;
-    if (!scope || !pinsOpen || jumpingTo) return;
+    const sourceOpen = () => source === "pins" ? pinsOpen : source === "search" ? searchOpen : true;
+    const showError = (message: string) => {
+      if (source === "pins") pinError = message;
+      else if (source === "search") searchError = message;
+      else workspace.actionError = message;
+    };
+    if (!scope || !sourceOpen() || jumpingTo) return;
     jumpingTo = messageId;
-    pinError = "";
+    showError("");
     try {
       if (messages.some((entry) => entry.id === messageId)) {
         history = null;
       } else if (!displayedMessages.some((entry) => entry.id === messageId)) {
         const requestedRevision = revision;
         const entries = await channelMessageContext(scope.origin, scope.connectionId, scope.channelId, messageId);
-        if (chatScope !== scope || !pinsOpen || jumpingTo !== messageId) return;
+        if (chatScope !== scope || !sourceOpen() || jumpingTo !== messageId) return;
         history = { scope, messageId, messages: entries, revision: requestedRevision };
       }
-      setPinsOpen(false);
+      if (source === "pins") setPinsOpen(false);
+      else if (source === "search") setSearchOpen(false);
       highlight = { scope, messageId };
       await tick();
       const target = document.getElementById(`chat-message-${messageId}`);
@@ -166,7 +240,7 @@
         target.focus({ preventScroll: true });
       }
     } catch (cause) {
-      if (chatScope === scope && pinsOpen) pinError = messageFrom(cause);
+      if (chatScope === scope && sourceOpen()) showError(messageFrom(cause));
     } finally {
       if (jumpingTo === messageId) jumpingTo = null;
     }
@@ -187,6 +261,16 @@
     }
   }
 
+  /** Opens a replied-to message, scrolling to it when it is loaded or fetching its context otherwise. */
+  async function openReply(messageId: string) {
+    if (displayedMessages.some(({ id }) => id === messageId)) {
+      highlight = chatScope && { scope: chatScope, messageId };
+      document.getElementById(`chat-message-${messageId}`)?.scrollIntoView({ block: "center" });
+      return;
+    }
+    await jumpToMessage(messageId, "reply");
+  }
+
   function returnToLatest() {
     history = null;
     highlight = null;
@@ -202,10 +286,23 @@
     if (!(await workspace.run(action, command, args))) throw new Error(workspace.actionError || "The request could not be completed.");
   }
 
-  function senderName(id: string) {
-    if (id === me?.id) return me.displayName;
-    return snapshot?.presence.find((person) => person.accountId === id)?.displayName
-      ?? snapshot?.members.find((person) => person.accountId === id)?.displayName ?? "Channel member";
+  function mentionLabel(kind: MentionKind, target: string) {
+    if (kind === "role") return { label: target, me: myRoles.includes(target) };
+    const label = target === me?.id ? me.displayName : snapshot?.presence.find((person) => person.accountId === target)?.displayName;
+    return { label, me: target === me?.id };
+  }
+
+  function startReply(entry: Message) {
+    if (!entry.channelId) return;
+    replying = { channelId: entry.channelId, id: entry.id, name: authorName(entry),
+      text: entry.text.slice(0, 120) || entry.attachment?.name || "" };
+    void tick().then(() => document.querySelector<HTMLElement>(".chat-pane .composer .tiptap, .chat-pane .composer input")?.focus());
+  }
+
+  function authorName({ senderId, senderName }: Pick<Message, "senderId" | "senderName">) {
+    if (senderId === me?.id) return me.displayName;
+    return snapshot?.presence.find((person) => person.accountId === senderId)?.displayName
+      ?? snapshot?.members.find((person) => person.accountId === senderId)?.displayName ?? senderName ?? "Channel member";
   }
 </script>
 
@@ -218,8 +315,27 @@
       <p class="channel-description" title={currentChannel.description}>{currentChannel.description}</p>
     {/if}
   </div>
-  {#if chatScope}
-    <IconButton label="Pinned messages" onclick={() => setPinsOpen(true)}><Pin size={18} aria-hidden="true" /></IconButton>
+  {#if chatScope && supportsSearch}
+    <Popover.Root bind:open={() => searchOpen, setSearchOpen}>
+      <Popover.Trigger aria-label="Search messages" title="Search messages" aria-pressed={searchOpen}
+        class={[buttonVariants({ variant: "outline", size: "icon" }), "icon-button"]}>
+        <Search size={18} aria-hidden="true" />
+      </Popover.Trigger>
+      <Popover.Content side="bottom" align="end" class="pins-popover" aria-label="Search messages">
+        {@render searchResults()}
+      </Popover.Content>
+    </Popover.Root>
+  {/if}
+  {#if chatScope && supportsPins}
+    <Popover.Root bind:open={() => pinsOpen, setPinsOpen}>
+      <Popover.Trigger aria-label="Pinned messages" title="Pinned messages" aria-pressed={pinsOpen}
+        class={[buttonVariants({ variant: "outline", size: "icon" }), "icon-button"]}>
+        <Pin size={18} aria-hidden="true" />
+      </Popover.Trigger>
+      <Popover.Content side="bottom" align="end" class="pins-popover" aria-label="Pinned messages">
+        {@render pinnedMessages()}
+      </Popover.Content>
+    </Popover.Root>
   {/if}
   {#if currentChannel?.canEdit}
     <IconButton label="Edit channel" disabled={!online || Boolean(pending)} onclick={() => onedit(currentChannel)}><Pencil size={19} aria-hidden="true" /></IconButton>
@@ -259,9 +375,19 @@
       {#if canRead && displayedMessages.length}
         {#each displayedMessages as entry, index (entry.id)}
           {@const own = entry.senderId === me?.id}
+          {@const reply = entry.replyTo}
           <ChatMessage message={entry} messageId={entry.id} pinned={Boolean(entry.pinnedAt)}
             highlighted={highlight !== null && highlight.scope === chatScope && highlight.messageId === entry.id}
-            previous={displayedMessages[index - 1]} name={senderName(entry.senderId)}
+            mentioned={mentionsMe(entry, me?.id, myRoles)}
+            replyTo={reply} replyName={reply && "senderId" in reply ? authorName(reply) : undefined}
+            onopenreply={reply && "senderId" in reply && (chatScope || messages.some(({ id }) => id === reply.id))
+              ? () => void openReply(reply.id) : undefined}
+            reactions={entry.reactions}
+            onreact={canReact ? (emoji, reacted) => {
+              void run("message-react", "react_message", { channelId: entry.channelId, messageId: entry.id, emoji, reacted });
+            } : undefined}
+            onreply={canChat ? () => startReply(entry) : undefined}
+            previous={displayedMessages[index - 1]} name={authorName(entry)}
             editText={own && canChat ? entry.text : undefined} editLimit={maxChatTextLength}
             onedit={own && canChat ? (text) => changeMessage("message-edit", "edit_message", { messageId: entry.id, text }) : undefined}
             onpin={currentChannel?.canPinMessages && !pending ? () => {
@@ -269,7 +395,7 @@
             } : undefined}
             ondelete={own || currentChannel?.canDeleteMessages
               ? () => changeMessage("message-delete", "delete_message", { messageId: entry.id }) : undefined}>
-            <RichMessage text={entry.text} html={entry.html} />
+            <RichMessage text={entry.text} html={entry.html} mention={mentionLabel} />
             {#if entry.attachment && snapshot}
               {@const connectionId = snapshot.connectionId}
               <Button type="button" variant="outline" class="chat-attachment" disabled={!canChat || Boolean(pending)}
@@ -293,40 +419,123 @@
     </div>
     {#key (snapshot?.connectionId ?? "") + "/" + (currentChannel?.id ?? "")}
       <ChatComposer channelId={currentChannel?.id ?? ""} channelName={currentChannel?.name ?? ""} enabled={canChat}
-        disabledHint={outsideChat ? "You can't send messages here" : undefined} />
+        disabledHint={outsideChat ? "You can't send messages here" : undefined}
+        replyTo={replyDraft} oncancelreply={() => { replying = null; }} />
     {/key}
   </section>
 </div>
 
-<Modal bind:open={() => pinsOpen, setPinsOpen} title="Pinned messages" description={currentChannel?.name ?? ""}>
-  {#if pinError}<p class="form-error" role="alert">{pinError}</p>{/if}
-  {#if pinPage?.messages.length}
-    <ul class="grid max-h-[min(55vh,28rem)] gap-2 overflow-auto p-1">
-      {#each pinPage.messages as pin (pin.id)}
-        <li class="grid gap-1 rounded-md border border-border p-3">
-          <div class="flex flex-wrap items-baseline gap-x-2">
-            <strong class="wrap-anywhere">{senderName(pin.senderId)}</strong>
-            <time class="text-xs text-muted-foreground" datetime={new Date(pin.createdAt).toISOString()}>{new Date(pin.createdAt).toLocaleString()}</time>
-          </div>
-          {#if pin.text}<p class="wrap-anywhere whitespace-pre-wrap text-sm">{pin.text}</p>{/if}
-          {#if pin.attachmentName}<p class="wrap-anywhere text-sm text-muted-foreground">{pin.attachmentName}</p>{/if}
-          <Button size="sm" variant="outline" class="mt-1 justify-self-start" disabled={jumpingTo !== null} onclick={() => jumpToMessage(pin.id)}>
-            {jumpingTo === pin.id ? "Opening…" : "Go to message"}
-          </Button>
-        </li>
-      {/each}
+{#snippet searchResults()}
+  <header class="pins-header">
+    <Search size={18} aria-hidden="true" />
+    <Input class="search-input" type="search" placeholder="Search {currentChannel?.name ?? 'this channel'}" aria-label="Search messages"
+      maxlength={100} spellcheck={false} autocomplete="off" bind:value={searchQuery} oninput={queueSearch}
+      onkeydown={(event) => { if (event.key === "Enter" && chatScope && searchQuery.trim()) void runSearch(chatScope, searchQuery.trim()); }} />
+  </header>
+  <div class="pins-list">
+    {#if searchError}<p class="form-error px-1" role="alert">{searchError}</p>{/if}
+    {#if searchPage?.messages.length}
+      <ul class="grid gap-2" aria-label="Search results">
+        {#each searchPage.messages as result (result.id)}
+          {@const name = authorName(result)}
+          <li class="pin-card">
+            <Avatar {name} accountId={result.senderId} />
+            <div class="min-w-0">
+              <div class="pin-meta">
+                <strong class="wrap-anywhere">{name}</strong>
+                <time datetime={new Date(result.createdAt).toISOString()} title={new Date(result.createdAt).toLocaleString()}>
+                  {new Date(result.createdAt).toLocaleDateString()}, {messageTime.format(result.createdAt)}
+                </time>
+              </div>
+              <p class="pin-body search-body">
+                {#each matchParts(result.text, searchedQuery) as part, index (index)}
+                  {#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}
+                {/each}
+              </p>
+              {#if result.attachmentName}
+                <p class="pin-attachment"><Paperclip size={14} aria-hidden="true" /><span class="truncate">{result.attachmentName}</span></p>
+              {/if}
+            </div>
+            <div class="pin-actions">
+              <Button size="sm" variant="secondary" disabled={jumpingTo !== null} onclick={() => jumpToMessage(result.id, "search")}>
+                {jumpingTo === result.id ? "Opening…" : "Jump"}
+              </Button>
+            </div>
+          </li>
+        {/each}
+      </ul>
+    {:else if searching}
+      <p class="pins-empty" role="status">Searching…</p>
+    {:else if searchPage}
+      <div class="pins-empty" role="status">
+        <Search size={32} strokeWidth={1.5} aria-hidden="true" />
+        <p>{searchPage.next ? "No matches in this batch." : `No stored messages match “${searchedQuery}”.`}</p>
+      </div>
+    {:else}
+      <p class="pins-empty">Search this channel’s stored messages.</p>
+    {/if}
+    {#if searchPage?.next && chatScope}
+      <Button size="sm" variant="ghost" class="mt-2 w-full" disabled={searching} onclick={() => {
+        if (chatScope && searchPage?.next) void runSearch(chatScope, searchedQuery, searchPage.next);
+      }}>{searching ? "Loading…" : "Search older messages"}</Button>
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet pinnedMessages()}
+  <header class="pins-header">
+    <Pin size={18} aria-hidden="true" />
+    <h3>Pinned Messages</h3>
+  </header>
+  <div class="pins-list">
+    {#if pinError}<p class="form-error px-1" role="alert">{pinError}</p>{/if}
+    {#if pinPage?.messages.length}
+      <ul class="grid gap-2">
+        {#each pinPage.messages as pin (pin.id)}
+          {@const name = authorName(pin)}
+          <li class="pin-card">
+            <Avatar {name} accountId={pin.senderId} />
+            <div class="min-w-0">
+              <div class="pin-meta">
+                <strong class="wrap-anywhere">{name}</strong>
+                <time datetime={new Date(pin.createdAt).toISOString()} title={new Date(pin.createdAt).toLocaleString()}>
+                  {new Date(pin.createdAt).toLocaleDateString()}, {messageTime.format(pin.createdAt)}
+                </time>
+              </div>
+              {#if pin.text}<div class="pin-body"><RichMessage text={pin.text} /></div>{/if}
+              {#if pin.attachmentName}
+                <p class="pin-attachment"><Paperclip size={14} aria-hidden="true" /><span class="truncate">{pin.attachmentName}</span></p>
+              {/if}
+            </div>
+            <div class="pin-actions">
+              <Button size="sm" variant="secondary" disabled={jumpingTo !== null} onclick={() => jumpToMessage(pin.id)}>
+                {jumpingTo === pin.id ? "Opening…" : "Jump"}
+              </Button>
+              {#if currentChannel?.canPinMessages}
+                <Button size="icon-sm" variant="secondary" aria-label="Unpin message" title="Unpin message" disabled={Boolean(pending)}
+                  onclick={() => run("message-pin", "pin_message", { channelId: currentChannel.id, messageId: pin.id, pinned: false })}>
+                  <X size={14} aria-hidden="true" />
+                </Button>
+              {/if}
+            </div>
+          </li>
+        {/each}
+      </ul>
       {#if pinPage.next && chatScope}
-        <li><Button size="sm" variant="outline" disabled={loadingPins} onclick={() => {
+        <Button size="sm" variant="ghost" class="mt-2 w-full" disabled={loadingPins} onclick={() => {
           if (chatScope && pinPage?.next) void loadPins(chatScope, revision, pinPage.next);
-        }}>{loadingPins ? "Loading…" : "Load more pins"}</Button></li>
+        }}>{loadingPins ? "Loading…" : "Load more pins"}</Button>
       {/if}
-    </ul>
-  {:else if loadingPins}
-    <p role="status">Loading pinned messages…</p>
-  {:else if pinPage}
-    <p>No pinned messages.</p>
-  {/if}
-</Modal>
+    {:else if loadingPins}
+      <p class="pins-empty" role="status">Loading pinned messages…</p>
+    {:else if pinPage}
+      <div class="pins-empty">
+        <Pin size={32} strokeWidth={1.5} aria-hidden="true" />
+        <p>This channel doesn't have any pinned messages… yet.</p>
+      </div>
+    {/if}
+  </div>
+{/snippet}
 
 <style>
   .channel-description {
@@ -346,4 +555,59 @@
   }
   .server-motd summary { width: fit-content; font-weight: 600; cursor: pointer; }
   .server-motd p { margin: .25rem 0 0; max-height: 9rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+  :global(.pins-popover) {
+    width: min(26rem, calc(100vw - 1rem));
+    max-height: min(70vh, 36rem);
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+  .pins-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .pins-header :global(.search-input) { flex: 1; min-width: 0; }
+  .search-body { margin: 0; white-space: pre-wrap; }
+  .search-body mark { border-radius: 2px; background: color-mix(in srgb, var(--primary) 30%, transparent); color: inherit; }
+  .pins-header h3 { margin: 0; font-size: 1rem; font-weight: 600; }
+  .pins-list { min-height: 0; overflow: auto; padding: 8px; }
+  .pin-card {
+    position: relative;
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr);
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+  }
+  .pin-card:hover, .pin-card:focus-within { background: var(--control-hover); }
+  .pin-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
+  .pin-meta time { color: var(--muted-foreground); font-size: var(--type-small); }
+  .pin-body { font-size: var(--type-body, .875rem); overflow-wrap: anywhere; }
+  .pin-body :global(p) { margin: 0; white-space: pre-wrap; }
+  .pin-attachment { display: flex; align-items: center; gap: 4px; margin: 2px 0 0; color: var(--muted-foreground); font-size: var(--type-small); }
+  .pin-actions {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity 100ms;
+  }
+  .pin-card:hover .pin-actions, .pin-card:focus-within .pin-actions { opacity: 1; }
+  @media (hover: none) { .pin-actions { opacity: 1; } }
+  .pins-empty {
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    padding: 24px 16px;
+    color: var(--muted-foreground);
+    text-align: center;
+  }
+  .pins-empty p { margin: 0; }
 </style>

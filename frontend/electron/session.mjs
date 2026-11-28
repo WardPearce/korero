@@ -8,8 +8,18 @@ const directMessageLimit = 200;
 const channelMessageLimit = 200;
 const isSameDirectMessage = (a, b) => a.id === b.id && a.senderId === b.senderId && a.recipientId === b.recipientId;
 
+
+/** Applies a live reaction change; `me` only changes when the reacting account is this one. */
+function applyReaction(reactions = [], change, mine) {
+  const current = reactions.find(({ emoji }) => emoji === change.emoji);
+  const me = mine ? change.reacted : current?.me ?? false;
+  const next = current ? reactions.map((entry) => entry === current ? { ...entry, count: change.count, me } : entry)
+    : [...reactions, { emoji: change.emoji, count: change.count, me }];
+  return next.filter(({ count }) => count > 0);
+}
+
 export function offlineView(origin) {
-  return { origin, phase: "offline", snapshot: null, messages: [], messageRevisions: {}, directMessages: [], lastPoke: null, speaking: [], error: null };
+  return { origin, phase: "offline", snapshot: null, messages: [], messageRevisions: {}, directMessages: [], lastPoke: null, lastMention: null, speaking: [], error: null };
 }
 
 export function readCredentials(value) {
@@ -368,13 +378,21 @@ export class DesktopSession {
       this.#show({ messages: [...messages.filter((message) => !oldest.has(message)), payload] });
     } else if (type === "message.edited") {
       this.#show({ messages: messages.map((message) => message.id === payload.messageId
-        ? { ...message, text: payload.text, html: payload.html, editedAt: payload.editedAt } : message),
+        ? { ...message, text: payload.text, html: payload.html, editedAt: payload.editedAt,
+          ...(payload.mentions ? { mentions: payload.mentions.accounts.length || payload.mentions.roles.length ? payload.mentions : undefined } : {}) } : message),
         messageRevisions: this.#reviseMessages(payload.channelId) });
     } else if (type === "message.deleted") {
       this.#show({ messages: messages.filter(({ id }) => id !== payload.messageId), messageRevisions: this.#reviseMessages(payload.channelId) });
     } else if (type === "message.pinChanged") {
       this.#show({ messages: messages.map((message) => message.id === payload.messageId ? { ...message, pinnedAt: payload.pinnedAt } : message),
         messageRevisions: this.#reviseMessages(payload.channelId) });
+    } else if (type === "message.reactionsChanged") {
+      const mine = payload.accountId === snapshot.account.id;
+      this.#show({ messages: messages.map((message) => message.id === payload.messageId
+        ? { ...message, reactions: applyReaction(message.reactions, payload, mine) } : message),
+        messageRevisions: this.#reviseMessages(payload.channelId) });
+    } else if (type === "message.mentioned") {
+      this.#show({ lastMention: payload });
     } else if (type === "direct.poked" && payload.recipientId === snapshot.account.id) {
       this.#show({ lastPoke: payload });
     } else if (type.startsWith("direct.") && [payload?.senderId, payload?.recipientId].includes(snapshot.account.id)) {

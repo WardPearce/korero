@@ -1,11 +1,12 @@
-import { createApi, type DirectOperation, type Message, type PinCursor, type PinnedMessagePage, type RelayResponse, type VoiceState } from "korero-chat/source";
+import { createApi, type DirectOperation, type Message, type MessageSearchPage, type PinCursor, type PinnedMessagePage, type RelayResponse, type SearchCursor, type VoiceState } from "korero-chat/source";
 import { browserSessions } from "./browser-session";
 import { call, desktopApp, watchDesktop } from "./platform";
 
 export {
   isSameDirectMessage, messageFrom, offline, requestError,
   type Account, type ChannelData as Channel, type DirectMessage, type DirectMessageChange,
-  type DirectMessageReference, type Member, type MemberRequest, type Message, type PinCursor, type PinnedMessagePage, type Poke,
+  type DirectMessageReference, type Member, type MemberRequest, type Message, type MessageReaction, type MessageSearchPage, type PinCursor, type PinnedMessagePage, type Poke,
+  type ReplyPreview, type SearchCursor,
   type RelayResponse, type ScreenShare, type ServerInfo, type Snapshot, type VoiceState,
 } from "korero-chat/source";
 export { call, desktopApp } from "./platform";
@@ -21,6 +22,13 @@ export async function channelPins(origin: string, connectionId: string, channelI
   const session = browserSessions.session(origin);
   if (session.connectionId !== connectionId) throw new Error("The server connection changed.");
   return session.pinnedMessages(channelId, before);
+}
+
+export async function channelSearch(origin: string, connectionId: string, channelId: string, query: string, before?: SearchCursor) {
+  if (desktopApp()) return call<MessageSearchPage>("message_search", { origin, connectionId, channelId, query, before });
+  const session = browserSessions.session(origin);
+  if (session.connectionId !== connectionId) throw new Error("The server connection changed.");
+  return session.searchMessages(channelId, query, before);
 }
 
 export async function channelMessageContext(origin: string, connectionId: string, channelId: string, messageId: string) {
