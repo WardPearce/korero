@@ -22,9 +22,27 @@
 	];
 
 	const layers = [
-		{ label: 'HTTPS', detail: 'JSON API', icon: Braces },
-		{ label: 'WebSocket', detail: 'Live envelopes', icon: Radio },
-		{ label: 'WebRTC', detail: 'Opus and VP8 media', icon: MonitorPlay }
+		{
+			title: 'Sign in',
+			body: 'Read the server info, prove who you are by signing a challenge with your key, then swap the session for a short-lived ticket.',
+			tech: 'HTTPS with JSON',
+			href: '#http',
+			icon: Braces
+		},
+		{
+			title: 'Stay connected',
+			body: 'Open one socket, authenticate with the ticket and receive a snapshot of the server. Send requests and listen for live events.',
+			tech: 'WebSocket with JSON envelopes',
+			href: '#websocket',
+			icon: Radio
+		},
+		{
+			title: 'Talk and share',
+			body: 'Join a channel, then negotiate send and receive transports for voice, screen and camera.',
+			tech: 'WebRTC with Opus and VP8',
+			href: '#webrtc',
+			icon: MonitorPlay
+		}
 	];
 
 	const repo = 'https://github.com/WardPearce/korero/blob/main/docs';
@@ -45,7 +63,7 @@
 					}
 				}
 			},
-			{ rootMargin: '-80px 0px -68% 0px' }
+			{ rootMargin: '-96px 0px -68% 0px' }
 		);
 
 		sections.forEach((section) => observer.observe(section));
@@ -65,28 +83,16 @@
 
 <section class="protocol-hero border-b border-border">
 	<div class="mx-auto max-w-7xl px-6 py-16 lg:py-20">
-		<div class="flex flex-wrap items-center gap-3 text-sm">
-			<span class="version-pill">Protocol v1</span>
-			<span class="text-muted-foreground">Stable wire format</span>
-		</div>
-		<h1 class="mt-5 max-w-3xl text-4xl leading-[1.05] font-semibold sm:text-5xl">
+		<p class="text-sm text-muted-foreground">
+			<span class="font-semibold text-primary">Protocol v1</span>, stable wire format
+		</p>
+		<h1 class="mt-4 max-w-3xl text-4xl leading-[1.05] font-semibold sm:text-5xl">
 			Build on the Kōrero protocol
 		</h1>
 		<p class="mt-5 max-w-2xl text-lg text-muted-foreground">
-			Signalling runs over HTTPS and text JSON WebSocket frames. Media uses standard WebRTC ICE,
-			DTLS-SRTP, RTP and RTCP. Implement a client or bot in any language.
+			Write a bot, your own client or an integration in any language. The official apps use exactly
+			this protocol, so anything they can do, yours can too.
 		</p>
-		<div class="mt-9 grid gap-3 sm:grid-cols-3">
-			{#each layers as layer (layer.label)}
-				<div class="layer-card">
-					<layer.icon size={18} />
-					<div>
-						<p class="font-medium">{layer.label}</p>
-						<p class="text-sm text-muted-foreground">{layer.detail}</p>
-					</div>
-				</div>
-			{/each}
-		</div>
 		<div class="mt-8 flex flex-wrap gap-3">
 			<a
 				href="{repo}/protocol-v1.schema.json"
@@ -113,11 +119,25 @@
 				<Fingerprint size={16} /> Server identity
 			</a>
 		</div>
+
+		<h2 class="mt-16 text-xl font-semibold">How a client connects</h2>
+		<ol class="flow">
+			{#each layers as layer (layer.href)}
+				<li>
+					<a href={layer.href} class="flow-step">
+						<span class="flow-icon"><layer.icon size={18} /></span>
+						<span class="block font-semibold">{layer.title}</span>
+						<span class="mt-1 mb-4 block text-sm text-muted-foreground">{layer.body}</span>
+						<span class="flow-tech">{layer.tech}</span>
+					</a>
+				</li>
+			{/each}
+		</ol>
 	</div>
 </section>
 
 <div class="mx-auto grid max-w-7xl gap-12 px-6 py-16 lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-12">
-	<nav aria-label="On this page" class="min-w-0 lg:sticky lg:top-6 lg:self-start">
+	<nav aria-label="On this page" class="min-w-0 lg:sticky lg:top-20 lg:self-start">
 		<div class="toc-card">
 			<p class="toc-heading">On this page</p>
 			<ol class="toc-list">
@@ -142,19 +162,40 @@
 	</nav>
 
 	<main id="main" class="docs protocol-docs max-w-[58rem] min-w-0">
-		<p>
-			All times are Unix milliseconds. Durations whose names end in <code>Seconds</code> are
-			seconds. Object IDs are opaque lowercase UUID-formatted strings. Clients generate direct
-			message IDs and use a positive integer request ID in each WebSocket envelope. Clients should
-			preserve unknown fields in extensible media data and ignore unknown events. Request schemas
-			are available as
-			<a href="{repo}/protocol-v1.schema.json" target="_blank" rel="noopener noreferrer">
-				JSON Schema
-			</a>. References such as
-			<code>#/$defs/websocketRequest</code> select individual schemas.
-		</p>
+		<section class="conventions" aria-labelledby="conventions-title">
+			<h2 id="conventions-title" class="conventions-title">Conventions</h2>
+			<dl>
+				<div>
+					<dt>Times</dt>
+					<dd>Unix milliseconds. Durations named <code>…Seconds</code> are in seconds.</dd>
+				</div>
+				<div>
+					<dt>IDs</dt>
+					<dd>
+						Opaque lowercase UUID-formatted strings. Clients generate their own direct message IDs.
+					</dd>
+				</div>
+				<div>
+					<dt>Request IDs</dt>
+					<dd>A positive, increasing integer in each WebSocket envelope.</dd>
+				</div>
+				<div>
+					<dt>Compatibility</dt>
+					<dd>Preserve unknown fields in extensible media data, and ignore unknown events.</dd>
+				</div>
+				<div>
+					<dt>Schemas</dt>
+					<dd>
+						Every request is in the
+						<a href="{repo}/protocol-v1.schema.json" target="_blank" rel="noopener noreferrer">
+							JSON Schema
+						</a>. Select one with a reference such as <code>#/$defs/websocketRequest</code>.
+					</dd>
+				</div>
+			</dl>
+		</section>
 
-		<h2 id="http">HTTP</h2>
+		<h2 id="http"><a href="#http" class="heading-link">HTTP</a></h2>
 		<p>
 			Set <code>Content-Type: application/json</code> on requests with a body. Authenticated routes
 			require <code>Authorization: Bearer &lt;accessToken&gt;</code>. Error responses carry
@@ -581,6 +622,9 @@
 			</table>
 		</div>
 
+		<h3 id="accounts-and-sessions">
+			<a href="#accounts-and-sessions" class="heading-link">Accounts and sessions</a>
+		</h3>
 		<p>
 			An Account object has <code>id, displayName, role, createdAt, badge</code>. Session responses
 			have <code>sessionId, accessToken, refreshToken, accessExpiresAt, refreshExpiresAt</code> at
@@ -589,6 +633,9 @@
 			authenticated callers. Native requests may omit the Origin header. Cross-origin browser
 			requests require an exact match in <code>server.origins</code>.
 		</p>
+		<h3 id="server-administration">
+			<a href="#server-administration" class="heading-link">Server administration</a>
+		</h3>
 		<p>
 			Servers advertising <code>extendedServerAdministration</code> support server preferences, role
 			deletion, and HTTP audit history. Audit events are returned newest first, with up to 100
@@ -639,6 +686,9 @@
 			new registrations. The server password is read-only in the API when the host sets
 			<code>VOICE_SERVER_PASSWORD</code>.
 		</p>
+		<h3 id="signing-in-with-an-identity">
+			<a href="#signing-in-with-an-identity" class="heading-link">Signing in with an identity</a>
+		</h3>
 		<p>
 			For <code>login</code>, <code>register</code>, or <code>bootstrap</code>, request a challenge
 			for the raw 32-byte Ed25519 public key encoded in base64url without padding. Verify the
@@ -658,7 +708,9 @@
 			proof for an unregistered key returns <code>NOT_FOUND</code>.
 		</p>
 
-		<h2 id="websocket">WebSocket connection and envelopes</h2>
+		<h2 id="websocket">
+			<a href="#websocket" class="heading-link">WebSocket connection and envelopes</a>
+		</h2>
 		<ol class="steps">
 			<li>Check that discovery lists v1. Obtain a fresh ticket through the HTTP API.</li>
 			<li>
@@ -703,6 +755,9 @@
 			label="Event"
 			code={`{"version":1,"type":"channel.changed","payload":{"channelId":null}}`}
 		/>
+		<h3 id="request-ids-and-retries">
+			<a href="#request-ids-and-retries" class="heading-link">Request IDs and retries</a>
+		</h3>
 		<p>
 			Requests use strictly increasing positive integers up to JavaScript's safe-integer maximum,
 			with a fresh sequence on reconnect. One connection executes requests in order. Retransmitting
@@ -713,6 +768,9 @@
 			receives an error with ID zero if the socket remains writable. A reconnect does not replay
 			mutations. Reconcile state before retrying operations across connections.
 		</p>
+		<h3 id="the-connection-snapshot">
+			<a href="#the-connection-snapshot" class="heading-link">The connection snapshot</a>
+		</h3>
 		<p>
 			A successful snapshot has <code>
 				connectionId, account, channelId, channels, totalUsers, presence, members,
@@ -725,9 +783,12 @@
 			server hierarchy. <code>assignableRoles</code> lists roles the caller can assign to a
 			subordinate account. The channel list has
 			<code>
-				id, parentId, name, description, position, capacity, temporary, passwordRequired, canMute,
-				canReparent, canDelete
-			</code>. Invisible parents are represented as null. Members have
+				id, parentId, name, description, position, capacity, temporary, passwordRequired, canChat,
+				canAttachFiles, canMute, canReparent, canDelete
+			</code>. <code>canChat</code> indicates whether the caller can read and send messages in that
+			channel. <code>canAttachFiles</code> also requires the <code>attachFiles</code> permission. On
+			older servers that omit <code>canChat</code>, clients use chat in the joined channel only.
+			Invisible parents are represented as null. Members have
 			<code>
 				connectionId, accountId, displayName, role, badge, muted, deafened, adminMuted,
 				adminDeafened
@@ -743,16 +804,44 @@
 			<code>null</code> to clear a badge. It only allows edits to other accounts below the caller's role,
 			and records changes in the audit log.
 		</p>
+		<h3 id="closing-and-limits">
+			<a href="#closing-and-limits" class="heading-link">Closing and limits</a>
+		</h3>
 		<p>
 			Oversized frames, a full pending request queue or outbound backpressure may close the socket.
-			Treat close code 4401 as a need to reauthenticate, 4403 as a kick, and 4429 as a limit. A
-			kicked account cannot authenticate a new connection for 60 seconds;
-			<code>connection.authenticate</code> returns <code>FORBIDDEN</code> until then. Ticket renewal can
-			extend a session without tearing down media. A revoked device receives 4401 and its transports are
-			closed.
+			Ticket renewal can extend a session without tearing down media.
 		</p>
+		<div class="table-wrap">
+			<table class="close-table">
+				<thead>
+					<tr><th>Close code</th><th>Meaning</th><th>What to do</th></tr>
+				</thead>
+				<tbody>
+					<tr>
+						<td><code>4401</code></td>
+						<td>Authentication expired, or the device was revoked</td>
+						<td>
+							Get a new ticket and reconnect. A revoked device’s transports are already closed.
+						</td>
+					</tr>
+					<tr>
+						<td><code>4403</code></td>
+						<td>Kicked</td>
+						<td>
+							Wait 60 seconds. Until then <code>connection.authenticate</code> returns
+							<code>FORBIDDEN</code>.
+						</td>
+					</tr>
+					<tr>
+						<td><code>4429</code></td>
+						<td>A limit was reached</td>
+						<td>Back off before reconnecting.</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
 
-		<h2 id="requests">Application requests</h2>
+		<h2 id="requests"><a href="#requests" class="heading-link">Application requests</a></h2>
 		<p>
 			Use <code>&#123;&#125;</code> for an empty payload. Optional fields are indicated by
 			<code>?</code>. Omitted edit fields retain their value. <code>null</code> clears nullable parent,
@@ -803,6 +892,11 @@
 						<td>Snapshot</td>
 					</tr>
 					<tr><td><code>channel.leave</code></td><td>—</td><td>Snapshot</td></tr>
+					<tr>
+						<td><code>channel.view</code></td>
+						<td><code>channelId</code> or <code>null</code> to stop following</td>
+						<td><code>&#123;&#125;</code></td>
+					</tr>
 					<tr>
 						<td><code>channel.move</code></td>
 						<td><code>connectionId, channelId</code></td>
@@ -930,6 +1024,9 @@
 				</tbody>
 			</table>
 		</div>
+		<h3 id="channel-permissions">
+			<a href="#channel-permissions" class="heading-link">Channel permissions</a>
+		</h3>
 		<p>
 			<code>channel.override</code> requires <code>manageRoles</code>, server-wide
 			<code>editChannels</code>, and the permission being changed at server scope. The actor must
@@ -943,17 +1040,31 @@
 			Lobby and channels with children cannot be deleted. Deleting another member’s channel message
 			still requires <code>deleteChannels</code>.
 		</p>
+		<h3 id="moderation-history-and-files">
+			<a href="#moderation-history-and-files" class="heading-link">Moderation, history and files</a>
+		</h3>
 		<p>
 			Registration and <code>server.max_users</code> are host-only settings: change them in TOML or
 			with <code>VOICE_SERVER_REGISTRATION</code> / <code>VOICE_SERVER_MAX_USERS</code>, not through
-			<code>server.settings</code>. Server mute and deafen require <code>mute</code> at server scope
-			and in the target channel. They apply to a subordinate account identified by its connection ID
-			and persist across connections. Server mute blocks producers. Server deafen blocks producers
-			and consumers independently of self-deafen. Enabling either restriction closes affected media
-			resources. Clients recreate producers or consumers once allowed. Kicking closes all account
-			connections. Banning also revokes all device sessions. Temporary rooms are joined on creation
-			and disappear when empty. Channel history requires current channel membership and text
-			permission. History is empty when text persistence is disabled. Current live text still works.
+			<code>server.settings</code>. Server mute and deafen require <code>mute</code> at server scope and
+			in the target channel. They apply to a subordinate account identified by its connection ID and persist
+			across connections. Server mute blocks producers. Server deafen blocks producers and consumers independently
+			of self-deafen. Enabling either restriction closes affected media resources. Clients recreate producers
+			or consumers once allowed. Kicking closes all account connections. Banning also revokes all device
+			sessions. Temporary rooms are joined on creation and disappear when empty.
+		</p>
+		<p>
+			With <code>join</code> and <code>text</code> permission, a connection can read and send
+			messages without joining the channel. Password-protected channels require membership. A
+			connection receives live chat events for its joined channel and can use
+			<code>channel.view</code>
+			to follow one additional channel. A new <code>channel.view</code> replaces the previous one.
+			The server sends <code>channel.viewEnded</code> if the connection loses chat access to the
+			followed channel. Send <code>channel.view</code> again once <code>canChat</code> is true. Subscribe
+			before requesting history to receive live messages during the request. History is empty when text
+			persistence is disabled. Current live text still works.
+		</p>
+		<p>
 			Message objects contain <code>id, channelId, recipientId, senderId, createdAt, text</code> and
 			may include <code>html</code> and attachment metadata as
 			<code>attachment: &#123;name, size&#125;</code>. When server info advertises
@@ -971,20 +1082,22 @@
 			snapshots advertise the current decoded file limit as <code>maxAttachmentBytes</code>.
 			Administrators can set
 			<code>maxAttachmentMiB</code> from 1 to 32 in <code>PATCH /api/v1/admin/preferences</code>.
-			The default is 4 MiB. Upload and download both require <code>text</code> permission in the
-			connection's current channel. Uploads also require <code>attachFiles</code> permission,
-			reflected by the snapshot's <code>canAttachFiles</code> field. Downloads return encoded data
-			separately from history and events. Persistent attachments expire and are deleted with their
-			message. In-memory attachments are available for up to one hour. The in-memory quotas are 8
-			MiB per sender and 32 MiB per server by default. A higher file limit raises those caps to at
-			least one file per sender and four files per server. Persistent storage is limited to 32 MiB
-			per sender and 256 MiB per server. By default each account has a download budget of 240
-			requests and 128 MiB of decoded file data, refilled over one minute, and uploads are capped at
-			120 requests per minute. Hosts can adjust these with
+			The default is 4 MiB. Uploads and downloads require chat access to the message's channel.
+			Uploads also require <code>attachFiles</code> permission, reflected by the channel's
+			<code>canAttachFiles</code> field. The snapshot's top-level <code>canAttachFiles</code> field
+			covers the joined channel. Downloads return encoded data separately from history and events.
+			Persistent attachments expire and are deleted with their message. In-memory attachments are
+			available for up to one hour. The in-memory quotas are 8 MiB per sender and 32 MiB per server
+			by default. A higher file limit raises those caps to at least one file per sender and four
+			files per server. Persistent storage is limited to 32 MiB per sender and 256 MiB per server.
+			By default each account has a download budget of 240 requests and 128 MiB of decoded file
+			data, refilled over one minute, and uploads are capped at 120 requests per minute. Hosts can
+			adjust these with
 			<code>limits.attachment_downloads_per_minute</code>,
 			<code>limits.attachment_download_bytes_per_minute</code> and
 			<code>limits.attachment_uploads_per_minute</code>.
 		</p>
+		<h3 id="afk"><a href="#afk" class="heading-link">AFK</a></h3>
 		<p>
 			AFK is connection-scoped. While <code>afk</code> is true, both <code>muted</code> and
 			<code>deafened</code> are reported as true and the server closes and blocks producers and
@@ -994,7 +1107,7 @@
 			empty string clears the message.
 		</p>
 
-		<h2 id="direct">Encrypted direct messages</h2>
+		<h2 id="direct"><a href="#direct" class="heading-link">Encrypted direct messages</a></h2>
 		<p>
 			Snapshots advertise <code>
 				directMessages: &#123;maxBytes, persistent, offlineDelivery, canSend&#125;
@@ -1007,6 +1120,9 @@
 			<code>id, senderId, recipientId, createdAt, nonce, ciphertext, signature</code>. The server
 			supplies <code>createdAt</code> and uses it for retention and history order.
 		</p>
+		<h3 id="offline-delivery">
+			<a href="#offline-delivery" class="heading-link">Offline delivery</a>
+		</h3>
 		<p>
 			The recipient can be offline when the server accepts a packet. <code>direct.send</code>
 			returns
@@ -1024,6 +1140,9 @@
 			hold at most <code>messaging.offline_delivery_per_sender</code>. Further offline sends return
 			<code>LIMIT</code>. The sender can retry an identical packet using the same ID.
 		</p>
+		<h3 id="history-and-retention">
+			<a href="#history-and-retention" class="heading-link">History and retention</a>
+		</h3>
 		<p>
 			With <code>persistent</code> enabled, delivered packets stay in history until the
 			<code>messaging.retention_hours</code> cutoff, and undelivered packets follow the same cutoff.
@@ -1034,6 +1153,7 @@
 			a connected device is not stored. The encrypted requests are separate from channel chat. The
 			server rejects legacy plaintext direct-message sends.
 		</p>
+		<h3 id="pokes"><a href="#pokes" class="heading-link">Pokes</a></h3>
 		<p>
 			Snapshots advertise poke support through <code>pokeMaxLength</code>. A poke requires
 			<code>sendDirectMessages</code> permission and an active recipient on the same server. The
@@ -1041,6 +1161,7 @@
 			single-line note travels as text over the WebSocket and is not stored in direct message history.
 			Pokes have a separate rate limit of six per minute per account.
 		</p>
+		<h3 id="safety-codes"><a href="#safety-codes" class="heading-link">Safety codes</a></h3>
 		<p>
 			Clients check that <code>ownPublicKey</code> matches their enrolled identity and verify the
 			conversation safety code out of band before sending or decrypting. Compute the code as the
@@ -1049,23 +1170,40 @@
 			<code>[accountId, publicKey]</code> and the two entries sort by account ID. Pin the verified code
 			locally and refuse a changed value.
 		</p>
+		<h3 id="encrypting-a-message">
+			<a href="#encrypting-a-message" class="heading-link">Encrypting a message</a>
+		</h3>
+		<ol class="steps">
+			<li>
+				Convert the local Ed25519 seed and the peer’s validated Ed25519 public key to X25519 with a
+				standard implementation. Reject small-order and non-prime-order peer points and an all-zero
+				shared secret.
+			</li>
+			<li>
+				Generate a random UUIDv4 <code>id</code> and a random 12-byte nonce for each message.
+			</li>
+			<li>
+				Derive a 32-byte AES key from the shared secret using HKDF-SHA-256 with a 32-byte zero salt
+				and the UTF-8 compact JSON array
+				<code>["korero-direct-message-v1", serverId, senderId, recipientId, id]</code> as the information
+				parameter.
+			</li>
+			<li>
+				Encrypt 1 to <code>maxBytes</code> of UTF-8 text with AES-256-GCM, using the same array as associated
+				data, and append the 16-byte authentication tag. Encode the nonce and tagged ciphertext as unpadded
+				base64url.
+			</li>
+			<li>
+				Extend the associated-data array with the two encoded strings in that order, sign its UTF-8
+				compact JSON with Ed25519 and encode that signature as unpadded base64url.
+			</li>
+		</ol>
 		<p>
-			Convert the local Ed25519 seed and the peer’s validated Ed25519 public key to X25519 with a
-			standard implementation. Reject small-order and non-prime-order peer points and an all-zero
-			shared secret. Generate a random UUIDv4 <code>id</code> and a random 12-byte nonce for each
-			message. Derive a 32-byte AES key from the shared secret using HKDF-SHA-256 with a 32-byte
-			zero salt and the UTF-8 compact JSON array
-			<code>["korero-direct-message-v1", serverId, senderId, recipientId, id]</code> as the
-			information parameter. Use the same array as AES-256-GCM associated data. Encrypt 1 to
-			<code>maxBytes</code>
-			of UTF-8 text and append the 16-byte authentication tag. Encode the nonce and tagged ciphertext
-			as unpadded base64url. Extend the associated-data array with the two encoded strings in that order,
-			sign its UTF-8 compact JSON with Ed25519 and encode that signature as unpadded base64url. Clients
-			verify the signature against the pinned sender identity and authenticate the ciphertext before displaying
-			text.
+			Recipients verify the signature against the pinned sender identity and authenticate the
+			ciphertext before displaying text.
 		</p>
 
-		<h2 id="webrtc">WebRTC negotiation</h2>
+		<h2 id="webrtc"><a href="#webrtc" class="heading-link">WebRTC negotiation</a></h2>
 		<p>
 			Use the object field names and types from the
 			<a href="https://mediasoup.org/documentation/v3/mediasoup/rtp-parameters-and-capabilities/">
@@ -1154,6 +1292,7 @@
 				</tbody>
 			</table>
 		</div>
+		<h3 id="transport-flow"><a href="#transport-flow" class="heading-link">Transport flow</a></h3>
 		<p>
 			On the sending side, route the WebRTC transport's DTLS connect and produce callbacks through
 			their respective requests. On the receiving side, create the consumer on the server, add the
@@ -1162,6 +1301,7 @@
 			ICE parameters through the client transport. If the worker resets or the client changes rooms, discard
 			stale media IDs and transports.
 		</p>
+		<h3 id="voice"><a href="#voice" class="heading-link">Voice</a></h3>
 		<p>
 			Voice uses Opus at 48 kHz. SDP advertises Opus with two-channel capability as required for
 			interop. Clients default to mono capture and can negotiate stereo, DTX, FEC and a target 20 ms
@@ -1171,6 +1311,7 @@
 			channel editing permissions. Use <code>null</code> to inherit the server default. Use the effective
 			bitrate in the sender's Opus codec options. Actual throughput depends on the encoder and network.
 		</p>
+		<h3 id="screen-sharing"><a href="#screen-sharing" class="heading-link">Screen sharing</a></h3>
 		<p>
 			Servers advertising <code>screenSharing</code> support a separate screen transport in each
 			direction. Publishing requires <code>speak</code> and <code>shareScreen</code> in the joined
@@ -1181,6 +1322,7 @@
 			audio ID. Consuming screen media requires a screen receive transport.
 			<code>media.producers</code> lists microphone audio.
 		</p>
+		<h3 id="whisper"><a href="#whisper" class="heading-link">Whisper</a></h3>
 		<p>
 			A microphone send transport can set <code>whisperChannelId</code> to route only to a different
 			occupied channel. The sender stays joined to their source channel. Close the normal microphone
@@ -1195,6 +1337,7 @@
 			empties or becomes inaccessible. <code>media.whisperEnded</code> reports the source
 			<code>channelId</code> and closed <code>transportId</code> to the sender.
 		</p>
+		<h3 id="camera"><a href="#camera" class="heading-link">Camera</a></h3>
 		<p>
 			An array in the snapshot's <code>cameras</code> field indicates webcam support. For camera
 			send and receive transports use <code>kind: "video"</code> with
@@ -1208,7 +1351,7 @@
 			<code>media.cameraAvailable</code>.
 		</p>
 
-		<h2 id="events">Events</h2>
+		<h2 id="events"><a href="#events" class="heading-link">Events</a></h2>
 		<div class="table-wrap">
 			<table class="event-table">
 				<thead>
@@ -1233,11 +1376,19 @@
 						<td><code>channelId</code> or null for a move or removal by the server</td>
 					</tr>
 					<tr>
+						<td><code>channel.viewEnded</code></td>
+						<td><code>channelId</code> when the server ends a chat subscription</td>
+					</tr>
+					<tr>
 						<td><code>state.invalidated</code></td>
 						<td><code>&#123;&#125;</code>, re-fetch snapshot</td>
 					</tr>
 					<tr><td><code>server.changed</code></td><td><code>name, registration</code></td></tr>
 					<tr><td><code>message.created</code></td><td>Message</td></tr>
+					<tr>
+						<td><code>message.edited</code></td>
+						<td><code>messageId, text, html?, editedAt</code></td>
+					</tr>
 					<tr><td><code>message.deleted</code></td><td><code>messageId</code></td></tr>
 					<tr><td><code>direct.created</code></td><td>Encrypted direct message packet</td></tr>
 					<tr>
@@ -1309,7 +1460,7 @@
 			identify silent clients.
 		</p>
 
-		<h2 id="errors">Error codes</h2>
+		<h2 id="errors"><a href="#errors" class="heading-link">Error codes</a></h2>
 		<div class="table-wrap">
 			<table class="error-table">
 				<thead>
@@ -1376,7 +1527,7 @@
 		</div>
 
 		<div class="doc-footer">
-			<p>Protocol v1 · Part of the Kōrero source documentation.</p>
+			<p>Protocol v1, from the Kōrero source documentation.</p>
 			<div class="doc-footer-links">
 				<a href="{repo}/protocol.md" target="_blank" rel="noopener noreferrer">Edit this page</a>
 				<a href="/host">Deploy a server <ArrowRight size={15} /></a>
@@ -1389,64 +1540,72 @@
 
 <style>
 	.protocol-hero {
+		background: var(--muted);
+	}
+	.flow {
+		display: grid;
+		gap: 0.75rem;
+		margin: 1.25rem 0 0;
+		padding: 0;
+		list-style: none;
+		counter-reset: flow;
+	}
+	@media (min-width: 768px) {
+		.flow {
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
+	}
+	.flow li {
 		position: relative;
-		isolation: isolate;
-		background:
-			radial-gradient(
-				48rem 20rem at 12% -20%,
-				color-mix(in srgb, var(--primary) 14%, transparent),
-				transparent 70%
-			),
-			linear-gradient(180deg, var(--muted), var(--background));
+		counter-increment: flow;
 	}
-	.protocol-hero::after {
-		content: '';
-		position: absolute;
-		inset: 0;
-		z-index: -1;
-		background-image:
-			linear-gradient(
-				to right,
-				color-mix(in srgb, var(--border) 45%, transparent) 1px,
-				transparent 1px
-			),
-			linear-gradient(
-				to bottom,
-				color-mix(in srgb, var(--border) 45%, transparent) 1px,
-				transparent 1px
-			);
-		background-size: 3rem 3rem;
-		mask-image: radial-gradient(ellipse at 18% 0%, black, transparent 68%);
-		pointer-events: none;
-	}
-	.version-pill {
-		display: inline-flex;
-		align-items: center;
-		border: 1px solid color-mix(in srgb, var(--primary) 45%, transparent);
-		border-radius: 999px;
-		background: color-mix(in srgb, var(--primary) 10%, transparent);
-		padding: 0.2rem 0.7rem;
-		color: var(--primary);
-		font-size: 0.75rem;
-		font-weight: 600;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-	}
-	.layer-card {
+	.flow-step {
 		display: flex;
-		gap: 0.8rem;
-		align-items: flex-start;
+		flex-direction: column;
+		height: 100%;
 		border: 1px solid var(--border);
 		border-radius: 12px;
-		background: color-mix(in srgb, var(--card) 60%, transparent);
-		padding: 0.9rem 1rem;
-		backdrop-filter: blur(4px);
+		background: var(--background);
+		padding: 1.1rem 1.15rem 1rem;
+		transition: border-color 0.15s ease;
 	}
-	.layer-card :global(svg) {
-		margin-top: 0.15rem;
-		flex-shrink: 0;
+	.flow-step:hover {
+		border-color: var(--input);
+	}
+	.flow-icon {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+		margin-bottom: 0.75rem;
 		color: var(--primary);
 	}
+	.flow-icon::before {
+		content: counter(flow);
+		color: var(--muted-foreground);
+		font-size: 0.875rem;
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+	}
+	.flow-tech {
+		display: block;
+		margin-top: auto;
+		border-top: 1px solid var(--border);
+		padding-top: 0.6rem;
+		color: var(--primary);
+		font-size: 0.8125rem;
+	}
+	@media (min-width: 768px) {
+		.flow li:not(:last-child)::after {
+			content: '';
+			position: absolute;
+			top: 1.75rem;
+			right: -0.75rem;
+			width: 0.75rem;
+			height: 1px;
+			background: var(--input);
+		}
+	}
+
 	.hero-button {
 		display: inline-flex;
 		align-items: center;
@@ -1457,13 +1616,10 @@
 		padding: 0.6rem 1rem;
 		font-size: 0.9rem;
 		font-weight: 500;
-		transition:
-			border-color 0.15s ease,
-			transform 0.15s ease;
+		transition: border-color 0.15s ease;
 	}
 	.hero-button:hover {
 		border-color: var(--input);
-		transform: translateY(-1px);
 	}
 	.hero-button.primary {
 		border-color: var(--primary);
@@ -1482,16 +1638,14 @@
 		padding: 1rem;
 	}
 	.toc-heading {
-		margin: 0 0 0.75rem;
+		margin: 0 0 0.5rem;
+		padding: 0 0.6rem;
 		color: var(--muted-foreground);
-		font-size: 0.7rem;
+		font-size: 0.8125rem;
 		font-weight: 600;
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
 	}
 	.toc-list {
 		min-width: 0;
-		counter-reset: toc;
 		display: grid;
 		gap: 0.15rem;
 		margin: 0;
@@ -1503,10 +1657,7 @@
 		padding: 0;
 	}
 	.toc-link {
-		display: grid;
-		grid-template-columns: auto 1fr;
-		column-gap: 0.65rem;
-		align-items: baseline;
+		display: block;
 		border: 1px solid transparent;
 		border-radius: 8px;
 		padding: 0.5rem 0.6rem;
@@ -1515,15 +1666,6 @@
 			background 0.15s ease,
 			border-color 0.15s ease,
 			color 0.15s ease;
-	}
-	.toc-link::before {
-		counter-increment: toc;
-		content: counter(toc, decimal-leading-zero);
-		padding-top: 0.12rem;
-		color: var(--input);
-		font-size: 0.65rem;
-		font-variant-numeric: tabular-nums;
-		letter-spacing: 0.06em;
 	}
 	.toc-link:hover {
 		background: color-mix(in srgb, var(--card) 70%, transparent);
@@ -1534,15 +1676,11 @@
 		background: color-mix(in srgb, var(--primary) 9%, transparent);
 		color: var(--foreground);
 	}
-	.toc-link.active::before {
-		color: var(--primary);
-	}
 	.toc-label {
 		font-size: 0.9rem;
 		font-weight: 500;
 	}
 	.toc-kicker {
-		grid-column: 2;
 		display: block;
 		color: var(--muted-foreground);
 		font-size: 0.7rem;
@@ -1562,54 +1700,67 @@
 		color: var(--primary);
 	}
 
-	.protocol-docs {
-		counter-reset: section;
-	}
 	.protocol-docs > p {
 		max-width: 50rem;
+		margin-top: 1rem;
+		padding-left: 0;
 	}
-	.protocol-docs > p:first-of-type {
-		max-width: none;
-		border: 1px solid var(--border);
-		border-left: 3px solid var(--primary);
-		border-radius: 10px;
-		background: color-mix(in srgb, var(--card) 45%, transparent);
-		padding: 1rem 1.15rem;
-		color: var(--muted-foreground);
-		font-size: 0.9375rem;
+	.protocol-docs h3 {
+		margin-top: 2.5rem;
+		font-size: 1.125rem;
 	}
-	.protocol-docs h2 {
-		display: flex;
-		gap: 0.75rem;
-		align-items: center;
+	.protocol-docs :global(.heading-link) {
+		color: inherit;
 	}
-	.protocol-docs h2::before {
-		counter-increment: section;
-		content: counter(section, decimal-leading-zero);
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 2.1rem;
-		height: 1.55rem;
-		border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
-		border-radius: 999px;
-		background: color-mix(in srgb, var(--primary) 8%, transparent);
-		color: var(--primary);
-		font-size: 0.65rem;
-		font-weight: 700;
-		font-variant-numeric: tabular-nums;
-		letter-spacing: 0.08em;
+	.protocol-docs :global(.heading-link:hover) {
+		text-decoration: none;
 	}
-	.protocol-docs h2::after {
+	.protocol-docs :global(.heading-link)::after {
 		content: '#';
+		margin-left: 0.5rem;
 		opacity: 0;
 		color: var(--input);
-		font-size: 1.15rem;
 		font-weight: 400;
 		transition: opacity 0.15s ease;
 	}
-	.protocol-docs h2:hover::after {
+	.protocol-docs :global(.heading-link:hover)::after,
+	.protocol-docs :global(.heading-link:focus-visible)::after {
 		opacity: 1;
+	}
+
+	.conventions {
+		border: 1px solid var(--border);
+		border-radius: 12px;
+		background: color-mix(in srgb, var(--card) 45%, transparent);
+		padding: 1.1rem 1.25rem;
+	}
+	.protocol-docs .conventions-title {
+		margin: 0;
+		border: 0;
+		padding: 0;
+		font-size: 1rem;
+	}
+	.conventions dl {
+		display: grid;
+		gap: 0.6rem;
+		margin: 0.85rem 0 0;
+		font-size: 0.9375rem;
+	}
+	.conventions dl > div {
+		display: grid;
+		gap: 0.1rem 1.25rem;
+	}
+	@media (min-width: 640px) {
+		.conventions dl > div {
+			grid-template-columns: 9rem minmax(0, 1fr);
+		}
+	}
+	.conventions dt {
+		font-weight: 600;
+	}
+	.conventions dd {
+		margin: 0;
+		color: var(--muted-foreground);
 	}
 
 	.table-wrap {
@@ -1618,7 +1769,6 @@
 		border: 1px solid var(--border);
 		border-radius: 12px;
 		background: color-mix(in srgb, var(--card) 55%, transparent);
-		box-shadow: 0 12px 30px rgb(0 0 0 / 12%);
 		scrollbar-color: var(--input) transparent;
 		scrollbar-width: thin;
 	}
@@ -1633,10 +1783,8 @@
 		border-bottom: 1px solid var(--border);
 		background: color-mix(in srgb, var(--muted) 88%, var(--background));
 		color: var(--muted-foreground);
-		font-size: 0.67rem;
+		font-size: 0.8125rem;
 		font-weight: 600;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
 		white-space: nowrap;
 	}
 	.table-wrap th,
@@ -1733,6 +1881,21 @@
 	.error-table {
 		min-width: 28rem;
 	}
+	.close-table {
+		min-width: 32rem;
+	}
+	.close-table td:first-child code {
+		color: var(--accent);
+	}
+	.close-table th:nth-child(1) {
+		width: 16%;
+	}
+	.close-table th:nth-child(2) {
+		width: 38%;
+	}
+	.close-table th:nth-child(3) {
+		width: 46%;
+	}
 	.http-table th:nth-child(1) {
 		width: 28%;
 	}
@@ -1797,7 +1960,7 @@
 		padding: 1rem 1.1rem 1rem 3.4rem;
 	}
 	.steps li::before {
-		content: counter(step, decimal-leading-zero);
+		content: counter(step);
 		position: absolute;
 		top: 1rem;
 		left: 1rem;
@@ -1861,7 +2024,6 @@
 			padding: 0.4rem 0.7rem;
 			white-space: nowrap;
 		}
-		.toc-link::before,
 		.toc-kicker,
 		.toc-source {
 			display: none;
@@ -1913,10 +2075,8 @@
 			display: block;
 			margin-bottom: 0.15rem;
 			color: var(--muted-foreground);
-			font-size: 0.65rem;
+			font-size: 0.75rem;
 			font-weight: 600;
-			letter-spacing: 0.07em;
-			text-transform: uppercase;
 		}
 		.http-table td:nth-child(1)::before {
 			content: 'Endpoint';
@@ -1954,8 +2114,15 @@
 		.error-table td:nth-child(2)::before {
 			content: 'HTTP status';
 		}
-		.error-table td:nth-child(3)::before {
+		.error-table td:nth-child(3)::before,
+		.close-table td:nth-child(2)::before {
 			content: 'Meaning';
+		}
+		.close-table td:nth-child(1)::before {
+			content: 'Close code';
+		}
+		.close-table td:nth-child(3)::before {
+			content: 'What to do';
 		}
 	}
 </style>

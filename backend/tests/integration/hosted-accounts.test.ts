@@ -6,13 +6,13 @@ import { randomToken } from "../../src/security/credentials";
 import { fixture } from "../server";
 
 const path = "/api/v1/hosted-account/";
-test("hosted accounts preserve encrypted data and can sign in after registration closes", async () => {
+test("hosted accounts preserve encrypted data and ignore voice registration and can sign in after registration closes", async () => {
   const directory = await mkdtemp(join(tmpdir(), "korero-account-test-"));
   const credentials = { username: "member", credential: randomToken() };
   const original = "A".repeat(64);
   const updated = "B".repeat(64);
   try {
-    const open = await fixture({ directory });
+    const open = await fixture({ directory, environment: { VOICE_REMOTE_ACCOUNT_HOST_REGISTRATION: "open", VOICE_SERVER_REGISTRATION: "disabled" } });
     try {
       const registrations = await Promise.all([1, 2].map(() => open.call(path + "register", {
         ...credentials, encryptedData: original,
@@ -25,7 +25,7 @@ test("hosted accounts preserve encrypted data and can sign in after registration
       expect(await open.fail(path + "update", { ...credentials, revision: 1, encryptedData: original })).toMatchObject({ status: 409 });
     } finally { await open.cleanup(); }
 
-    const closed = await fixture({ directory, environment: { VOICE_SERVER_REGISTRATION: "closed" } });
+    const closed = await fixture({ directory, environment: { VOICE_REMOTE_ACCOUNT_HOST_REGISTRATION: "closed" } });
     try {
       expect(await closed.fail(path + "register", {
         username: "new-member", credential: randomToken(), encryptedData: original,

@@ -23,9 +23,10 @@ test("bodies without a content-length are bounded before parsing", async () => {
   } finally { await server.cleanup(); }
 });
 
-test("server passwords are checked only for known identities and gate hosted registration", async () => {
+test("server passwords are checked only for known identities and do not gate hosted registration", async () => {
   const password = "correct horse battery";
-  const server = await fixture({ environment: { VOICE_SERVER_PASSWORD: password, VOICE_LIMITS_HOSTED_ACCOUNTS: "1" } });
+  const server = await fixture({ environment: { VOICE_SERVER_PASSWORD: password, VOICE_LIMITS_HOSTED_ACCOUNTS: "1",
+    VOICE_REMOTE_ACCOUNT_HOST_REGISTRATION: "open" } });
   try {
     const login = async (identity: ReturnType<typeof testIdentity>, attempt: string) =>
       server.fail("/api/v1/auth/identity/login", { ...await server.proof("login", identity), password: attempt });
@@ -41,10 +42,9 @@ test("server passwords are checked only for known identities and gate hosted reg
 
     const hosted = (username: string, extra: Record<string, string> = {}) =>
       server.fail("/api/v1/hosted-account/register", { username, credential: randomToken(), encryptedData: "A".repeat(64), ...extra });
-    expect((await hosted("member")).status).toBe(403);
-    expect((await hosted("member", { password: "wrong" })).status).toBe(401);
-    expect((await hosted("member", { password })).status).toBe(201);
-    expect((await hosted("another", { password })).status).toBe(429);
+    expect((await hosted("member", { password })).status).toBe(400);
+    expect((await hosted("member")).status).toBe(201);
+    expect((await hosted("another")).status).toBe(429);
   } finally { await server.cleanup(); }
 }, 20000);
 

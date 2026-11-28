@@ -13,7 +13,11 @@
   import { getWorkspace } from "#lib/workspace";
 
   type DirectComposer = { busy: boolean; maxBytes: number; send: (text: string, html?: string) => Promise<boolean> };
-  let { channelId, channelName, direct, enabled }: { enabled: boolean } & (
+  let { channelId, channelName, direct, enabled, disabledHint = "Join a channel to send a message" }: {
+    enabled: boolean;
+    /** Placeholder shown while sending is unavailable. */
+    disabledHint?: string;
+  } & (
     { channelId: string; channelName: string; direct?: never } |
     { channelId?: never; channelName?: never; direct: DirectComposer }
   ) = $props();
@@ -25,13 +29,15 @@
   let fileInput = $state<HTMLInputElement>();
   let pickerOpen = $state(false);
   let formattingError = $state("");
-  const attaching = $derived(!direct && workspace.maxAttachmentBytes > 0 && workspace.view.snapshot?.canAttachFiles !== false);
+  const channel = $derived(direct ? undefined : workspace.view.snapshot?.channels.find(({ id }) => id === channelId));
+  const attaching = $derived(!direct && workspace.maxAttachmentBytes > 0 &&
+    (channel?.canAttachFiles ?? workspace.view.snapshot?.canAttachFiles) !== false);
   const busy = $derived(direct ? direct.busy : Boolean(workspace.pending));
   const rich = $derived(Boolean(direct) || workspace.richChat);
   const label = $derived(direct ? "Encrypted message" : "Channel message");
   const sendLabel = $derived(direct ? "Send direct message" : "Send message");
   const placeholder = $derived(direct ? "Write a direct message"
-    : enabled ? `Message #${channelName}` : "Join a channel to send a message");
+    : enabled ? `Message #${channelName}` : disabledHint);
   const textLimit = $derived(direct?.maxBytes ?? maxChatTextLength);
   const draftTooLong = $derived(message.length > textLimit);
   const extensions = [
@@ -158,7 +164,7 @@
       return;
     }
     const snapshot = workspace.view.snapshot;
-    if (!snapshot || channelId === undefined || snapshot.channelId !== channelId) return;
+    if (!snapshot || !channelId) return;
     const attachment = file;
     if (attachment && !attaching) {
       workspace.actionError = "Remove the attachment to send this message. Your role cannot upload files in this channel.";

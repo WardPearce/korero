@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, HeadphoneOff, Headphones, Mic, MicOff } from "@lucide/svelte";
+  import { ChevronDown, HeadphoneOff, Headphones, Mic, MicOff, PhoneOff } from "@lucide/svelte";
   import { Button, buttonVariants } from "#lib/components/ui/button/index.js";
   import * as DropdownMenu from "#lib/components/ui/dropdown-menu/index.js";
   import { Input } from "#lib/components/ui/input/index.js";
@@ -10,6 +10,8 @@
   import { getWorkspace } from "#lib/workspace";
   import QuickAudio from "./QuickAudio.svelte";
   import WhisperControls from "./WhisperControls.svelte";
+
+  let { onleave }: { onleave?: () => void } = $props();
 
   const workspace = getWorkspace();
   const audio = getAudioSettings();
@@ -62,6 +64,11 @@
     </IconButton>
     <QuickAudio direction="output" />
   </div>
+  {#if onleave}
+    <Button variant="outline" disabled={Boolean(pending)} onclick={onleave}>
+      <PhoneOff size={16} aria-hidden="true" /> Leave voice
+    </Button>
+  {/if}
   <div class="voice-afk" role="group" aria-label="AFK">
     <Button variant="outline" type="button" class="afk-main" disabled={!canSetAfk}
       aria-pressed={Boolean(ownMember?.afk)} title={ownMember?.afk ? "Return from AFK" : "Mark as AFK"}

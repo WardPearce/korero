@@ -67,7 +67,9 @@ test("attachments follow session ownership, channel permissions, history and del
     expect(response.status).toBe(200);
     expect((await server.call(preferences, { maxAttachmentMiB: 1 }, owner.accessToken, "PATCH")).response.status).toBe(200);
     const download = path + "/" + payload.messageId + "?connectionId=" + memberWs.state.connectionId;
+    await ownerWs.rpc("channel.override", { channelId, role: "Member", permission: "text", allow: false });
     expect((await server.fail(download, undefined, member.accessToken)).status).toBe(404);
+    await ownerWs.rpc("channel.override", { channelId, role: "Member", permission: "text", allow: null });
     await memberWs.rpc("channel.join", { channelId });
     expect(await memberWs.rpc("message.history", { channelId })).toMatchObject([
       { id: payload.messageId, text: upload.text, html: upload.html, attachment: { name, size: bytes.length } },
@@ -82,6 +84,61 @@ test("attachments follow session ownership, channel permissions, history and del
     expect((await server.fail(download, undefined, member.accessToken)).status).toBe(429);
     await ownerWs.rpc("message.delete", payload);
     expect((await server.fail(download, undefined, member.accessToken)).status).toBe(404);
+  } finally { await server.cleanup(); }
+});
+
+test("members can read and send in channels they have not joined", async () => {
+  const server = await fixture({ environment: { VOICE_MESSAGING_PERSISTENCE: "true" } });
+  try {
+    const owner = await server.owner();
+    const member = await server.register("Outsider");
+    const ownerWs = await server.ws(owner);
+    const memberWs = await server.ws(member);
+    const { channelId } = await ownerWs.rpc<{ channelId: string }>("channel.create", { name: "Studio" });
+    await ownerWs.rpc("channel.join", { channelId });
+    await memberWs.rpc("channel.join", { channelId: LOBBY });
+    type ChatChannel = { id: string; canChat?: boolean; canAttachFiles?: boolean };
+    const studio = async () => (await memberWs.rpc<{ channels: ChatChannel[] }>("state.get")).channels.find(({ id }) => id === channelId);
+    expect(await studio()).toMatchObject({ canChat: true, canAttachFiles: true });
+
+    const before = await ownerWs.rpc<{ messageId: string }>("message.send", { channelId, text: "Inside" });
+    expect(await memberWs.rpc("message.history", { channelId })).toMatchObject([{ id: before.messageId, text: "Inside" }]);
+    const outside = await memberWs.rpc<{ messageId: string }>("message.send", { channelId, text: "From outside" });
+    await until(() => ownerWs.received.find(({ type, payload }) => type === "message.created" && payload.id === outside.messageId), Boolean);
+    expect(memberWs.received.some(({ payload }) => payload.id === outside.messageId)).toBe(false);
+
+    await memberWs.rpc("channel.view", { channelId });
+    const live = await ownerWs.rpc<{ messageId: string }>("message.send", { channelId, text: "Live" });
+    await until(() => memberWs.received.find(({ type, payload }) => type === "message.created" && payload.id === live.messageId), Boolean);
+    await memberWs.rpc("message.edit", { ...outside, text: "Edited outside" });
+    await until(() => ownerWs.received.find(({ type, payload }) => type === "message.edited" && payload.messageId === outside.messageId), Boolean);
+    await memberWs.rpc("message.delete", outside);
+    await until(() => memberWs.received.find(({ type, payload }) => type === "message.deleted" && payload.messageId === outside.messageId), Boolean);
+    await expect(memberWs.rpc("message.delete", live)).rejects.toThrow("FORBIDDEN");
+
+    await ownerWs.rpc("channel.override", { channelId, role: "Member", permission: "text", allow: false });
+    expect(await studio()).toMatchObject({ canChat: false, canAttachFiles: false });
+    expect(memberWs.received.find(({ type }) => type === "channel.viewEnded")?.payload).toEqual({ channelId });
+    await expect(memberWs.rpc("message.send", { channelId, text: "Denied" })).rejects.toThrow("FORBIDDEN");
+    await expect(memberWs.rpc("channel.view", { channelId })).rejects.toThrow("FORBIDDEN");
+    const hidden = await ownerWs.rpc<{ messageId: string }>("message.send", { channelId, text: "Hidden" });
+    await ownerWs.rpc("channel.override", { channelId, role: "Member", permission: "text", allow: null });
+    // Losing access drops the subscription, so restoring it needs a fresh view.
+    const after = await ownerWs.rpc<{ messageId: string }>("message.send", { channelId, text: "After" });
+    await until(() => ownerWs.received.find(({ type, payload }) => type === "message.created" && payload.id === after.messageId), Boolean);
+    expect(memberWs.received.some(({ payload }) => payload.id === hidden.messageId || payload.id === after.messageId)).toBe(false);
+
+    await memberWs.rpc("channel.view", { channelId });
+    await ownerWs.rpc("channel.edit", { channelId, password: "secret phrase" });
+    expect(await studio()).toMatchObject({ canChat: false });
+    expect(memberWs.received.filter(({ type }) => type === "channel.viewEnded").map(({ payload }) => payload))
+      .toEqual([{ channelId }, { channelId }]);
+    const locked = await ownerWs.rpc<{ messageId: string }>("message.send", { channelId, text: "Locked" });
+    await expect(memberWs.rpc("message.history", { channelId })).rejects.toThrow("FORBIDDEN");
+    await memberWs.rpc("channel.join", { channelId, password: "secret phrase" });
+    expect(await studio()).toMatchObject({ canChat: true });
+    expect(memberWs.received.some(({ payload }) => payload.id === locked.messageId)).toBe(false);
+    await memberWs.rpc("channel.view", { channelId: null });
   } finally { await server.cleanup(); }
 });
 

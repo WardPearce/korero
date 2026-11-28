@@ -27,6 +27,7 @@ export function browserServerOrigin(address: string) {
 
 /** Direct messages kept in the view while connected. Older ones remain in server history. */
 const directMessageLimit = 200;
+const channelMessageLimit = 200;
 // Voice uses one call at a time, so the sessions share the platform call audio route.
 const callAudio = new MobileCallAudio();
 
@@ -45,8 +46,11 @@ class BrowserSession {
   private messages: Message[] = [];
   private directMessages: DirectMessage[] = [];
   private lastPoke?: Poke;
-  private historyRequest = 0;
-  private deletedDuringHistory?: Set<string>;
+  /** A channel whose chat is followed without joining it. */
+  private viewedChannelId: string | null = null;
+  private viewRequest?: { channelId: string | null };
+  /** Maps history requests to deletions received during the request, or null once settled. */
+  private loadedHistory = new Map<string, Set<string> | null>();
 
   private closed = false;
 
@@ -212,27 +216,59 @@ class BrowserSession {
   }
 
   private showSnapshot(snapshot: Snapshot) {
-    const previous = this.snapshot?.channelId;
     this.snapshot = snapshot;
     if (mobileApp() && voiceApp()) this.updateVoice(snapshot);
-    if (previous !== snapshot.channelId) {
-      this.messages = [];
-      const request = ++this.historyRequest;
-      this.deletedDuringHistory = snapshot.channelId ? new Set() : undefined;
-      if (snapshot.channelId) {
-        void this.rpc<Message[]>("message.history", { channelId: snapshot.channelId }).then((history) => {
-          if (request !== this.historyRequest) return;
-          const entries = new Map(history.reverse().map((message) => [message.id, message]));
-          for (const message of this.messages) entries.set(message.id, message);
-          for (const id of this.deletedDuringHistory ?? []) entries.delete(id);
-          this.messages = [...entries.values()].slice(-200);
-          this.show();
-        }).catch(() => {}).finally(() => {
-          if (request === this.historyRequest) this.deletedDuringHistory = undefined;
-        });
-      }
-    }
+    this.syncChat();
     this.show();
+  }
+
+  /** The joined channel and the viewed channel, whose messages this session keeps. */
+  private chatChannels() {
+    return new Set([this.snapshot?.channelId, this.viewedChannelId].filter((id): id is string => Boolean(id)));
+  }
+
+  private syncChat() {
+    const channels = this.chatChannels();
+    this.messages = this.messages.filter(({ channelId }) => channelId && channels.has(channelId));
+    for (const id of this.loadedHistory.keys()) if (!channels.has(id)) this.loadedHistory.delete(id);
+    for (const id of channels) if (!this.loadedHistory.has(id)) this.loadHistory(id);
+  }
+
+  private loadHistory(channelId: string) {
+    const deleted = new Set<string>();
+    this.loadedHistory.set(channelId, deleted);
+    void this.rpc<Message[]>("message.history", { channelId }).then((history) => {
+      if (this.loadedHistory.get(channelId) !== deleted) return;
+      const entries = new Map(history.reverse().map((message) => [message.id, message]));
+      const others: Message[] = [];
+      for (const message of this.messages) {
+        if (message.channelId === channelId) entries.set(message.id, message);
+        else others.push(message);
+      }
+      for (const id of deleted) entries.delete(id);
+      this.messages = [...others, ...[...entries.values()].slice(-channelMessageLimit)];
+      this.show();
+    }).catch(() => {}).finally(() => {
+      if (this.loadedHistory.get(channelId) === deleted) this.loadedHistory.set(channelId, null);
+    });
+  }
+
+  async viewChannel(connectionId: string, channelId: string | null) {
+    const requested = this.viewRequest ? this.viewRequest.channelId : this.viewedChannelId;
+    if (this.snapshot?.connectionId !== connectionId || requested === channelId) return;
+    const request = { channelId };
+    const socket = this.socket;
+    this.viewRequest = request;
+    // Subscribe before loading history so no live message falls between the two.
+    try {
+      await this.rpc("channel.view", { channelId });
+      if (this.socket !== socket) return;
+      this.viewedChannelId = channelId;
+      this.syncChat();
+      this.show();
+    } finally {
+      if (this.viewRequest === request) this.viewRequest = undefined;
+    }
   }
 
   private updateVoice(snapshot: Snapshot) {
@@ -276,10 +312,21 @@ class BrowserSession {
       void this.rpc<Snapshot>("state.get").then((state) => {
         if (socket === this.socket) this.showSnapshot(state);
       }).catch(() => {});
+    } else if (type === "channel.viewEnded") {
+      const { channelId } = payload as { channelId: string };
+      if (this.viewedChannelId !== channelId) return;
+      this.viewedChannelId = null;
+      this.syncChat();
+      this.show();
     } else if (type === "message.created") {
       const message = payload as Message;
-      if (!message.channelId || message.channelId !== snapshot.channelId || this.messages.some(({ id }) => id === message.id)) return;
-      this.messages = [...this.messages, message].slice(-200);
+      if (!message.channelId || !this.chatChannels().has(message.channelId) || this.messages.some(({ id }) => id === message.id)) return;
+      this.messages = [...this.messages, message];
+      const inChannel = this.messages.filter(({ channelId }) => channelId === message.channelId);
+      if (inChannel.length > channelMessageLimit) {
+        const oldest = new Set(inChannel.slice(0, inChannel.length - channelMessageLimit));
+        this.messages = this.messages.filter((entry) => !oldest.has(entry));
+      }
       this.show();
     } else if (type === "direct.created") {
       const message = payload as DirectMessage;
@@ -313,7 +360,7 @@ class BrowserSession {
       this.show();
     } else if (type === "message.deleted") {
       const { messageId } = payload as { messageId: string };
-      this.deletedDuringHistory?.add(messageId);
+      for (const deleted of this.loadedHistory.values()) deleted?.add(messageId);
       this.messages = this.messages.filter(({ id }) => id !== messageId);
       this.show();
     } else if (type === "media.reset") {
@@ -411,8 +458,9 @@ class BrowserSession {
     this.messages = [];
     this.directMessages = [];
     this.lastPoke = undefined;
-    this.historyRequest++;
-    this.deletedDuringHistory = undefined;
+    this.viewedChannelId = null;
+    this.viewRequest = undefined;
+    this.loadedHistory.clear();
     clearInterval(this.heartbeat);
     socket?.close();
     for (const settle of this.pending.values()) settle(null);

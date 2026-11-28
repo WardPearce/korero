@@ -14,6 +14,7 @@ const configuration = object({
     max_users: integer(1, 10000), registration: t.UnionEnum(["open", "invitation", "admin", "disabled"]),
     origins: list, public_addresses: list, trusted_proxies: list, password: t.String({ maxLength: 128 }),
     image_hosts: t.Array(string, { maxItems: 256 }) }),
+  "remote-account-host": object({ registration: t.UnionEnum(["open", "closed"]) }),
   tls: object({ mode: t.UnionEnum(["self-signed", "manual", "proxy"]), certificate: string, private_key: string, names: list }),
   media: object({ listen: t.Array(object({ ip: string, announced_address: t.Optional(string) }), { maxItems: 32 }), listen_ips: list, listen_ip: string, announced_address: string, announced_ipv6: string,
     port, workers: integer(1, 32), target_audio_bitrate: integer(32000, 128000), enable_udp: t.Boolean(), enable_tcp: t.Boolean(),
@@ -36,6 +37,7 @@ const configuration = object({
 type Settings = typeof configuration.static;
 const defaults: Settings = {
   server: { name: "Voice Server", host: "::", port: 8443, max_users: 128, registration: "open", origins: [], public_addresses: [], trusted_proxies: [], password: "", image_hosts: [] },
+  "remote-account-host": { registration: "closed" },
   tls: { mode: "self-signed", certificate: "", private_key: "", names: [] },
   media: { listen: [], listen_ips: [], listen_ip: "", announced_address: "", announced_ipv6: "", port: 8444, workers: 1,
     target_audio_bitrate: 64000, enable_udp: true, enable_tcp: true, ice_servers: [] },
@@ -87,7 +89,7 @@ export async function loadConfig(options: { file?: string; directory?: string } 
     if (!objectValue(settings)) throw new Error(`Expected [${section}] table`);
     const next: Record<string, unknown> = { ...values, ...settings };
     for (const [key, value] of Object.entries(values)) {
-      const env = process.env[`VOICE_${section.toUpperCase()}_${key.toUpperCase()}`];
+      const env = process.env[`VOICE_${section.toUpperCase().replaceAll("-", "_")}_${key.toUpperCase()}`];
       if (env === undefined) continue;
       try { next[key] = typeof value === "string" ? env : JSON.parse(env); }
       catch { throw new Error(`Invalid environment override for ${section}.${key}`); }
@@ -181,6 +183,9 @@ name = "Voice Server"
 host = "::"
 port = 8443
 registration = "open"
+
+[remote-account-host]
+registration = "closed"
 
 [tls]
 mode = "self-signed"

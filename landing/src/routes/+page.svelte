@@ -27,32 +27,70 @@
 	import X from '@lucide/svelte/icons/x';
 	import MicOff from '@lucide/svelte/icons/mic-off';
 	import Monitor from '@lucide/svelte/icons/monitor';
+	import Apple from '@lucide/svelte/icons/apple';
+	import Smartphone from '@lucide/svelte/icons/smartphone';
+	import Terminal from '@lucide/svelte/icons/terminal';
 	import { openDownloadDialog } from '#lib/download-dialog.js';
 
-	const features = [
+	const pillars = [
 		{
-			title: 'Voice that stays on your server',
-			body: 'A WebRTC SFU carries Opus audio through your own machine. Set a bitrate per channel, and use push-to-talk or toggle-to-talk, even system-wide on supported desktops.'
+			title: 'Voice that feels like the same room',
+			body: 'Hop between channels and just talk. Use an open mic, push-to-talk or toggle-to-talk, with shortcuts that keep working while you are in a game. Whisper to another channel without leaving your own.',
+			tech: 'Opus over a WebRTC SFU on your server, 32 to 128 kbit/s per channel.'
 		},
 		{
-			title: 'Screenshare and camera together',
-			body: 'Share a window, tab or whole display at up to 1440p with source audio. Preview locally, then go live when you are ready.'
+			title: 'Show your screen and your face',
+			body: 'Share a window or your whole display with its sound, and turn your camera on at the same time. Check the preview first, then go live when you are ready.',
+			tech: 'Screenshare up to 1440p with source audio, VP8 camera up to 6 Mbit/s.'
 		},
 		{
-			title: 'Direct messages with safety codes',
-			body: 'Compare codes with your contact before a conversation opens. If they are offline, the server holds the encrypted message and delivers it when they connect.'
+			title: 'Private messages stay private',
+			body: 'Direct messages are locked on your device before they leave it. Compare a short safety code with your friend once, and you know nobody is reading along. If they are offline, the message waits for them.',
+			tech: 'X25519 key agreement, AES-256-GCM and Ed25519 signatures. The server only sees ciphertext.'
+		}
+	];
+
+	const extras: { title: string; body: string; tech?: string }[] = [
+		{
+			title: 'No sign-up, no password',
+			body: 'Your identity is created on your device. Back it up with an optional account, or link your phone by scanning a QR code.',
+			tech: 'An Ed25519 key pair per identity.'
 		},
 		{
-			title: 'No account required',
-			body: 'Your identity is an Ed25519 key pair created on your device, so there is no sign-up and no password. A hosted account is optional: use it to restore your identity and servers on any device, or skip it and link a phone by scanning a QR code.'
+			title: 'Channels the way you like them',
+			body: 'Nest channels, lock them with a password, and drag yourself between them. Set who can do what, per role and per channel.'
 		},
 		{
-			title: 'Channels, roles and an audit log',
-			body: 'Nest channels, password-protect them, and assign Guest, Member and Moderator roles. The audit log records joins, moderation and server changes.'
+			title: 'Moderation with a paper trail',
+			body: 'Guest, Member and Moderator roles, plus your own. Mute, move, kick and ban, and see every change in the audit log.'
 		},
 		{
-			title: 'Rich messages and files',
-			body: 'Format text, pick emoji and attach files up to 32 MiB. Attachments follow your message retention settings.'
+			title: 'Chat with formatting and files',
+			body: 'Bold, quotes, code blocks, emoji and attachments. You decide how big files can be and how much space they take.',
+			tech: 'Up to 32 MiB per file, with storage limits per server and per account.'
+		},
+		{
+			title: 'You choose what is kept',
+			body: 'Keep messages for a week, a year, or not at all. Everything lives in one folder on your machine, so backups are a copy away.'
+		},
+		{
+			title: 'Away when you need a minute',
+			body: 'Go AFK with a short note so people know when you will be back. The desktop app keeps itself up to date.'
+		}
+	];
+
+	const hostSteps = [
+		{
+			title: 'Start the server',
+			body: 'Run one Docker command or a single binary. It creates its own certificate, a Lobby channel and a setup token.'
+		},
+		{
+			title: 'Claim it',
+			body: 'Paste the setup token into the app to become the owner. Name the server and set who can join.'
+		},
+		{
+			title: 'Invite your people',
+			body: 'Share the address or an invitation. Friends connect straight to your machine, with nothing in between.'
 		}
 	];
 
@@ -109,7 +147,12 @@
 		{ n: 'ensyy', c: 'bg-accent', t: '19:44', body: 'Joining. Can everyone see the 1440p stream?' }
 	];
 
-	const platforms = ['Linux desktop', 'Android', 'iOS', 'Web browser'];
+	const platforms = [
+		{ name: 'Windows', detail: 'Installer or portable archive', icon: Monitor },
+		{ name: 'macOS', detail: 'Disk image for Apple silicon', icon: Apple },
+		{ name: 'Linux', detail: 'AppImage, .deb or .rpm', icon: Terminal },
+		{ name: 'Android', detail: 'APK for phones and tablets', icon: Smartphone }
+	];
 </script>
 
 <SiteHeader />
@@ -147,7 +190,7 @@
 				</a>
 			</div>
 			<p class="mt-5 text-sm text-muted-foreground">
-				{platforms.join(', ')}.
+				Free and open source, for {platforms.map((p) => p.name).join(', ')}.
 			</p>
 		</div>
 
@@ -433,37 +476,58 @@
 	</section>
 
 	<!-- Features -->
-	<section id="features" class="mx-auto max-w-6xl scroll-mt-4 px-6 py-24">
+	<section id="features" class="mx-auto max-w-6xl px-6 py-24">
 		<h2 class="max-w-xl text-3xl sm:text-4xl">Everything a community needs to talk</h2>
-		<div class="mt-12 grid gap-x-12 gap-y-10 md:grid-cols-2 lg:grid-cols-3">
-			{#each features as f (f.title)}
+		<p class="mt-4 max-w-[36rem] text-lg text-muted-foreground">
+			Built for friend groups, gaming crews, clubs and small teams who would rather keep their
+			conversations at home.
+		</p>
+
+		<div class="mt-14 grid gap-x-10 gap-y-12 lg:grid-cols-3">
+			{#each pillars as f (f.title)}
+				<div class="border-t-2 border-primary pt-6">
+					<h3 class="text-xl sm:text-2xl">{f.title}</h3>
+					<p class="mt-3 text-muted-foreground">{f.body}</p>
+					<p class="tech-note mt-5">{f.tech}</p>
+				</div>
+			{/each}
+		</div>
+
+		<div class="mt-20 grid gap-x-10 gap-y-10 md:grid-cols-2 lg:grid-cols-3">
+			{#each extras as f (f.title)}
 				<div class="border-t border-border pt-5">
 					<h3 class="text-lg">{f.title}</h3>
 					<p class="mt-2 text-muted-foreground">{f.body}</p>
+					{#if f.tech}<p class="tech-note mt-4">{f.tech}</p>{/if}
 				</div>
 			{/each}
 		</div>
 	</section>
 
 	<!-- Host -->
-	<section id="host" class="scroll-mt-4 border-y border-border bg-muted">
-		<div class="mx-auto grid max-w-6xl items-center gap-12 px-6 py-24 lg:grid-cols-2">
+	<section id="host" class="border-y border-border bg-muted">
+		<div
+			class="mx-auto grid max-w-6xl gap-12 px-6 py-24 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:gap-16"
+		>
 			<div>
-				<h2 class="text-3xl sm:text-4xl">One process. One data directory.</h2>
-				<p class="mt-5 max-w-[34rem] text-muted-foreground">
-					The server is a single Bun process with a small pool of media workers and a SQLite
-					database. The first owner claims it with a setup token, and a TLS identity is generated
-					for you. Choose how long messages are kept, or keep none.
+				<h2 class="text-3xl sm:text-4xl">Your server, up in a minute</h2>
+				<p class="mt-5 text-muted-foreground">
+					If you can run a Docker container, you can host Kōrero. A home server, a small VPS or a
+					spare laptop is plenty.
 				</p>
-				<p class="mt-4 max-w-[34rem] text-muted-foreground">
-					Connect over direct-IP HTTPS and WebSocket. There is no account on our side and no relay
-					in the middle.
-				</p>
+				<ol class="host-steps mt-10">
+					{#each hostSteps as step (step.title)}
+						<li>
+							<h3 class="font-semibold">{step.title}</h3>
+							<p class="mt-1 text-muted-foreground">{step.body}</p>
+						</li>
+					{/each}
+				</ol>
 			</div>
-			<div class="min-w-0">
+			<div class="min-w-0 lg:pt-2">
 				<CodeBlock
 					lang="bash"
-					label="Deploy with Docker"
+					label="Run with Docker"
 					code={`docker run -d --name korero --restart unless-stopped \\
   -p 8443:8443 -p 8444:8444/udp -p 8444:8444/tcp \\
   -v korero-data:/data -e VOICE_DATA_DIR=/data \\
@@ -472,32 +536,37 @@ docker logs korero`}
 				/>
 				<CodeBlock
 					lang="bash"
-					label="Or run the standalone binary"
+					label="Or run the standalone Linux binary"
 					code={`chmod +x voice-server-linux-amd64
 ./voice-server-linux-amd64 --data-dir ./data`}
 				/>
-				<p class="mt-5 text-sm text-muted-foreground">
-					Read the setup token from the log and paste it into the app to claim the server.
-					<a href="/host" class="text-foreground underline underline-offset-4 hover:text-primary">
-						Read the hosting docs
-					</a>
+				<p class="tech-note mt-6">
+					One Bun process, a few media workers and a SQLite database, all in one data folder.
+					Clients connect over HTTPS and WebSocket directly. There is no account on our side and no
+					relay in the middle.
 				</p>
+				<a
+					href="/host"
+					class="mt-6 inline-flex rounded-lg border border-border bg-card px-5 py-2.5 font-medium hover:border-input"
+				>
+					Read the hosting guide
+				</a>
 			</div>
 		</div>
 	</section>
 
 	<!-- Protocol -->
-	<section id="protocol" class="mx-auto max-w-6xl scroll-mt-4 px-6 py-24">
-		<div class="grid gap-12 lg:grid-cols-[1fr_1fr]">
+	<section id="protocol" class="mx-auto max-w-6xl px-6 py-24">
+		<div class="grid gap-10 lg:grid-cols-2 lg:gap-16">
 			<h2 class="max-w-md text-3xl sm:text-4xl">Open to any client</h2>
-			<div class="text-muted-foreground">
-				<p class="max-w-[34rem]">
-					The v1 protocol is documented with a JSON schema, so anyone can write a client or bot. The
-					official app is built with SvelteKit and runs on Electron, Capacitor and in the browser.
+			<div>
+				<p class="max-w-[34rem] text-muted-foreground">
+					Kōrero speaks a documented, versioned protocol. Write a bot, your own client or an
+					integration in any language, and it works with every Kōrero server. One identity works on
+					every server you join.
 				</p>
-				<p class="mt-4 max-w-[34rem]">
-					Servers recognise your Ed25519 identity and apply their own registration policies, so one
-					key works across every server you join.
+				<p class="tech-note mt-5">
+					JSON over HTTPS and WebSocket, WebRTC for media, and a JSON Schema for every request.
 				</p>
 				<a
 					href="/protocol"
@@ -510,26 +579,41 @@ docker logs korero`}
 	</section>
 
 	<!-- Get -->
-	<section id="get" class="scroll-mt-4 border-t border-border bg-muted">
+	<section id="get" class="border-t border-border bg-muted">
 		<div class="mx-auto max-w-6xl px-6 py-24">
 			<h2 class="max-w-xl text-3xl sm:text-4xl">Pick up the conversation</h2>
-			<p class="mt-4 max-w-[34rem] text-muted-foreground">
-				Create an optional hosted account to restore your identity and saved servers on any device,
-				or continue with a local identity.
+			<p class="mt-4 max-w-[36rem] text-muted-foreground">
+				Download the app for your device. Start with an identity that lives only on that device, or
+				create an optional account to restore it anywhere.
 			</p>
 			<ul class="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-				{#each platforms as p (p)}
+				{#each platforms as p (p.name)}
 					<li>
 						<button
 							type="button"
 							onclick={openDownloadDialog}
-							class="block w-full rounded-xl border border-border bg-card px-5 py-4 font-medium hover:border-input"
+							class="flex h-full w-full items-start gap-3 rounded-xl border border-border bg-card px-5 py-4 text-left hover:border-input"
 						>
-							{p}
+							<p.icon size={20} class="mt-0.5 shrink-0 text-primary" aria-hidden="true" />
+							<span>
+								<span class="block font-medium">{p.name}</span>
+								<span class="block text-sm text-muted-foreground">{p.detail}</span>
+							</span>
 						</button>
 					</li>
 				{/each}
 			</ul>
+			<p class="mt-6 text-sm text-muted-foreground">
+				Looking for checksums or older versions?
+				<a
+					href="https://github.com/WardPearce/korero/releases"
+					target="_blank"
+					rel="noopener noreferrer"
+					class="text-foreground underline underline-offset-4 hover:text-primary"
+				>
+					Browse all releases on GitHub
+				</a>
+			</p>
 		</div>
 	</section>
 </main>
@@ -537,6 +621,47 @@ docker logs korero`}
 <SiteFooter />
 
 <style>
+	.tech-note {
+		border-left: 2px solid color-mix(in srgb, var(--primary) 55%, transparent);
+		padding-left: 0.75rem;
+		color: color-mix(in srgb, var(--muted-foreground) 85%, var(--primary));
+		font-size: 0.875rem;
+		line-height: 1.5;
+	}
+	.host-steps {
+		counter-reset: step;
+		display: grid;
+		gap: 1.75rem;
+	}
+	.host-steps li {
+		position: relative;
+		counter-increment: step;
+		padding-left: 3rem;
+	}
+	.host-steps li::before {
+		content: counter(step);
+		position: absolute;
+		top: -0.1rem;
+		left: 0;
+		display: grid;
+		place-items: center;
+		width: 2rem;
+		height: 2rem;
+		border: 1px solid var(--primary);
+		border-radius: 999px;
+		color: var(--primary);
+		font-size: 0.875rem;
+		font-weight: 600;
+	}
+	.host-steps li:not(:last-child)::after {
+		content: '';
+		position: absolute;
+		top: 2.25rem;
+		bottom: -1.5rem;
+		left: calc(1rem - 0.5px);
+		width: 1px;
+		background: var(--border);
+	}
 	@media (min-width: 80rem) {
 		.hero-mock {
 			margin-right: max(-28rem, calc((72rem - 100vw) / 2));

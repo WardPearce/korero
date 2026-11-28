@@ -18,6 +18,8 @@ import { MessageStorage } from "./message-storage";
 type Channel = typeof channels.$inferSelect;
 type Socket = { sendText(data: string): number; ping(data: Buffer): number; close(code?: number, reason?: string): unknown; terminate(): unknown };
 type Peer = { id: string; socket: Socket; source: string; session: Session | null; account: Account | null; channelId: string | null; membershipEpoch: number;
+  /** A channel whose chat this connection follows without joining it. */
+  viewChannelId: string | null;
   connectedAt: number; latencyMs: number | null; probe?: { token: Buffer; sentAt: number };
   afk: boolean; afkMessage: string;
   muted: boolean; deafened: boolean; adminMuted: boolean; adminDeafened: boolean; deadline: number; closed: boolean; pending: number;
@@ -45,6 +47,7 @@ export class Realtime {
   private readonly connected = new Map<string, Peer>();
   private readonly online = new Map<string, Set<Peer>>();
   private readonly memberships = new Map<string, Set<Peer>>();
+  private readonly viewers = new Map<string, Set<Peer>>();
   private readonly catalog = new Map<string, Channel>();
   private readonly roleGrants = new Map<Role, Set<Permission>>();
   private readonly customRoles = new Map<Role, number>();
@@ -132,7 +135,7 @@ export class Realtime {
     }
     this.pending++;
     this.pendingByIp.set(source, pendingFromSource + 1);
-    this.peers.set(id, { id: randomUUID(), socket, source, session: null, account: null, channelId: null, membershipEpoch: 0,
+    this.peers.set(id, { id: randomUUID(), socket, source, session: null, account: null, channelId: null, membershipEpoch: 0, viewChannelId: null,
       connectedAt: 0, latencyMs: null,
       afk: false, afkMessage: "",
       muted: false, deafened: false, adminMuted: false, adminDeafened: false, deadline: Date.now() + 5000, closed: false,
@@ -183,6 +186,7 @@ export class Realtime {
       group.delete(peer);
       if (!group.size) this.online.delete(peer.account.id);
       this.leave(peer);
+      this.unview(peer);
       audit(this.db, peer.account.id, "connection.closed", null, { connectionId: peer.id });
       if (!group.size) {
         this.broadcastAll("presence.offline", { accountId: peer.account.id });
@@ -663,6 +667,7 @@ export class Realtime {
               this.allowed(account, "whisper", channel),
             canSetAudioBitrate: this.allowed(account, "manageSettings") && canEdit,
             canDeleteMessages: this.allowed(account, "deleteChannels", channel),
+            ...this.chatPermissions(peer, channel),
             canEdit, canReparent: canEdit && id !== LOBBY,
             canDelete: id !== LOBBY && !parentIds.has(id) && this.allowed(account, "removeChannels", channel),
             canSetPassword: id !== LOBBY && canEdit,
@@ -703,6 +708,7 @@ export class Realtime {
       this.media.releaseRoom(channelId);
       if (this.catalog.get(channelId)?.temporary) this.removeChannel(channelId);
     }
+    if (peer.viewChannelId === channelId && this.catalog.get(channelId)?.passwordHash) this.unview(peer, true);
   }
   private requireChannelCapacity(channel: Channel, incoming: number) {
     if (incoming && (this.memberships.get(channel.id)?.size ?? 0) + incoming >
@@ -723,6 +729,8 @@ export class Realtime {
     this.broadcast(members, "channel.userJoined", { channelId: channel.id, ...this.member(peer) }, peer);
   }
   private recheck(peer: Peer) {
+    const viewed = peer.viewChannelId ? this.catalog.get(peer.viewChannelId) : undefined;
+    if (peer.viewChannelId && (!viewed || !this.canChat(peer, viewed))) this.unview(peer, true);
     if (!peer.channelId || peer.closed) return;
     const channel = this.channel(peer.channelId);
     if (!this.allowed(peer.account!, "join", channel)) {
@@ -760,6 +768,7 @@ export class Realtime {
       this.leave(peer);
       this.event(peer, "channel.changed", { channelId: null });
     }
+    for (const peer of [...(this.viewers.get(id) ?? [])]) this.unview(peer, true);
     this.media.releaseRoom(id);
     this.liveText.removeMatching((message) => message.channelId === id);
     for (const [messageId, entry] of this.liveAttachments) {
@@ -960,12 +969,49 @@ export class Realtime {
     return { channelId: id, state: this.snapshot(peer) };
   }
 
+  /**
+   * Members and outside readers share text access: anyone who may join and use text there,
+   * except that a password-protected channel is only readable from inside it.
+   */
+  private canChat(peer: Peer, channel: Channel) {
+    const account = peer.account!;
+    return this.allowed(account, "join", channel) && this.allowed(account, "text", channel) &&
+      (peer.channelId === channel.id || !channel.passwordHash);
+  }
+  private chatPermissions(peer: Peer, channel: Channel) {
+    const canChat = this.canChat(peer, channel);
+    return { canChat, canAttachFiles: canChat && this.allowed(peer.account!, "attachFiles", channel) };
+  }
   private textChannel(peer: Peer, channelId: string) {
     const channel = this.channel(channelId);
     this.require(peer.account!, "join", channel);
     this.require(peer.account!, "text", channel);
-    if (peer.channelId !== channel.id) fail("FORBIDDEN");
+    if (!this.canChat(peer, channel)) fail("FORBIDDEN");
     return channel;
+  }
+  /** Connections that receive a channel's chat events: its members and its outside readers. */
+  private chatAudience(channel: Channel) {
+    const audience = new Set([...(this.memberships.get(channel.id) ?? []), ...(this.viewers.get(channel.id) ?? [])]);
+    return [...audience].filter((peer) => this.canChat(peer, channel));
+  }
+  private view(peer: Peer, channelId: string | null) {
+    if (channelId) this.textChannel(peer, channelId);
+    if (peer.viewChannelId === channelId) return;
+    this.unview(peer);
+    if (!channelId) return;
+    peer.viewChannelId = channelId;
+    const viewers = this.viewers.get(channelId) ?? new Set<Peer>();
+    viewers.add(peer);
+    this.viewers.set(channelId, viewers);
+  }
+  private unview(peer: Peer, notify = false) {
+    const channelId = peer.viewChannelId;
+    if (!channelId) return;
+    peer.viewChannelId = null;
+    const viewers = this.viewers.get(channelId);
+    viewers?.delete(peer);
+    if (!viewers?.size) this.viewers.delete(channelId);
+    if (notify) this.event(peer, "channel.viewEnded", { channelId });
   }
   private history(peer: Peer, payload: { channelId: string; before?: number }) {
     const channel = this.textChannel(peer, payload.channelId);
@@ -1012,7 +1058,7 @@ export class Realtime {
       } else this.liveText.add(reference);
     }
     const event = this.messagePayload(message, file && { name: file.name, size: file.size });
-    this.broadcast([...(this.memberships.get(channel.id) ?? [])].filter((peer) => this.allowed(peer.account!, "text", channel)), "message.created", event);
+    this.broadcast(this.chatAudience(channel), "message.created", event);
     return { messageId: message.id };
   }
 
@@ -1041,17 +1087,21 @@ export class Realtime {
 
   downloadAttachment(session: Session, connectionId: string, messageId: string) {
     const peer = this.attachmentPeer(session, connectionId);
-    const { id: channelId } = this.textChannel(peer, peer.channelId ?? fail("FORBIDDEN"));
+    const readable = (channelId: string | null) => {
+      const channel = channelId ? this.catalog.get(channelId) : undefined;
+      return !!channel && this.canChat(peer, channel);
+    };
     const live = this.liveAttachment(messageId);
-    if (live?.message.channelId === channelId) {
+    if (live && readable(live.message.channelId)) {
       this.attachmentDownloadRate.take(session.accountId, live.file.size);
       return { data: live.file.data.toString("base64") };
     }
     if (!this.config.messaging.persistence) fail("NOT_FOUND");
-    const stored = this.db.select({ size: attachments.size }).from(attachments)
+    const stored = this.db.select({ size: attachments.size, channelId: messages.channelId }).from(attachments)
       .innerJoin(messages, eq(messages.id, attachments.messageId))
-      .where(and(eq(messages.id, messageId), eq(messages.channelId, channelId!), gte(messages.createdAt, this.messageStorage.channelCutoff())))
-      .get() ?? fail("NOT_FOUND");
+      .where(and(eq(messages.id, messageId), gte(messages.createdAt, this.messageStorage.channelCutoff())))
+      .get();
+    if (!stored || !readable(stored.channelId)) fail("NOT_FOUND");
     this.attachmentDownloadRate.take(session.accountId, stored.size);
     const { data } = this.db.select({ data: attachments.data }).from(attachments).where(eq(attachments.messageId, messageId)).get()!;
     return { data: data.toString("base64") };
@@ -1165,6 +1215,7 @@ export class Realtime {
         return this.snapshot(peer);
       }
       case "channel.leave": this.leave(peer); return this.snapshot(peer);
+      case "channel.view": this.view(peer, request.payload.channelId); break;
       case "channel.move": {
         const { payload } = request;
         const ids = "connectionIds" in payload ? new Set(payload.connectionIds) : [payload.connectionId];
@@ -1378,7 +1429,7 @@ export class Realtime {
         if (stored) {
           this.messageStorage.write((tx) => tx.update(messages).set(edited).where(eq(messages.id, messageId)).run());
         }
-        this.broadcast([...(this.memberships.get(channel.id) ?? [])].filter((member) => this.allowed(member.account!, "text", channel)),
+        this.broadcast(this.chatAudience(channel),
           "message.edited", { messageId, text: edited.text, html: edited.html ?? undefined, editedAt: edited.editedAt });
         break;
       }
@@ -1389,7 +1440,7 @@ export class Realtime {
         const message = live ?? this.db.select().from(messages).where(eq(messages.id, messageId)).get() ?? fail("NOT_FOUND");
         if (message.channelId) {
           const channel = this.channel(message.channelId);
-          if (peer.channelId !== channel.id || !this.allowed(actor, "join", channel)) fail("NOT_FOUND");
+          if (!this.allowed(actor, "join", channel) || (peer.channelId !== channel.id && !this.canChat(peer, channel))) fail("NOT_FOUND");
           if (message.senderId !== actor.id) this.require(actor, "deleteChannels", channel);
         } else if (message.senderId !== actor.id) fail("NOT_FOUND");
         this.db.transaction((tx) => {
@@ -1399,7 +1450,10 @@ export class Realtime {
         if (attachment) this.removeLiveAttachment(message.id);
         else this.liveText.delete(message.id);
         const event = { messageId: message.id };
-        if (message.channelId) this.broadcast(this.memberships.get(message.channelId), "message.deleted", event);
+        if (message.channelId) {
+          const channel = this.channel(message.channelId);
+          this.broadcast(new Set([...(this.memberships.get(channel.id) ?? []), ...this.chatAudience(channel)]), "message.deleted", event);
+        }
         else {
           const recipients = new Set([...(this.online.get(message.senderId) ?? []), ...(this.online.get(message.recipientId!) ?? [])]);
           this.broadcast(recipients, "message.deleted", event);

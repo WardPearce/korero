@@ -25,7 +25,9 @@
   <nav class="settings-nav" aria-label="Settings categories">
     <a class="settings-back" href={resolve("/")}><ArrowLeft size={16} aria-hidden="true" /> Back</a>
     {#each categories as { path, label, icon: Icon } (path)}
-      <a href={resolve(path)} aria-current={page.route.id === path ? "page" : undefined}><Icon size={16} aria-hidden="true" /> {label}</a>
+      <a href={resolve(path)} aria-current={page.route.id === path ? "page" : undefined} data-desktop-only={path === "/settings/shortcuts" || undefined}>
+        <Icon size={16} aria-hidden="true" /> {label}
+      </a>
     {/each}
   </nav>
   {@render children()}

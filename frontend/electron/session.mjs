@@ -5,6 +5,7 @@ const mediaEvents = new Set([
 ]);
 const snapshotEvents = new Set(["state.invalidated", "presence.changed", "presence.offline", "channel.changed"]);
 const directMessageLimit = 200;
+const channelMessageLimit = 200;
 const isSameDirectMessage = (a, b) => a.id === b.id && a.senderId === b.senderId && a.recipientId === b.recipientId;
 
 export function offlineView(origin) {
@@ -32,6 +33,10 @@ export class DesktopSession {
   #room;
   #audioSources = new Map();
   #speaking = new Set();
+  /** A channel whose chat is followed without joining it. */
+  #viewed = null;
+  /** Channels whose history has been loaded on the current wire. */
+  #loaded = new Set();
 
   constructor(server, credentials, emit) {
     this.server = server;
@@ -184,6 +189,8 @@ export class DesktopSession {
     this.#speaking.clear();
     clearTimeout(this.#heartbeat);
     clearTimeout(this.#reconnect);
+    this.#viewed = null;
+    this.#loaded.clear();
     const wire = this.#wire;
     this.#wire = undefined;
     wire?.close();
@@ -209,16 +216,50 @@ export class DesktopSession {
       this.#audioSources.clear();
       this.#speaking.clear();
     }
-    this.#show(changed ? { snapshot, messages: [], speaking: [] } : { snapshot });
+    this.#show(changed ? { snapshot, speaking: [] } : { snapshot });
+    this.#keepChatMessages();
     return changed;
   }
 
+  /** The joined channel and the viewed channel, whose messages this session keeps. */
+  #chatChannels() {
+    return new Set([this.channelId, this.#viewed].filter(Boolean));
+  }
+
+  #keepChatMessages() {
+    const channels = this.#chatChannels();
+    for (const id of this.#loaded) if (!channels.has(id)) this.#loaded.delete(id);
+    const messages = this.view.messages.filter(({ channelId }) => channels.has(channelId));
+    if (messages.length !== this.view.messages.length) this.#show({ messages });
+  }
+
+  /** Loads history for kept channels that have none yet. Runs on the session queue, so events wait for it. */
   async #history(wire) {
-    if (!this.channelId) return;
-    try {
-      const history = await wire.rpc("message.history", { channelId: this.channelId });
-      this.#show({ messages: history.reverse() });
-    } catch {}
+    this.#keepChatMessages();
+    for (const channelId of this.#chatChannels()) {
+      if (this.#loaded.has(channelId)) continue;
+      this.#loaded.add(channelId);
+      try {
+        const history = await wire.rpc("message.history", { channelId });
+        if (this.#wire !== wire || !this.#loaded.has(channelId)) continue;
+        const entries = new Map(history.reverse().map((message) => [message.id, message]));
+        const others = [];
+        for (const message of this.view.messages) {
+          if (message.channelId === channelId) entries.set(message.id, message);
+          else others.push(message);
+        }
+        this.#show({ messages: [...others, ...[...entries.values()].slice(-channelMessageLimit)] });
+      } catch {}
+    }
+  }
+
+  viewChannel(connectionId, channelId) {
+    return this.run(async (wire) => {
+      if (this.connectionId !== connectionId || this.#viewed === channelId) return;
+      await wire.rpc("channel.view", { channelId });
+      this.#viewed = channelId;
+      await this.#history(wire);
+    });
   }
 
   join(channelId, password) {
@@ -300,6 +341,9 @@ export class DesktopSession {
         this.#room = current.channelId ? { channelId: current.channelId } : undefined;
       }
       if (this.#replaceSnapshot(current)) await this.#history(wire);
+    } else if (type === "channel.viewEnded" && this.#viewed === payload.channelId) {
+      this.#viewed = null;
+      this.#keepChatMessages();
     } else if (type === "channel.member" || type === "channel.voiceActivity") {
       const { channelId, connectionId } = payload;
       if (!snapshot.channels.some(({ id }) => id === channelId)) return;
@@ -313,8 +357,10 @@ export class DesktopSession {
         members: sameRoom && type === "channel.voiceActivity" ? updateActivity(snapshot.members) : snapshot.members } });
     } else if (sameRoom && ["channel.userJoined", "channel.userChanged", "channel.userLeft"].includes(type)) {
       this.#updateMember(payload, type === "channel.userLeft");
-    } else if (type === "message.created" && sameRoom && payload.channelId && !messages.some(({ id }) => id === payload.id)) {
-      this.#show({ messages: [...messages, payload].slice(-200) });
+    } else if (type === "message.created" && this.#chatChannels().has(payload.channelId) && !messages.some(({ id }) => id === payload.id)) {
+      const inChannel = messages.filter(({ channelId }) => channelId === payload.channelId);
+      const oldest = new Set(inChannel.slice(0, Math.max(0, inChannel.length + 1 - channelMessageLimit)));
+      this.#show({ messages: [...messages.filter((message) => !oldest.has(message)), payload] });
     } else if (type === "message.edited") {
       this.#show({ messages: messages.map((message) => message.id === payload.messageId
         ? { ...message, text: payload.text, html: payload.html, editedAt: payload.editedAt } : message) });

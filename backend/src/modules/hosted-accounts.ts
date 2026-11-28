@@ -13,7 +13,7 @@ export class HostedAccounts {
   }
 
   register(username: string, credential: string, encryptedData: string) {
-    if (this.config.server.registration !== "open") {
+    if (this.config["remote-account-host"].registration !== "open") {
       throw new ProtocolError("FORBIDDEN", "This provider has closed account registration.");
     }
     const revision = 1;

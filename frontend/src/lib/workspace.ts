@@ -52,6 +52,8 @@ interface Workspace {
   showConnect(address?: string): void;
   showServerSettings(): void;
   run(action: string, command: string, args?: Record<string, unknown>): Promise<boolean>;
+  /** Follows a channel's live chat on the focused server without joining it. Pass null to stop. */
+  viewChannel(connectionId: string, channelId: string | null): void;
   canSetVoicePresence(field: VoicePresence): boolean;
   setVoicePresence(field: VoicePresence, value?: boolean, afkMessage?: string): Promise<boolean>;
   runAction(action: string, work: () => Promise<unknown>): Promise<boolean>;

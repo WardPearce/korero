@@ -36,6 +36,7 @@
 
 html {
 	scroll-behavior: smooth;
+	scroll-padding-top: 5rem;
 }
 body {
 	margin: 0;
@@ -91,12 +92,10 @@ button:focus-visible {
 	padding-top: 1.5rem;
 	border-top: 1px solid var(--border);
 	font-size: 1.75rem;
-	scroll-margin-top: 1rem;
 }
 .docs h3 {
 	margin-top: 2rem;
 	font-size: 1.25rem;
-	scroll-margin-top: 1rem;
 }
 .docs p,
 .docs ul,

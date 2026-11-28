@@ -27,6 +27,12 @@ export interface Channel {
   canDelete?: boolean;
   /** The account may delete other members' messages in this channel. */
   canDeleteMessages?: boolean;
+  /**
+   * The account may read and send this channel's messages, even without joining it.
+   * Servers that predate outside chat omit this; chat then needs membership.
+   */
+  canChat?: boolean;
+  canAttachFiles?: boolean;
   canReparent?: boolean;
   canSetPassword?: boolean;
   canMute?: boolean;

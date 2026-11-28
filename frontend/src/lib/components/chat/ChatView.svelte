@@ -37,26 +37,38 @@
   let activeChannel = $derived(snapshot?.channels.find((channel) => channel.id === snapshot?.channelId));
   let currentChannel = $derived(snapshot?.channels.find((channel) => channel.id === workspace.selectedChannelId) ?? activeChannel ?? snapshot?.channels[0]);
   let isInRoom = $derived(Boolean(currentChannel && activeChannel?.id === currentChannel.id));
-  let canChat = $derived(online && isInRoom && snapshot?.canSendText !== false);
+  // Servers without `canChat` only allow chat in the joined channel.
+  let outsideChat = $derived(currentChannel?.canChat !== undefined);
+  let canRead = $derived(online && (currentChannel?.canChat ?? isInRoom));
+  let canChat = $derived(online && (currentChannel?.canChat ?? (isInRoom && snapshot?.canSendText !== false)));
+  let messages = $derived(currentChannel ? view.messages.filter(({ channelId }) => channelId === currentChannel.id) : []);
+  let unavailableHint = $derived(!outsideChat ? "Join a channel to read and send messages."
+    : currentChannel?.passwordRequired && !isInRoom ? "Join this password-protected channel to read and send messages."
+    : "Your role cannot read or send messages in this channel.");
+
+  $effect(() => {
+    const connectionId = snapshot?.connectionId;
+    if (!online || !connectionId || !currentChannel || !outsideChat) return;
+    workspace.viewChannel(connectionId, currentChannel.canChat ? currentChannel.id : null);
+  });
 
   $effect.pre(() => {
     // Measure the old viewport before Svelte inserts messages.
-    const channel = view.snapshot?.channelId;
+    const channel = currentChannel?.id;
     const channelChanged = channel !== lastChatChannel;
     lastChatChannel = channel;
-    const messages = view.messages;
     const latestId = messages.at(-1)?.id;
-    if (!initializedMessages) {
-      knownMessageIds = new Set(messages.map(({ id }) => id));
-      initializedMessages = true;
-    } else if (isInRoom && currentChannel?.id === channel) {
-      const newIncoming = messages.some((entry) => entry.id === latestId && !knownMessageIds.has(entry.id) && entry.senderId !== me?.id);
-      if (newIncoming) playUiSound("message");
-      knownMessageIds = new Set(messages.map(({ id }) => id));
-    } else {
-      knownMessageIds = new Set(messages.map(({ id }) => id));
+    if (initializedMessages && !channelChanged && canRead) {
+      // History arrives in bulk after switching channels. Only a single fresh arrival is a new message.
+      const arrivals = messages.filter(({ id }) => !knownMessageIds.has(id));
+      const latest = arrivals[0];
+      if (arrivals.length === 1 && latest.id === latestId && latest.senderId !== me?.id && Date.now() - latest.createdAt < 15000) {
+        playUiSound("message");
+      }
     }
-    if (view.messages.length && messageList &&
+    knownMessageIds = new Set(messages.map(({ id }) => id));
+    initializedMessages = true;
+    if (messages.length && messageList &&
       (channelChanged || messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight < 90)) {
       void scrollMessages();
     }
@@ -129,10 +141,10 @@
   <div class="contents" bind:this={workspace.screenShareViewerTarget}></div>
   <section class="chat-pane" aria-label="Channel chat">
     <div class="chat-log" {@attach attachMessageList} role="log" aria-label="Channel messages">
-      {#if isInRoom && view.messages.length}
-        {#each view.messages as entry, index (entry.id)}
+      {#if canRead && messages.length}
+        {#each messages as entry, index (entry.id)}
           {@const own = entry.senderId === me?.id}
-          <ChatMessage message={entry} previous={view.messages[index - 1]} name={senderName(entry.senderId)}
+          <ChatMessage message={entry} previous={messages[index - 1]} name={senderName(entry.senderId)}
             editText={own && canChat ? entry.text : undefined} editLimit={maxChatTextLength}
             onedit={own && canChat ? (text) => changeMessage("message-edit", "edit_message", { messageId: entry.id, text }) : undefined}
             ondelete={own || currentChannel?.canDeleteMessages
@@ -154,13 +166,14 @@
             <div><strong>No server connected</strong><p>Connect to a server to see its channels and messages.</p></div>
             <Button variant="outline" onclick={() => workspace.showConnect()}>Connect to a server</Button>
           {:else}
-            <div><strong>{isInRoom ? "No messages yet" : "Channel messages appear here"}</strong><p>{isInRoom ? "Send a message to start the conversation." : "Join a channel to read and send messages."}</p></div>
+            <div><strong>{canRead ? "No messages yet" : "Channel messages appear here"}</strong><p>{canRead ? "Send a message to start the conversation." : unavailableHint}</p></div>
           {/if}
         </div>
       {/if}
     </div>
     {#key (snapshot?.connectionId ?? "") + "/" + (currentChannel?.id ?? "")}
-      <ChatComposer channelId={currentChannel?.id ?? ""} channelName={currentChannel?.name ?? ""} enabled={canChat} />
+      <ChatComposer channelId={currentChannel?.id ?? ""} channelName={currentChannel?.name ?? ""} enabled={canChat}
+        disabledHint={outsideChat ? "You can't send messages here" : undefined} />
     {/key}
   </section>
 </div>

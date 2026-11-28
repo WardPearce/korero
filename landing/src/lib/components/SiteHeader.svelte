@@ -9,8 +9,10 @@
 	Skip to content
 </a>
 
-<header class="border-b border-border bg-muted/80">
-	<div class="mx-auto flex max-w-6xl items-center justify-between gap-6 px-6 py-4">
+<header
+	class="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur-md supports-[not(backdrop-filter:blur(0))]:bg-background"
+>
+	<div class="mx-auto flex max-w-6xl items-center justify-between gap-6 px-6 py-3.5">
 		<a href="/" aria-label="Kōrero home">
 			<img src="/korero-logo.svg" alt="Kōrero." class="h-6" />
 		</a>

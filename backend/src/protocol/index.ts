@@ -133,6 +133,7 @@ export const payloads = {
   "channel.delete": channelId,
   "channel.join": object({ channelId: id, password: optional(text(128)) }),
   "channel.leave": empty,
+  "channel.view": object({ channelId: nullable(id) }),
   "channel.move": t.Union([
     object({ connectionId: id, channelId: id }),
     object({ connectionIds: list(id, 1024, 1), channelId: id }),

@@ -51,6 +51,16 @@ password = ""
 image_hosts = []
 
 # ---------------------------------------------------------------------------
+# Remote account host: lets clients store encrypted hosted accounts on this server.
+# ---------------------------------------------------------------------------
+[remote-account-host]
+# New hosted account policy. Valid: "open" (anyone may create one) or "closed" (existing
+# hosted accounts can still sign in and update). Independent of server.registration and
+# server.password: those apply to voice server accounts only. Set with
+# VOICE_REMOTE_ACCOUNT_HOST_REGISTRATION. Capacity is limited by limits.hosted_accounts.
+registration = "closed"
+
+# ---------------------------------------------------------------------------
 # TLS: HTTPS is always used. Self-signed/manual certificates are pinned by clients.
 # ---------------------------------------------------------------------------
 [tls]

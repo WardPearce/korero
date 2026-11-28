@@ -145,6 +145,7 @@ body {
 .shell[data-workspace="true"] {
   grid-template-columns: var(--rail-width) 6px var(--channel-width) 6px minmax(0, 1fr);
 }
+.shell[data-mobile-voice="true"] { grid-template-rows: minmax(0, 1fr) auto; }
 .server-rail, .channel-pane, .room-pane {
   display: flex;
   flex-direction: column;
@@ -628,16 +629,18 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
   border-inline-end: 1px solid var(--border);
   overflow-y: auto;
 }
-/* Keep voice controls reachable while a server is connected and settings are open. */
-.settings-shell[data-connected] { grid-template-rows: auto minmax(0, 1fr); }
-.settings-shell[data-connected] > .settings-voice {
-  grid-column: 1 / -1;
-  grid-row: 1;
-  border-bottom: 1px solid var(--border);
-  background: var(--muted);
+/* On desktop, connected settings have their own voice toolbar. */
+.shell[data-mobile-voice="false"] .settings-shell[data-connected] {
+  grid-template-rows: auto minmax(0, 1fr);
+  > .settings-voice {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    border-bottom: 1px solid var(--border);
+    background: var(--muted);
+  }
+  > .settings-nav { grid-column: 1; grid-row: 2; }
+  > .room-pane { grid-column: 2; grid-row: 2; }
 }
-.settings-shell[data-connected] > .settings-nav { grid-column: 1; grid-row: 2; }
-.settings-shell[data-connected] > .room-pane { grid-column: 2; grid-row: 2; }
 .settings-voice .voice-toolbar { border-bottom: 0; }
 .settings-nav a, .mobile-nav a, .mobile-nav button {
   display: flex;
@@ -710,26 +713,86 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
 .audio-settings-link { display: flex; align-items: center; gap: 6px; }
 .audio-fields { display: grid; gap: .75rem; min-width: 0; }
 .audio-fields small { color: var(--muted-foreground); font-size: var(--type-small); }
+.shell[data-mobile-voice="true"] :is(.channel-pane > .voice-toolbar, .settings-voice) { display: none; }
+.shell[data-mobile-voice="true"] .settings-shell [data-desktop-only] { display: none; }
+.mobile-voice {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  padding: 0 var(--safe-area-inset-right) max(var(--safe-area-inset-bottom), env(safe-area-inset-bottom)) var(--safe-area-inset-left);
+  background: var(--muted);
+  border-top: 1px solid var(--border);
+}
+.mobile-voice .voice-toolbar {
+  --control-height: 44px;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 0;
+}
 .mobile-nav { display: none; }
 
+/* Android picture-in-picture window during a voice call: only who is talking. */
+.shell[hidden] { display: none; }
+.call-pip {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 4px;
+  padding: 8px 10px;
+  overflow: hidden;
+  background: var(--background);
+  color: var(--foreground);
+}
+.call-pip header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: var(--type-caption);
+  font-weight: 600;
+}
+.call-pip-channel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-pip-speakers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  align-content: center;
+  gap: 8px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.call-pip-speakers li {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  max-width: 45%;
+  min-width: 0;
+  animation: call-pip-in 120ms ease-out;
+}
+.call-pip-speakers li > span:last-child {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--type-small);
+  font-weight: 600;
+}
+.call-pip-speakers[data-count="1"] .member-avatar { transform: scale(1.6); margin: 12px; }
+.call-pip-more { color: var(--muted-foreground); font-size: var(--type-small); }
+.call-pip-quiet { align-self: center; margin: 0; text-align: center; color: var(--muted-foreground); font-size: var(--type-small); }
+@keyframes call-pip-in { from { opacity: 0; transform: scale(.9); } }
+@media (prefers-reduced-motion: reduce) { .call-pip-speakers li { animation: none; } }
+
 @media (max-width: 760px) {
-  .shell, .shell[data-workspace="true"] { grid-template: minmax(0, 1fr) auto auto / minmax(0, 1fr); }
+  .shell, .shell[data-workspace="true"], .shell[data-mobile-voice="true"] { grid-template: minmax(0, 1fr) auto auto / minmax(0, 1fr); }
   .pane-divider,
   .shell[data-pane="servers"] :is(.channel-pane, .room-pane),
   .shell[data-pane="channels"] :is(.server-rail, .room-pane),
   .shell[data-pane="room"] :is(.server-rail, .channel-pane) { display: none; }
-  .shell:is([data-pane="servers"], [data-pane="room"]) .channel-pane:has(.voice-toolbar) {
-    display: block;
-    grid-row: 2;
-    border: 0;
-    background: transparent;
-  }
-  .shell:is([data-pane="servers"], [data-pane="room"]) .channel-pane:has(.voice-toolbar) > :not(.voice-toolbar) { display: none; }
-  .shell:is([data-pane="servers"], [data-pane="room"]) .channel-pane .voice-toolbar {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    background: var(--background);
-  }
   .server-rail, .channel-pane, .room-pane { grid-row: 1; }
   .channel-top, .workspace-header {
     min-height: calc(60px + var(--header-inset-top));
@@ -740,19 +803,16 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
   [data-slot="button"].rail-connect { max-width: 16rem; }
   .settings-shell { grid-template: auto minmax(0, 1fr) / minmax(0, 1fr); }
   .settings-shell .room-pane { grid-row: 2; }
-  .settings-shell[data-connected] { grid-template: auto auto minmax(0, 1fr) / minmax(0, 1fr); }
-  .settings-shell[data-connected] > .settings-voice { grid-column: 1; grid-row: 1; }
-  .settings-shell[data-connected] > .settings-nav { grid-column: 1; grid-row: 2; }
-  .settings-shell[data-connected] > .room-pane { grid-column: 1; grid-row: 3; }
-  .settings-nav { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px; padding: 4px; border: 0; border-bottom: 1px solid var(--border); }
+  .settings-nav { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; padding: 4px; border: 0; border-bottom: 1px solid var(--border); }
   .settings-nav .settings-back { display: none; }
   .settings-nav a { flex-direction: column; justify-content: center; gap: 2px; padding: 4px 2px; font-size: var(--type-caption); text-align: center; overflow-wrap: anywhere; }
+  .mobile-voice { padding-bottom: 0; }
   .mobile-nav {
     display: grid;
     grid-row: 3;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 4px;
-    padding: 4px 4px max(4px, var(--safe-area-inset-bottom));
+    padding: 4px 4px max(4px, var(--safe-area-inset-bottom), env(safe-area-inset-bottom));
     border-top: 1px solid var(--border);
     background: var(--muted);
   }
@@ -799,7 +859,7 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
 }
 
 :root[data-glass] body { background-image: var(--glass-backdrop, none); }
-:root[data-glass] :is(.server-rail, .channel-pane, .settings-nav, .mobile-nav) {
+:root[data-glass] :is(.server-rail, .channel-pane, .settings-nav, .mobile-voice, .mobile-nav) {
   background-color: var(--glass-panel, var(--muted));
 }
 :root[data-glass] :is(.workspace-header, .channel-top, .channel-footer, .rail-bottom, .voice-toolbar) {
@@ -835,7 +895,7 @@ a.icon-button:hover, .file-control:has(input:enabled):hover {
   transition: filter 240ms ease;
 }
 :root[data-image] body { background-color: color-mix(in srgb, var(--background) 90%, transparent); }
-:root[data-image]:not([data-glass]) :is(.server-rail, .channel-pane, .settings-nav, .mobile-nav) {
+:root[data-image]:not([data-glass]) :is(.server-rail, .channel-pane, .settings-nav, .mobile-voice, .mobile-nav) {
   background-color: color-mix(in srgb, var(--muted) 88%, transparent);
 }
 :root[data-image]:not([data-glass]) :is(.composer, .settings-card, [data-slot="card"]) {

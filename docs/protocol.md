@@ -176,7 +176,10 @@ Extended administration adds `motd` and the effective server `targetAudioBitrate
 in bits per second. Changes to either value trigger `state.invalidated`.
 `lowerRoles` lists roles below the caller in the server hierarchy. `assignableRoles`
 lists roles the caller can assign to a subordinate account. The channel list has
-`id, parentId, name, description, position, capacity, temporary, passwordRequired, canDeleteMessages, canMute, canMove, canReparent, canDelete, canManagePermissions`.
+`id, parentId, name, description, position, capacity, temporary, passwordRequired, canDeleteMessages, canChat, canAttachFiles, canMute, canMove, canReparent, canDelete, canManagePermissions`.
+`canChat` reports whether the caller can read and send the channel's messages, joined or not.
+`canAttachFiles` adds the `attachFiles` permission. Clients that find `canChat` missing
+are talking to an older server and should only chat in the joined channel.
 `canMove` reports whether the caller has the server-wide `move` permission.
 `canManagePermissions` reports whether the caller can use the channel permissions endpoints.
 Invisible parents are represented as null. Members have `connectionId, accountId,
@@ -213,6 +216,7 @@ password or permission-override fields.
 | `channel.delete` | `channelId` | `{}` |
 | `channel.join` | `channelId, password?` | Snapshot |
 | `channel.leave` | — | Snapshot |
+| `channel.view` | `channelId`, or null to stop | `{}` |
 | `channel.move` | `channelId` and either `connectionId` or `connectionIds` | `{}` |
 | `presence.set` | `muted?, deafened?, afk?, afkMessage?` | Member |
 | `role.set` | `accountId, role` | `{}` |
@@ -283,7 +287,15 @@ Changing an existing restriction requires a rank at least as high as the issuer'
 current rank. The Owner can change any restriction.
 Kicking closes all account connections. Banning also
 revokes all device sessions. Temporary rooms are joined on creation and disappear
-when empty. Channel history requires current channel membership and text permission.
+when empty. Channel chat (send, history, edit, delete and attachments) requires `join`
+and `text` permission in that channel, but not membership. A password-protected
+channel's chat is only available to its members. Live chat events (`message.created`,
+`message.edited`, `message.deleted`) go to the channel's members and to connections
+following it with `channel.view`. A connection follows at most one channel this way, in
+addition to the one it has joined. A new `channel.view` replaces the previous one.
+The server sends `channel.viewEnded` when it drops the subscription because the
+connection lost chat access. Send `channel.view` again once `canChat` is true.
+Subscribe before requesting history so no message is missed.
 History is empty when text persistence is disabled. Current live text still works.
 Message objects contain `id, channelId, recipientId, senderId, createdAt, editedAt, text`
 and may include `html` and attachment metadata as `attachment: {name, size}`.
@@ -307,9 +319,9 @@ An attachment is sent as one channel message with an optional caption. Use stand
 padded base64 for `data`. Server info and connection snapshots advertise the current
 decoded file limit as `maxAttachmentBytes`. Administrators can set `maxAttachmentMiB`
 from 1 to 32 in `PATCH /api/v1/admin/preferences`. The default is 4 MiB.
-Upload and download both require `text` permission in the connection's
-current channel. Uploads also require `attachFiles` permission, reflected by the
-snapshot's `canAttachFiles` field. Downloads return encoded data separately from history and events.
+Upload and download both require chat access to the message's channel, as described
+above. Uploads also require `attachFiles` permission, reflected by the channel's
+`canAttachFiles` field (the snapshot's `canAttachFiles` covers the joined channel). Downloads return encoded data separately from history and events.
 Persistent attachments expire and are deleted with their message. In-memory
 attachments are available for up to one hour. The in-memory quotas are 8 MiB per
 sender and 32 MiB per server by default. A higher file limit raises those caps to
@@ -477,6 +489,7 @@ in `cameras` or through `media.cameraAvailable`.
 | `channel.userJoined`, `channel.userChanged` | `channelId` and Member fields |
 | `channel.userLeft` | `channelId, connectionId, accountId` |
 | `channel.changed` | `channelId` or null for a move or removal by the server |
+| `channel.viewEnded` | `channelId` when the server ends a chat subscription |
 | `state.invalidated` | `{}`, re-fetch snapshot |
 | `server.changed` | `name, registration` |
 | `message.created` | Message |

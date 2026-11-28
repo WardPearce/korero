@@ -701,6 +701,60 @@
               ]
             },
             "type": {
+              "const": "channel.view"
+            },
+            "payload": {
+              "additionalProperties": false,
+              "type": "object",
+              "required": [
+                "channelId"
+              ],
+              "properties": {
+                "channelId": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "version",
+            "id",
+            "type",
+            "payload"
+          ],
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "id": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "anyOf": [
+                {
+                  "format": "integer",
+                  "default": 0,
+                  "type": "string"
+                },
+                {
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": {
               "const": "channel.move"
             },
             "payload": {

@@ -97,6 +97,7 @@ function printStartup(config: Config, serverId: string, fingerprint: string | un
     ...field("Server ID", serverId),
     ...field("Data directory", config.directory),
     ...field("Registration", config.server.registration),
+    ...field("Remote accounts", config["remote-account-host"].registration),
   ].join("\n"));
 }
 

@@ -24,6 +24,9 @@
   import ConnectServerModal from "#lib/components/server/ConnectServerModal.svelte";
   import ConnectionInfo from "#lib/components/server/ConnectionInfo.svelte";
   import ScreenSharing from "#lib/components/media/ScreenSharing.svelte";
+  import VoiceToolbar from "#lib/components/media/VoiceToolbar.svelte";
+  import CallPictureInPicture from "#lib/components/media/CallPictureInPicture.svelte";
+  import { callPip } from "#lib/media/call-pip";
   import ServerAdministration from "#lib/components/server/ServerAdministration.svelte";
   import ServerRail from "#lib/components/server/ServerRail.svelte";
   import {
@@ -39,6 +42,7 @@
   import { certificateApproval, inspectServer, trustServer, type CertificateContact } from "#lib/connection/server-trust";
   import { applyAppearance, readAppearance } from "#lib/theme";
   import { readChatDisplay, saveChatDisplay, setChatDisplay, type ChatDisplay } from "#lib/chat/chat-display";
+  import { mobilePaneSwipe } from "#lib/mobile-pane-swipe";
   import { setWorkspace, type ChannelPlacement, type MobilePane, type RoomView } from "#lib/workspace";
 
   let { children } = $props();
@@ -59,6 +63,7 @@
   const deviceName = "Korero.chat";
 
   let viewport = $state(1200);
+  const mobileVoice = $derived(mobileApp() || viewport <= 760);
   let savedRailWidth = $state(230);
   let savedChannelWidth = $state(366);
   let railMax = $derived(Math.max(180, Math.min(340, viewport - 530)));
@@ -94,6 +99,8 @@
     : [...connections.values()].find((entry) => entry.view.phase === "online" && entry.view.snapshot?.channelId));
   const voiceSnapshot = $derived(voiceConnection?.view.snapshot);
   const ownVoiceMember = $derived(voiceSnapshot?.members.find(({ connectionId }) => connectionId === voiceSnapshot?.connectionId));
+  // Android shrinks the app into a picture-in-picture window while in a voice channel.
+  let pictureInPicture = $state(false);
   const serverInfo = $derived(focused?.info ?? null);
   const memberVolumes = $derived(focused?.memberVolumes ?? {});
   let resolveRestored = () => {};
@@ -128,6 +135,7 @@
   let actionError = $state("");
   let selectedChannelId = $state<string | null>(null);
   let mobilePane = $state<MobilePane>(typeof window !== "undefined" && mobileApp() ? "servers" : "room");
+  const swipePanes = mobilePaneSwipe(() => mobilePane, openWorkspace);
   let roomView = $state<RoomView>("chat");
   let screenShareViewerTarget = $state<HTMLElement>();
   let screenShareControlsTarget = $state<HTMLElement>();
@@ -238,6 +246,13 @@
     set actionError(value) { actionError = value; },
     get selectedChannelId() { return selectedChannelId; },
     set selectedChannelId(value) { selectedChannelId = value; },
+    viewChannel(connectionId, channelId) {
+      const origin = serverOrigin;
+      if (!origin) return;
+      const request = desktopApp() ? call("view_channel", { origin, connectionId, channelId })
+        : browserSessions.session(origin).viewChannel(connectionId, channelId);
+      void request.catch(() => {});
+    },
     get mobilePane() { return mobilePane; },
     set mobilePane(value) { mobilePane = value; },
     get roomView() { return roomView; },
@@ -889,6 +904,27 @@
     return success;
   }
 
+  $effect(() => callPip.watch((active) => { pictureInPicture = active; }, (action) => {
+    if (action === "leave") void leaveVoice();
+    else void setVoicePresence(action === "mute" ? "muted" : "deafened");
+  }));
+
+  $effect(() => {
+    const member = voiceAvailable && voiceConnection ? ownVoiceMember : undefined;
+    void callPip.update(member ? {
+      active: true,
+      muted: member.muted || member.adminMuted,
+      deafened: Boolean(member.deafened || member.adminDeafened),
+      canMute: canSetVoicePresence("muted"),
+      canDeafen: canSetVoicePresence("deafened"),
+    } : { active: false });
+  });
+
+  async function leaveVoice() {
+    if (!voiceConnection) return;
+    if (await runFor(voiceConnection.origin, "leave", "leave_channel")) playUiSound("disconnect");
+  }
+
   function handleShortcut(event: KeyboardEvent) {
     audio.talkKeyDown(event);
     const action = shortcuts.matchVoiceAction(event);
@@ -1075,7 +1111,13 @@
 
 <svelte:window bind:innerWidth={viewport} onkeydown={handleShortcut} onkeyup={audio.talkKeyUp} onblur={audio.talkWindowBlur} />
 
-<div class="shell" data-pane={onWorkspace ? mobilePane : "room"} data-workspace={onWorkspace} style:--rail-width={railWidth + "px"} style:--channel-width={channelWidth + "px"}>
+{#if pictureInPicture && voiceConnection}
+  <CallPictureInPicture origin={voiceConnection.origin} view={voiceConnection.view} />
+{/if}
+
+<div class="shell" hidden={pictureInPicture && Boolean(voiceConnection)} data-pane={onWorkspace ? mobilePane : "room"} data-workspace={onWorkspace} data-mobile-voice={mobileVoice}
+  style:--rail-width={railWidth + "px"} style:--channel-width={channelWidth + "px"}
+  {@attach onWorkspace && viewport <= 760 ? swipePanes : undefined}>
   <ServerRail servers={railServers} {identityReady} {connectBusy} {pending} {username} {me} {online} {status}
     onconnect={() => showConnect()} onselect={selectServer} ondisconnect={(origin) => { void disconnect(origin); }} />
   <PaneDivider label="Resize server sidebar" controls="server-rail" value={railWidth} min={180} max={railMax} resize={(value, commit) => resizePane("rail", value, commit)} />
@@ -1089,6 +1131,11 @@
     {/key}
   {/if}
 
+  {#if mobileVoice}
+    <div class="mobile-voice">
+      <VoiceToolbar onleave={voiceConnection ? leaveVoice : undefined} />
+    </div>
+  {/if}
   <nav class="mobile-nav" aria-label="Workspace navigation">
     <button aria-current={onWorkspace && mobilePane === "servers" ? "page" : undefined} onclick={() => openWorkspace("servers")}><Server size={18} /> Servers</button>
     <button aria-current={onWorkspace && mobilePane === "channels" ? "page" : undefined} onclick={() => openWorkspace("channels")}><ListTree size={18} /> Channels</button>

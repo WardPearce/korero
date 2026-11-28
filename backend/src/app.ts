@@ -192,15 +192,11 @@ export function createApp(config: Config, auth: Auth, hostedAccounts: HostedAcco
     })
     .post(hostedAccountPath + "register", async ({ request, body, set }) => {
       limit(request, true);
-      if (auth.passwordRequired() && !body.password) {
-        throw new ProtocolError("FORBIDDEN", "This provider requires its server password to create accounts.");
-      }
-      await auth.verifyPassword(clientIp(request), body.password);
+      // Account hosting is governed only by [remote-account-host], not the server password or registration policy.
       const account = hostedAccounts.register(body.username, body.credential, body.encryptedData);
       set.status = 201;
       return account;
-    }, { body: t.Object({ ...hostedCredentials, encryptedData, password: t.Optional(t.String({ minLength: 1, maxLength: 128 })) },
-      { additionalProperties: false }) })
+    }, { body: t.Object({ ...hostedCredentials, encryptedData }, { additionalProperties: false }) })
     .post(hostedAccountPath + "login", ({ request, body }) => {
       limit(request);
       return hostedAccounts.read(body.username, body.credential);

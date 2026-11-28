@@ -5,8 +5,9 @@
 Hosted accounts are optional. The app defaults to `account.korero.chat` in
 production and `localhost` on the configured backend port in development. The
 provider address is editable. A provider accepts new hosted accounts only when
-`server.registration` is `open`, up to `limits.hosted_accounts`. When the provider
-has a server password, registration must include it as `password`. Existing hosted
+`remote-account-host.registration` is `open` (the default is `closed`), up to
+`limits.hosted_accounts`. `server.registration` and `server.password` apply only to
+voice server accounts and do not affect hosted account registration. Existing hosted
 accounts can sign in after registration closes. Account providers use HTTPS in production.
 
 The client derives a key from the password using Argon2id. HKDF produces separate

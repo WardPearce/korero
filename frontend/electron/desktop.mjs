@@ -180,12 +180,10 @@ export class Desktop {
         return this.#session(origin).setPresence({ muted, deafened, afk, afkMessage });
       }
       case "send_message": {
-        const session = this.#session(origin);
-        return session.run((wire) => {
-          if (!session.channelId || (channelId && channelId !== session.channelId)) throw new Error("The active channel changed.");
-          return wire.rpc("message.send", { channelId: session.channelId, text, html: html ?? undefined });
-        });
+        if (typeof channelId !== "string") throw new Error("Choose a channel first.");
+        return this.#session(origin).run((wire) => wire.rpc("message.send", { channelId, text, html: html ?? undefined }));
       }
+      case "view_channel": return this.#session(origin).viewChannel(connectionId, typeof channelId === "string" ? channelId : null);
       case "edit_message": return this.#session(origin).run((wire) => wire.rpc("message.edit", { messageId, text }));
       case "delete_message": return this.#session(origin).run((wire) => wire.rpc("message.delete", { messageId }));
       case "save_channel": return this.#session(origin).saveChannel(payload);

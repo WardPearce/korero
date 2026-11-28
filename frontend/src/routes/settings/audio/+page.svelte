@@ -159,7 +159,7 @@
       {#if audio.profile.transmitMode === "pushToTalk" || audio.profile.transmitMode === "toggleToTalk"}
         <div class="settings-row">
           <p class="field-hint">{audio.profile.transmitMode === "pushToTalk" ? "Hold the shortcut to transmit." : "Press once to transmit and again to stop."}</p>
-          <Button variant="outline" href={resolve("/settings/shortcuts")}><Keyboard size={16} aria-hidden="true" /> Configure talk shortcut</Button>
+          <Button variant="outline" href={resolve("/settings/shortcuts")} data-desktop-only><Keyboard size={16} aria-hidden="true" /> Configure talk shortcut</Button>
         </div>
         {#if audio.talking}
           <p class="field-hint" role="status">Transmitting microphone audio</p>
