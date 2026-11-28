@@ -77,11 +77,13 @@
   </div>
   <div class="rail-bottom">
     <div class="account-line">
-      <Avatar name={me?.displayName ?? username} accountId={me?.id} />
-      <div class="flex-content">
-        <strong class="truncate">{me?.displayName ?? (username || "Guest")}</strong>
-        <span class="account-status"><span class="connection-dot" data-online={online}></span>{status}</span>
-      </div>
+      <a class="account-profile" href={resolve("/settings")} title="Account settings">
+        <Avatar name={me?.displayName ?? username} accountId={me?.id} />
+        <div class="flex-content">
+          <strong class="truncate">{me?.displayName ?? (username || "Guest")}</strong>
+          <span class="account-status"><span class="connection-dot" data-online={online}></span>{status}</span>
+        </div>
+      </a>
 
       <a class="icon-button rail-icon" href={resolve("/settings")} aria-label="Account settings" aria-current={page.route.id === "/settings" ? "page" : undefined} title="Account settings"><Settings2 size={17} /></a>
     </div>

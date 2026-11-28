@@ -281,6 +281,16 @@ body {
 .connection-dot[data-online="true"] { color: var(--success); background: currentColor; }
 .rail-bottom { padding: 10px 8px; border-top: 1px solid var(--border); }
 .account-line { display: flex; align-items: center; gap: 8px; font-size: var(--type-small); }
+.account-profile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  border-radius: var(--radius-md);
+  color: inherit;
+}
+.account-profile:hover { background: var(--control-hover); }
 .account-status { display: flex; align-items: center; gap: 5px; }
 
 .channel-pane { background: var(--muted); container-type: inline-size; container-name: channel-pane; }
